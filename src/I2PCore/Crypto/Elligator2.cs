@@ -1,9 +1,9 @@
 using System;
 using System.Security.Cryptography;
-using Org.BouncyCastle.Math;
 using I2PCore.Utils;
+using Org.BouncyCastle.Math;
 
-namespace I2PCore.TransportLayer.Crypto
+namespace I2PCore.Crypto
 {
     /// <summary>
     /// Elligator2 encoding/decoding for X25519 ephemeral keys.

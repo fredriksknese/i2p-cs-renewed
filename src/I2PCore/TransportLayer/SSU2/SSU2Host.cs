@@ -8,7 +8,6 @@ using I2PCore.Data;
 using I2PCore.SessionLayer;
 using I2PCore.Utils;
 using I2PCore.TransportLayer.SSU2.Messages;
-using I2PCore.TransportLayer.Crypto;
 using I2PCore.Crypto;
 
 namespace I2PCore.TransportLayer.SSU2
@@ -719,7 +718,7 @@ namespace I2PCore.TransportLayer.SSU2
             else
             {
                 // Generate new keys
-                var (priv, pub) = Crypto.X25519.GenerateKeyPair();
+                var (priv, pub) = X25519.GenerateKeyPair();
                 StaticPrivateKey = priv;
                 StaticPublicKey = pub;
 

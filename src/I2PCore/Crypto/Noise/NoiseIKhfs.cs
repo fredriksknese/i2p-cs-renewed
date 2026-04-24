@@ -1,12 +1,7 @@
 using System;
 using I2PCore.Crypto.MLKEM;
-using I2PCore.TransportLayer.Crypto;
-using I2PCore.Utils;
-using Org.BouncyCastle.Crypto.Agreement;
-using Org.BouncyCastle.Crypto.Parameters;
-using X25519 = Org.BouncyCastle.Math.EC.Rfc7748.X25519;
 
-namespace I2PCore.Crypto
+namespace I2PCore.Crypto.Noise
 {
     /// <summary>
     /// Noise_IKhfselg2_25519+MLKEM512_ChaChaPoly_SHA256
@@ -178,7 +173,7 @@ namespace I2PCore.Crypto
                 {
                     // Generate encodable ephemeral X25519 keypair
                     localEphemeralPrivate = Elligator2.GenerateEncodablePrivateKey();
-                    localEphemeralPublic = TransportLayer.Crypto.X25519.GetPublicKey(localEphemeralPrivate);
+                    localEphemeralPublic = X25519.GetPublicKey(localEphemeralPrivate);
 
                     // Encode ephemeral public key with Elligator2
                     ephemeralEncoded = Elligator2.Encode(localEphemeralPublic);
@@ -344,7 +339,7 @@ namespace I2PCore.Crypto
                 {
                     // Generate encodable ephemeral X25519 keypair
                     localEphemeralPrivate = Elligator2.GenerateEncodablePrivateKey();
-                    localEphemeralPublic = TransportLayer.Crypto.X25519.GetPublicKey(localEphemeralPrivate);
+                    localEphemeralPublic = X25519.GetPublicKey(localEphemeralPrivate);
 
                     // Encode ephemeral public key with Elligator2
                     ephemeralEncoded = Elligator2.Encode(localEphemeralPublic);
@@ -513,7 +508,7 @@ namespace I2PCore.Crypto
         private byte[] X25519DH(byte[] privateKey, byte[] publicKey)
         {
             byte[] sharedSecret = new byte[32];
-            X25519.ScalarMult(privateKey, 0, publicKey, 0, sharedSecret, 0);
+            Org.BouncyCastle.Math.EC.Rfc7748.X25519.ScalarMult(privateKey, 0, publicKey, 0, sharedSecret, 0);
             return sharedSecret;
         }
 

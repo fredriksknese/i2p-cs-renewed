@@ -9,6 +9,7 @@ using I2PCore.TunnelLayer.I2NP.Data;
 using I2PCore.TunnelLayer.I2NP.Messages;
 using I2PCore.SessionLayer.ECIES;
 using I2PCore.Crypto;
+using I2PCore.Crypto.Noise;
 
 namespace I2PCore.SessionLayer
 {

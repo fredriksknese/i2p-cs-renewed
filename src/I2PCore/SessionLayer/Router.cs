@@ -12,6 +12,7 @@ using I2PCore.TunnelLayer.I2NP.Data;
 using I2PCore.TunnelLayer.I2NP.Messages;
 using static I2PCore.SessionLayer.ClientDestination;
 using System.Collections.Concurrent;
+using I2PCore.Crypto;
 
 namespace I2PCore.SessionLayer
 {
@@ -552,7 +553,7 @@ namespace I2PCore.SessionLayer
                             {
                                 var x25519Priv = new byte[32];
                                 Array.Copy( privKey, privKey.Length - 32, x25519Priv, 0, 32 );
-                                var x25519Pub = TransportLayer.Crypto.X25519.GetPublicKey( x25519Priv );
+                                var x25519Pub = X25519.GetPublicKey( x25519Priv );
                                 _eciesRouterProcessor = new ECIES.ECIESRouterProcessor(
                                     ctx.MyRouterIdentity.IdentHash,
                                     x25519Priv,

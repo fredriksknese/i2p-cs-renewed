@@ -1,7 +1,8 @@
 using System;
+using I2PCore.Crypto;
+using I2PCore.Crypto.Noise;
 using NUnit.Framework;
 using Assert = NUnit.Framework.Legacy.ClassicAssert;
-using I2PCore.TransportLayer.Crypto;
 using I2PCore.TransportLayer.NTCP2;
 using I2PCore.Utils;
 

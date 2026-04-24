@@ -1,4 +1,6 @@
 using System;
+using I2PCore.Crypto;
+using I2PCore.Crypto.Noise;
 using I2PCore.Data;
 using I2PCore.Utils;
 
@@ -224,13 +226,13 @@ namespace I2PCore.TunnelLayer.ECIES
             Array.Copy(chainingKey, 0, ck, 0, 32);
 
             // Step 1: Reply key - HKDF(CK, null, "SMTunnelReplyKey") -> newCK, replyKey
-            var derived1 = TransportLayer.Crypto.NoiseKDF.HKDF(ck, null, System.Text.Encoding.ASCII.GetBytes("SMTunnelReplyKey"), 64);
+            var derived1 = NoiseKDF.HKDF(ck, null, System.Text.Encoding.ASCII.GetBytes("SMTunnelReplyKey"), 64);
             var replyKey = new byte[32];
             Array.Copy(derived1, 32, replyKey, 0, 32);
             Array.Copy(derived1, 0, ck, 0, 32); // CK is now CK_after_step1
 
             // Step 2: Layer key - HKDF(CK, [], "SMTunnelLayerKey") -> newCK, layerKey
-            var derived2 = TransportLayer.Crypto.NoiseKDF.HKDF(ck, null, System.Text.Encoding.ASCII.GetBytes("SMTunnelLayerKey"), 64);
+            var derived2 = NoiseKDF.HKDF(ck, null, System.Text.Encoding.ASCII.GetBytes("SMTunnelLayerKey"), 64);
             var layerKey = new byte[32];
             Array.Copy(derived2, 32, layerKey, 0, 32);
             // DO NOT update ck yet - Java updates it only if isOBEP
@@ -247,7 +249,7 @@ namespace I2PCore.TunnelLayer.ECIES
                 Utils.Logging.LogCritical($"[DEBUG_LOG] DeriveAllKeys: Step 2 OBEP CK={BitConverter.ToString(ck, 0, 4)}");
 
                 // Step 3: HKDF(CK, [], "TunnelLayerIVKey") -> newCK, ivKey
-                var derived3 = TransportLayer.Crypto.NoiseKDF.HKDF(ck, null, System.Text.Encoding.ASCII.GetBytes("TunnelLayerIVKey"), 64);
+                var derived3 = NoiseKDF.HKDF(ck, null, System.Text.Encoding.ASCII.GetBytes("TunnelLayerIVKey"), 64);
                 Array.Copy(derived3, 32, ivKey, 0, 32);
                 Array.Copy(derived3, 0, ck, 0, 32); // CK is now CK_after_step3
                 Utils.Logging.LogCritical($"[DEBUG_LOG] DeriveAllKeys: Step 3 CK={BitConverter.ToString(ck, 0, 4)}, ivKey={BitConverter.ToString(ivKey, 0, 4)}");
@@ -257,7 +259,7 @@ namespace I2PCore.TunnelLayer.ECIES
                 //   newck[0..31]  = derived4[0..31]
                 //   dgk[0..31]    = derived4[32..63]
                 //   garlicTag is first 8 bytes of newck
-                var derived4 = TransportLayer.Crypto.NoiseKDF.HKDF(ck, null, System.Text.Encoding.ASCII.GetBytes("RGarlicKeyAndTag"), 64);
+                var derived4 = NoiseKDF.HKDF(ck, null, System.Text.Encoding.ASCII.GetBytes("RGarlicKeyAndTag"), 64);
                 
                 // Update CK with newck
                 Array.Copy(derived4, 0, ck, 0, 32);
@@ -285,7 +287,7 @@ namespace I2PCore.TunnelLayer.ECIES
         {
             var salt = new byte[32];
             Array.Copy(ck, 0, salt, 0, 32);
-            var derived = TransportLayer.Crypto.NoiseKDF.HKDF(salt,
+            var derived = NoiseKDF.HKDF(salt,
                 null, System.Text.Encoding.ASCII.GetBytes(info), 64);
             Array.Copy(derived, 0, ck, 0, 64);
         }

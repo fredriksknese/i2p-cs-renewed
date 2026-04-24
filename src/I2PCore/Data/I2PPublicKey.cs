@@ -1,12 +1,12 @@
 ﻿using Org.BouncyCastle.Math;
 using I2PCore.Utils;
-using I2PCore.TransportLayer.Crypto;
 using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Crypto.Generators;
 using Org.BouncyCastle.Asn1.X9;
 using Org.BouncyCastle.Security;
 using System;
 using System.Linq;
+using I2PCore.Crypto;
 using I2PCore.Crypto.MLKEM;
 
 namespace I2PCore.Data
@@ -26,7 +26,7 @@ namespace I2PCore.Data
                     break;
 
                 case KeyTypes.X25519:
-                    Key = new BufLen( TransportLayer.Crypto.X25519.GetPublicKey( priv.ToByteArray() ) );
+                    Key = new BufLen( X25519.GetPublicKey( priv.ToByteArray() ) );
                     break;
 
                 case KeyTypes.MLKEM512_X25519:
@@ -36,7 +36,7 @@ namespace I2PCore.Data
                         var x25519Priv = privBytes.Skip( Crypto.MLKEM.MLKEM512.SecretKeyBytes ).Take( 32 ).ToArray();
 
                         var mlkemPub = Crypto.MLKEM.MLKEM512.GetPublicKey( mlkemPriv );
-                        var x25519Pub = TransportLayer.Crypto.X25519.GetPublicKey( x25519Priv );
+                        var x25519Pub = X25519.GetPublicKey( x25519Priv );
 
                         var combined = new byte[mlkemPub.Length + x25519Pub.Length];
                         Array.Copy( mlkemPub, 0, combined, 0, mlkemPub.Length );
@@ -52,7 +52,7 @@ namespace I2PCore.Data
                         var x25519Priv = privBytes.Skip( Crypto.MLKEM.MLKEM768.SecretKeyBytes ).Take( 32 ).ToArray();
 
                         var mlkemPub = Crypto.MLKEM.MLKEM768.GetPublicKey( mlkemPriv );
-                        var x25519Pub = TransportLayer.Crypto.X25519.GetPublicKey( x25519Priv );
+                        var x25519Pub = X25519.GetPublicKey( x25519Priv );
 
                         var combined = new byte[mlkemPub.Length + x25519Pub.Length];
                         Array.Copy( mlkemPub, 0, combined, 0, mlkemPub.Length );
@@ -68,7 +68,7 @@ namespace I2PCore.Data
                         var x25519Priv = privBytes.Skip( Crypto.MLKEM.MLKEM1024.SecretKeyBytes ).Take( 32 ).ToArray();
 
                         var mlkemPub = Crypto.MLKEM.MLKEM1024.GetPublicKey( mlkemPriv );
-                        var x25519Pub = TransportLayer.Crypto.X25519.GetPublicKey( x25519Priv );
+                        var x25519Pub = X25519.GetPublicKey( x25519Priv );
 
                         var combined = new byte[mlkemPub.Length + x25519Pub.Length];
                         Array.Copy( mlkemPub, 0, combined, 0, mlkemPub.Length );

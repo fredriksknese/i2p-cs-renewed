@@ -1,9 +1,10 @@
 using System;
 using System.Linq;
+using I2PCore.Crypto;
+using I2PCore.Crypto.Noise;
 using I2PCore.Data;
 using I2PCore.SessionLayer;
 using I2PCore.Utils;
-using I2PCore.TransportLayer.Crypto;
 using I2PCore.TunnelLayer.I2NP.Messages;
 
 namespace I2PCore.TunnelLayer.ECIES
@@ -192,7 +193,7 @@ namespace I2PCore.TunnelLayer.ECIES
 
             // AEAD encrypt: ChaChaPoly(replyKey, nonce=slotNumber, AD=handshakeHash, plaintext)
             var plaintext = reply.ToByteArray();
-            var nonce = TransportLayer.Crypto.ChaCha20Poly1305.CreateNonce( (ulong)slotNumber );
+            var nonce = ChaCha20Poly1305.CreateNonce( (ulong)slotNumber );
 
             var encrypted = ChaCha20Poly1305.Encrypt(replyKey, nonce, plaintext, _lastHandshakeHash);
 

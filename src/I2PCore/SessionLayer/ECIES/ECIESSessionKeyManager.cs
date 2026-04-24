@@ -5,8 +5,8 @@ using System.Linq;
 using System.Security.Cryptography;
 using I2PCore.Data;
 using I2PCore.Utils;
-using I2PCore.TransportLayer.Crypto;
 using I2PCore.Crypto;
+using I2PCore.Crypto.Noise;
 
 namespace I2PCore.SessionLayer.ECIES
 {

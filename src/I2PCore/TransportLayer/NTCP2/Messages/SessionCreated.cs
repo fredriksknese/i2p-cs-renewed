@@ -1,4 +1,5 @@
 using System;
+using I2PCore.Crypto;
 using I2PCore.Utils;
 
 namespace I2PCore.TransportLayer.NTCP2.Messages
@@ -92,13 +93,13 @@ namespace I2PCore.TransportLayer.NTCP2.Messages
         {
             // AES-256-CBC encryption continuing from message 1 state
             // aesState is the IV after encrypting message 1
-            return Crypto.AESObfuscation.Encrypt(key, routerHash, aesState);
+            return AESObfuscation.Encrypt(key, routerHash, aesState);
         }
 
         private static byte[] DecryptEphemeralKey(BufLen encryptedKey, byte[] routerHash, byte[] aesState)
         {
             // AES-256-CBC decryption
-            return Crypto.AESObfuscation.Decrypt(encryptedKey.ToByteArray(), routerHash, aesState);
+            return AESObfuscation.Decrypt(encryptedKey.ToByteArray(), routerHash, aesState);
         }
 
         private byte[] EncryptOptions(byte[] options)

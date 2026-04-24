@@ -1,9 +1,10 @@
 using System;
+using I2PCore.Crypto;
 using NUnit.Framework;
 using Assert = NUnit.Framework.Legacy.ClassicAssert;
-using I2PCore.TransportLayer.Crypto;
 using I2PCore.Utils;
 using I2PCore.Crypto.MLKEM;
+using I2PCore.Crypto.Noise;
 
 namespace I2PTests
 {

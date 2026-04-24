@@ -1,4 +1,5 @@
 using System;
+using I2PCore.Crypto;
 using NUnit.Framework;
 using Assert = NUnit.Framework.Legacy.ClassicAssert;
 using I2PCore.Utils;
@@ -25,13 +26,13 @@ namespace I2PTests
             var associatedData = BufUtils.RandomBytes(16);
 
             // Encrypt
-            var ciphertext = I2PCore.TransportLayer.Crypto.ChaCha20Poly1305.Encrypt(key, nonce, plaintext, associatedData);
+            var ciphertext = ChaCha20Poly1305.Encrypt(key, nonce, plaintext, associatedData);
             Assert.IsNotNull(ciphertext, "Encryption failed");
             Assert.AreEqual(plaintext.Length + 16, ciphertext.Length,
                 "Ciphertext should be plaintext + 16 byte MAC");
 
             // Decrypt
-            var decrypted = I2PCore.TransportLayer.Crypto.ChaCha20Poly1305.Decrypt(key, nonce, ciphertext, associatedData);
+            var decrypted = ChaCha20Poly1305.Decrypt(key, nonce, ciphertext, associatedData);
             Assert.IsNotNull(decrypted, "Decryption failed");
             Assert.IsTrue(BufUtils.Equal(plaintext, decrypted),
                 "Decrypted text doesn't match original");
@@ -48,11 +49,11 @@ namespace I2PTests
             var plaintext = Array.Empty<byte>();
             var associatedData = BufUtils.RandomBytes(16);
 
-            var ciphertext = I2PCore.TransportLayer.Crypto.ChaCha20Poly1305.Encrypt(key, nonce, plaintext, associatedData);
+            var ciphertext = ChaCha20Poly1305.Encrypt(key, nonce, plaintext, associatedData);
             Assert.IsNotNull(ciphertext);
             Assert.AreEqual(16, ciphertext.Length, "Empty plaintext should produce 16-byte MAC");
 
-            var decrypted = I2PCore.TransportLayer.Crypto.ChaCha20Poly1305.Decrypt(key, nonce, ciphertext, associatedData);
+            var decrypted = ChaCha20Poly1305.Decrypt(key, nonce, ciphertext, associatedData);
             Assert.IsNotNull(decrypted);
             Assert.AreEqual(0, decrypted.Length);
         }
@@ -67,13 +68,13 @@ namespace I2PTests
             var nonce = BufUtils.RandomBytes(12);
             var plaintext = BufUtils.RandomBytes(100);
 
-            var ciphertext = I2PCore.TransportLayer.Crypto.ChaCha20Poly1305.Encrypt(key, nonce, plaintext, null);
+            var ciphertext = ChaCha20Poly1305.Encrypt(key, nonce, plaintext, null);
 
             // Corrupt the ciphertext
             ciphertext[50] ^= 0xFF;
 
             // Decryption should fail due to MAC verification
-            var decrypted = I2PCore.TransportLayer.Crypto.ChaCha20Poly1305.Decrypt(key, nonce, ciphertext, null);
+            var decrypted = ChaCha20Poly1305.Decrypt(key, nonce, ciphertext, null);
             Assert.IsNull(decrypted, "Decryption should fail with corrupted ciphertext");
         }
 
@@ -89,13 +90,13 @@ namespace I2PTests
             var iv = BufUtils.RandomBytes(16);
 
             // Encrypt
-            var encrypted = I2PCore.TransportLayer.Crypto.AESObfuscation.Encrypt(ephemeralKey, aesKey, iv);
+            var encrypted = AESObfuscation.Encrypt(ephemeralKey, aesKey, iv);
             Assert.IsNotNull(encrypted);
             Assert.AreEqual(32, encrypted.Length);
             Assert.IsFalse(BufUtils.Equal(ephemeralKey, encrypted), "Encrypted key should differ from plaintext");
 
             // Decrypt
-            var decrypted = I2PCore.TransportLayer.Crypto.AESObfuscation.Decrypt(encrypted, aesKey, iv);
+            var decrypted = AESObfuscation.Decrypt(encrypted, aesKey, iv);
             Assert.IsNotNull(decrypted);
             Assert.AreEqual(32, decrypted.Length);
             Assert.IsTrue(BufUtils.Equal(ephemeralKey, decrypted), "Decrypted key should match original");
@@ -113,10 +114,10 @@ namespace I2PTests
             var iv = BufUtils.RandomBytes(16);
 
             // Encrypt first block (Message 1 in NTCP2)
-            var encrypted1 = I2PCore.TransportLayer.Crypto.AESObfuscation.Encrypt(firstBlock, aesKey, iv);
+            var encrypted1 = AESObfuscation.Encrypt(firstBlock, aesKey, iv);
 
             // Get CBC state after first block
-            var newIV = I2PCore.TransportLayer.Crypto.AESObfuscation.GetStateAfterEncryption(aesKey, iv, firstBlock);
+            var newIV = AESObfuscation.GetStateAfterEncryption(aesKey, iv, firstBlock);
             Assert.IsNotNull(newIV);
             Assert.AreEqual(16, newIV.Length);
 
@@ -129,7 +130,7 @@ namespace I2PTests
 
             // Encrypt second block (Message 2 in NTCP2) using continued state
             var secondBlock = BufUtils.RandomBytes(32);
-            var encrypted2 = I2PCore.TransportLayer.Crypto.AESObfuscation.Encrypt(secondBlock, aesKey, newIV);
+            var encrypted2 = AESObfuscation.Encrypt(secondBlock, aesKey, newIV);
             Assert.IsNotNull(encrypted2);
             Assert.AreEqual(32, encrypted2.Length);
         }
@@ -146,13 +147,13 @@ namespace I2PTests
             var iv = BufUtils.RandomBytes(16);
 
             // Test native .NET AES
-            var encryptedNative = I2PCore.TransportLayer.Crypto.AESObfuscation.EncryptNative(ephemeralKey, aesKey, iv);
-            var decryptedNative = I2PCore.TransportLayer.Crypto.AESObfuscation.DecryptNative(encryptedNative, aesKey, iv);
+            var encryptedNative = AESObfuscation.EncryptNative(ephemeralKey, aesKey, iv);
+            var decryptedNative = AESObfuscation.DecryptNative(encryptedNative, aesKey, iv);
             Assert.IsTrue(BufUtils.Equal(ephemeralKey, decryptedNative),
                 "Native AES decryption should match original");
 
             // Verify BouncyCastle and .NET produce same result
-            var encryptedBC = I2PCore.TransportLayer.Crypto.AESObfuscation.Encrypt(ephemeralKey, aesKey, iv);
+            var encryptedBC = AESObfuscation.Encrypt(ephemeralKey, aesKey, iv);
             Assert.IsTrue(BufUtils.Equal(encryptedNative, encryptedBC),
                 "Native and BouncyCastle AES should produce identical ciphertext");
         }

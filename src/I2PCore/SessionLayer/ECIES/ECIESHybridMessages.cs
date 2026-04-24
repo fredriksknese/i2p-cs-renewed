@@ -1,6 +1,7 @@
 using System;
 using I2PCore.Crypto;
 using I2PCore.Crypto.MLKEM;
+using I2PCore.Crypto.Noise;
 using I2PCore.Data;
 using I2PCore.Utils;
 

@@ -1,7 +1,7 @@
 using System;
 using System.Linq;
 
-namespace I2PCore.TransportLayer.Crypto
+namespace I2PCore.Crypto.Noise
 {
     /// <summary>
     /// Noise N (one-way) pattern implementation

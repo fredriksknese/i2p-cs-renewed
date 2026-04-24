@@ -2,9 +2,10 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using I2PCore.Crypto;
+using I2PCore.Crypto.Noise;
 using I2PCore.Data;
 using I2PCore.Utils;
-using I2PCore.TransportLayer.Crypto;
 
 namespace I2PCore.SessionLayer.ECIES
 {

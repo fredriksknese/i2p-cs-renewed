@@ -1,7 +1,7 @@
 using System;
+using I2PCore.Crypto;
 using I2PCore.Data;
 using I2PCore.Utils;
-using I2PCore.TransportLayer.Crypto;
 
 namespace I2PCore.TunnelLayer.ECIES
 {

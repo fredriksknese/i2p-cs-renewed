@@ -1,7 +1,8 @@
 using System;
 using System.Security.Cryptography;
+using I2PCore.Crypto.Noise;
 
-namespace I2PCore.TransportLayer.Crypto
+namespace I2PCore.Crypto
 {
     /// <summary>
     /// NTCP2-specific Key Derivation Functions

@@ -1,7 +1,7 @@
 using System;
 using System.Security.Cryptography;
 
-namespace I2PCore.TransportLayer.Crypto
+namespace I2PCore.Crypto.Noise
 {
     /// <summary>
     /// Base class for Noise Protocol implementations

@@ -9,10 +9,11 @@ using I2PCore.SessionLayer;
 using I2PCore.SessionLayer.ECIES;
 using I2PCore.TunnelLayer.I2NP.Messages;
 using I2PCore.TransportLayer;
-using I2PCore.TransportLayer.Crypto;
 using I2PCore.Data;
 using System.Threading;
 using System.Collections.Concurrent;
+using I2PCore.Crypto;
+using I2PCore.Crypto.Noise;
 
 namespace I2PCore
 {
@@ -200,7 +201,7 @@ namespace I2PCore
             return true;
         }
 
-        public bool LookupLeaseSet( I2PIdentHash ident, SessionLayer.ClientDestination clientContext = null )
+        public bool LookupLeaseSet( I2PIdentHash ident, ClientDestination clientContext = null )
         {
             bool inprogress = true;
 
@@ -511,23 +512,23 @@ namespace I2PCore
             try
             {
                 // Select tunnels: prefer client's own tunnels, fall back to exploratory tunnels.
-                OutboundTunnel outtunnel = null;
-                InboundTunnel replytunnel = null;
+                OutboundTunnel outboundTunnel = null;
+                InboundTunnel inboundReplyTunnel = null;
 
                 if ( info.ClientContext != null )
                 {
                     // Use the client destination's own tunnel pool (most anonymous)
-                    outtunnel = info.ClientContext.SelectOutboundTunnel();
-                    replytunnel = info.ClientContext.SelectInboundTunnel();
+                    outboundTunnel = info.ClientContext.SelectOutboundTunnel();
+                    inboundReplyTunnel = info.ClientContext.SelectInboundTunnel();
                 }
 
-                outtunnel ??= TunnelProvider.Inst.GetEstablishedOutboundTunnel( TunnelPoolSelection.RequireExploratory )
+                outboundTunnel ??= TunnelProvider.Inst.GetEstablishedOutboundTunnel( TunnelPoolSelection.RequireExploratory )
                     ?? TunnelProvider.Inst.GetEstablishedOutboundTunnel( TunnelPoolSelection.AllowExploratory );
 
-                replytunnel ??= TunnelProvider.Inst.GetEstablishedInboundTunnel( TunnelPoolSelection.RequireExploratory )
+                inboundReplyTunnel ??= TunnelProvider.Inst.GetEstablishedInboundTunnel( TunnelPoolSelection.RequireExploratory )
                     ?? TunnelProvider.Inst.GetEstablishedInboundTunnel( TunnelPoolSelection.AllowExploratory );
 
-                if ( outtunnel == null || replytunnel == null )
+                if ( outboundTunnel == null || inboundReplyTunnel == null )
                 {
                     var err = $"LS lookup {ident.Id32Short} deferred - no tunnels available yet";
                     Logging.LogDebug( $"IdentResolver: {err}" );
@@ -581,17 +582,11 @@ namespace I2PCore
 
                         I2NpMessage outMsg;
 
-                        if ( isEcies )
-                        {
-                            // ECIES floodfill: garlic-wrap the DLM using Noise N
-                            // Java: MessageWrapper.wrap(ctx, dlm, ri) + dlm.setReplySession(key, rtag)
-                            outMsg = CreateEciesWrappedLookup( ident, replytunnel, excluded, ri, oneffid );
-                        }
-                        else
-                        {
+                        // ECIES floodfill: garlic-wrap the DLM using Noise N
+                        // Java: MessageWrapper.wrap(ctx, dlm, ri) + dlm.setReplySession(key, rtag)
+                        outMsg = isEcies ? CreateEciesWrappedLookup( ident, inboundReplyTunnel, excluded, ri, oneffid ) :
                             // ElGamal floodfill: garlic-wrap using ElGamal encryption
-                            outMsg = CreateElGamalWrappedLookup( ident, replytunnel, excluded, ri, oneffid );
-                        }
+                            CreateElGamalWrappedLookup( ident, inboundReplyTunnel, excluded, ri, oneffid );
 
                         if ( outMsg == null )
                         {
@@ -599,14 +594,14 @@ namespace I2PCore
                             Logging.LogWarning( $"IdentResolver: LS lookup {ident.Id32Short} -> ff {oneffid.Id32Short}: garlic wrap failed, sending plain DLM" );
                             var plainMsg = new DatabaseLookupMessage(
                                 ident,
-                                replytunnel.Destination,
-                                replytunnel.GatewayTunnelId,
+                                inboundReplyTunnel.Destination,
+                                inboundReplyTunnel.GatewayTunnelId,
                                 DatabaseLookupMessage.LookupTypes.LeaseSet,
                                 excluded );
                             outMsg = plainMsg;
                         }
 
-                        outtunnel.Send( new TunnelMessageRouter( outMsg, oneffid ) );
+                        outboundTunnel.Send( new TunnelMessageRouter( outMsg, oneffid ) );
 
                         Logging.LogInformation( $"IdentResolver: LS lookup {ident.Id32Short} -> ff {oneffid.Id32Short} ({(isEcies ? "ECIES" : "ElG")} garlic-wrapped)" );
                         IdentUpdateRequestInfo.AlreadyQueried[oneffid] = 1;
@@ -617,7 +612,7 @@ namespace I2PCore
                     }
                 }
 
-                info.StartLookup( selectedFf, outtunnel, replytunnel );
+                info.StartLookup( selectedFf, outboundTunnel, inboundReplyTunnel );
             }
             catch ( Exception ex )
             {
@@ -634,7 +629,7 @@ namespace I2PCore
         /// </summary>
         private I2NpMessage CreateEciesWrappedLookup(
             I2PIdentHash ident,
-            InboundTunnel replytunnel,
+            InboundTunnel replyTunnel,
             ICollection<I2PIdentHash> excluded,
             I2PRouterInfo ri,
             I2PIdentHash ffHash )
@@ -671,8 +666,8 @@ namespace I2PCore
 
                 var dlm = new DatabaseLookupMessage(
                     ident,
-                    replytunnel.Destination,
-                    replytunnel.GatewayTunnelId,
+                    replyTunnel.Destination,
+                    replyTunnel.GatewayTunnelId,
                     DatabaseLookupMessage.LookupTypes.LeaseSet,
                     excluded,
                     replyKeyInfo );
@@ -714,7 +709,7 @@ namespace I2PCore
             var blocks = new List<SessionLayer.ECIES.Block>
             {
                 new DateTimeBlock { Timestamp = (uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds() },
-                new SessionLayer.ECIES.GarlicCloveBlock { Data = cloveStream.ToByteArray() },
+                new GarlicCloveBlock { Data = cloveStream.ToByteArray() },
                 new PaddingBlock { Data = BufUtils.RandomBytes( 16 + BufUtils.RandomInt( 32 ) ) }
             };
 
@@ -736,7 +731,7 @@ namespace I2PCore
         /// </summary>
         private I2NpMessage CreateElGamalWrappedLookup(
             I2PIdentHash ident,
-            InboundTunnel replytunnel,
+            InboundTunnel replyTunnel,
             ICollection<I2PIdentHash> excluded,
             I2PRouterInfo ri,
             I2PIdentHash ffHash )
@@ -748,8 +743,8 @@ namespace I2PCore
                 // send the DLM garlic-wrapped but with unencrypted reply for now).
                 var dlm = new DatabaseLookupMessage(
                     ident,
-                    replytunnel.Destination,
-                    replytunnel.GatewayTunnelId,
+                    replyTunnel.Destination,
+                    replyTunnel.GatewayTunnelId,
                     DatabaseLookupMessage.LookupTypes.LeaseSet,
                     excluded );
 
@@ -817,7 +812,7 @@ namespace I2PCore
             // Get an inbound tunnel for receiving replies.
             // For firewalled routers, MUST use a real (non-zero-hop) tunnel because
             // floodfills can't connect directly to us to deliver the reply.
-            InboundTunnel replytunnel;
+            InboundTunnel replyTunnel;
             if ( RouterContext.Inst.IsFirewalled )
             {
                 // Get only real (non-zero-hop) inbound tunnels
@@ -831,15 +826,15 @@ namespace I2PCore
                     return;
                 }
 
-                replytunnel = realTunnels[BufUtils.RandomInt( realTunnels.Length )];
+                replyTunnel = realTunnels[BufUtils.RandomInt( realTunnels.Length )];
             }
             else
             {
-                replytunnel = TunnelProvider.Inst.GetEstablishedInboundTunnel( TunnelPoolSelection.RequireExploratory )
+                replyTunnel = TunnelProvider.Inst.GetEstablishedInboundTunnel( TunnelPoolSelection.RequireExploratory )
                     ?? TunnelProvider.Inst.GetEstablishedInboundTunnel( TunnelPoolSelection.AllowExploratory );
             }
 
-            if ( replytunnel == null )
+            if ( replyTunnel == null )
             {
                 Logging.LogDebug( "IdentResolver: Exploration skipped - no inbound tunnels" );
                 return;
@@ -853,7 +848,7 @@ namespace I2PCore
             var outtunnel = TunnelProvider.Inst.GetEstablishedOutboundTunnel( TunnelPoolSelection.RequireExploratory )
                 ?? TunnelProvider.Inst.GetEstablishedOutboundTunnel( TunnelPoolSelection.AllowExploratory );
 
-            bool useTunnels = outtunnel != null && replytunnel != null;
+            bool useTunnels = outtunnel != null && replyTunnel != null;
 
             // Send exploration queries to multiple floodfills when our NetDb is small
             int queriesPerRound = routerCount < 200 ? 3 : routerCount < 500 ? 2 : 1;
@@ -900,8 +895,8 @@ namespace I2PCore
                         // Through tunnels: specify reply tunnel
                         msg = new DatabaseLookupMessage(
                             ident,
-                            replytunnel.Destination,
-                            replytunnel.GatewayTunnelId,
+                            replyTunnel.Destination,
+                            replyTunnel.GatewayTunnelId,
                             DatabaseLookupMessage.LookupTypes.Exploration,
                             new I2PIdentHash[] { new( false ) } );
                         mode = "tunnels";
@@ -918,26 +913,16 @@ namespace I2PCore
                             new I2PIdentHash[] { new( false ) } );
                         mode = "direct-connected";
                     }
-                    else if ( replytunnel != null )
+                    else
                     {
                         // Direct to unconnected floodfill: specify reply tunnel
                         msg = new DatabaseLookupMessage(
                             ident,
-                            replytunnel.Destination,
-                            replytunnel.GatewayTunnelId,
+                            replyTunnel.Destination,
+                            replyTunnel.GatewayTunnelId,
                             DatabaseLookupMessage.LookupTypes.Exploration,
                             new I2PIdentHash[] { new( false ) } );
                         mode = "direct+replyTunnel";
-                    }
-                    else
-                    {
-                        // Fallback: direct with our IdentHash (only works if not firewalled)
-                        msg = new DatabaseLookupMessage(
-                            ident,
-                            RouterContext.Inst.MyRouterIdentity.IdentHash,
-                            DatabaseLookupMessage.LookupTypes.Exploration,
-                            new I2PIdentHash[] { new( false ) } );
-                        mode = "direct";
                     }
 
                     Logging.LogDebug( $"IdentResolver: Exploration {ident.Id32Short} -> ff {oneff.Id32Short} ({mode})" );
@@ -1009,15 +994,15 @@ namespace I2PCore
         {
             foreach ( var one in retry )
             {
-                var isleaseset = one.LookupType == DatabaseLookupMessage.LookupTypes.LeaseSet;
+                var isLeaseSet = one.LookupType == DatabaseLookupMessage.LookupTypes.LeaseSet;
 
-                if ( one.Retries >= ( isleaseset ? DatabaseLookupRetriesLs : DatabaseLookupRetriesRi ) )
+                if ( one.Retries >= ( isLeaseSet ? DatabaseLookupRetriesLs : DatabaseLookupRetriesRi ) )
                 {
                     OutstandingQueries.TryRemove( one.LookupIdent, out _ );
                     FinishedLookups[one.LookupIdent] = one;
 
                     Logging.Log( string.Format( "IdentResolver: Lookup of {0} {1} failed with timeout.",
-                        ( isleaseset ? "LeaseSet" : "RouterInfo" ), 
+                        ( isLeaseSet ? "LeaseSet" : "RouterInfo" ), 
                         one.LookupIdent.Id32Short ) );
 
                     if ( LookupFailure != null ) ThreadPool.QueueUserWorkItem( a => LookupFailure( one.LookupIdent ) );
@@ -1033,7 +1018,7 @@ namespace I2PCore
                 Logging.Log( string.Format( "IdentResolver: Lookup of {0} {1} failed with timeout Retry {2}.",
                     ( isleaseset ? "LeaseSet" : "RouterInfo" ), one.LookupIdent.Id32Short, one.Retries ) );
 #endif
-                if ( isleaseset )
+                if ( isLeaseSet )
                 {
                     SendLsDatabaseLookup( one.LookupIdent, one );
                 }

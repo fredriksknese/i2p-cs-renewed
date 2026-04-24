@@ -64,7 +64,7 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
                     return MessageIdField.Value;
                 }
 
-                MessageIdField = I2NpMessage.GenerateMessageId();
+                MessageIdField = GenerateMessageId();
                 return MessageIdField.Value;
             }
             set

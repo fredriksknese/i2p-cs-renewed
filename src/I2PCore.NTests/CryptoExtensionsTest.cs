@@ -1,10 +1,10 @@
 using System;
 using System.Linq;
 using System.Text;
+using I2PCore.Crypto;
 using NUnit.Framework;
 using Assert = NUnit.Framework.Legacy.ClassicAssert;
 using I2PCore.Data;
-using I2PCore.TransportLayer.Crypto;
 using I2PCore.Utils;
 using Org.BouncyCastle.Crypto.Engines;
 using Org.BouncyCastle.Crypto.Parameters;

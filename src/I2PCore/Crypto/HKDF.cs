@@ -1,7 +1,7 @@
 using System;
 using System.Security.Cryptography;
 
-namespace I2PCore.TransportLayer.Crypto
+namespace I2PCore.Crypto
 {
     /// <summary>
     /// HMAC-based Key Derivation Function (HKDF)

@@ -1,8 +1,9 @@
 using System;
+using I2PCore.Crypto.Noise;
 using Org.BouncyCastle.Crypto.Engines;
 using Org.BouncyCastle.Crypto.Parameters;
 
-namespace I2PCore.TransportLayer.Crypto
+namespace I2PCore.Crypto
 {
     /// <summary>
     /// SSU2 Header Encryption

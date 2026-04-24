@@ -3,8 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using I2PCore.Data;
 using I2PCore.Utils;
-using I2PCore.TransportLayer.Crypto;
 using I2PCore.Crypto;
+using I2PCore.Crypto.Noise;
 
 namespace I2PCore.SessionLayer.ECIES
 {
@@ -28,19 +28,19 @@ namespace I2PCore.SessionLayer.ECIES
         public ECIESTagSet(byte[] ck, byte[] tk)
         {
             // KDFDHRatchetStep (INFO_1)
-            var res1 = I2PCore.TransportLayer.Crypto.HKDF.DeriveKey(ck, tk, System.Text.Encoding.ASCII.GetBytes(INFO_1), 64);
+            var res1 = HKDF.DeriveKey(ck, tk, System.Text.Encoding.ASCII.GetBytes(INFO_1), 64);
             var ck1 = new byte[32];
             Array.Copy(res1, 32, ck1, 0, 32);
 
             // TagAndKeyGenKeys (INFO_2)
-            var res2 = I2PCore.TransportLayer.Crypto.HKDF.DeriveKey(ck1, ZEROLEN, System.Text.Encoding.ASCII.GetBytes(INFO_2), 64);
+            var res2 = HKDF.DeriveKey(ck1, ZEROLEN, System.Text.Encoding.ASCII.GetBytes(INFO_2), 64);
             _sesstag_ck = new byte[32];
             Array.Copy(res2, 0, _sesstag_ck, 0, 32);
             _symmkey_ck = new byte[32];
             Array.Copy(res2, 32, _symmkey_ck, 0, 32);
 
             // STInitialization (INFO_3)
-            var res3 = I2PCore.TransportLayer.Crypto.HKDF.DeriveKey(_sesstag_ck, ZEROLEN, System.Text.Encoding.ASCII.GetBytes(INFO_3), 64);
+            var res3 = HKDF.DeriveKey(_sesstag_ck, ZEROLEN, System.Text.Encoding.ASCII.GetBytes(INFO_3), 64);
             Array.Copy(res3, 0, _sesstag_ck, 0, 32);
             _sesstag_constant = new byte[32];
             Array.Copy(res3, 32, _sesstag_constant, 0, 32);
@@ -49,13 +49,13 @@ namespace I2PCore.SessionLayer.ECIES
         public (SessionTag tag, byte[] key) ConsumeNext()
         {
             // SessionTagKeyGen (INFO_4)
-            var res4 = I2PCore.TransportLayer.Crypto.HKDF.DeriveKey(_sesstag_ck, _sesstag_constant, System.Text.Encoding.ASCII.GetBytes(INFO_4), 64);
+            var res4 = HKDF.DeriveKey(_sesstag_ck, _sesstag_constant, System.Text.Encoding.ASCII.GetBytes(INFO_4), 64);
             Array.Copy(res4, 0, _sesstag_ck, 0, 32);
             var tagBytes = new byte[8];
             Array.Copy(res4, 32, tagBytes, 0, 8); // Per i2pd: return buf64toh (res + 32)
 
             // SymmetricRatchet (INFO_5)
-            var res5 = I2PCore.TransportLayer.Crypto.HKDF.DeriveKey(_symmkey_ck, ZEROLEN, System.Text.Encoding.ASCII.GetBytes(INFO_5), 64);
+            var res5 = HKDF.DeriveKey(_symmkey_ck, ZEROLEN, System.Text.Encoding.ASCII.GetBytes(INFO_5), 64);
             Array.Copy(res5, 0, _symmkey_ck, 0, 32);
             var keyBytes = new byte[32];
             Array.Copy(res5, 32, keyBytes, 0, 32);
@@ -166,7 +166,7 @@ namespace I2PCore.SessionLayer.ECIES
             }
 
             // Derive expected 8-byte tag for Message B
-            var tagsetKey = I2PCore.TransportLayer.Crypto.HKDF.DeriveKey(ck, Array.Empty<byte>(), System.Text.Encoding.ASCII.GetBytes("SessionReplyTags"), 32);
+            var tagsetKey = HKDF.DeriveKey(ck, Array.Empty<byte>(), System.Text.Encoding.ASCII.GetBytes("SessionReplyTags"), 32);
             var handshakeTagSet = new ECIESTagSet(ck, tagsetKey);
             var (bTag, _) = handshakeTagSet.ConsumeNext();
             var expectedReplyTag = bTag.ToByteArray().AsSpan(0, 8).ToArray();
@@ -451,7 +451,7 @@ namespace I2PCore.SessionLayer.ECIES
 
                 // Bob uses deterministic tags derived from handshake shared secret
                 // 1. Handshake tags for Message B
-                var tagsetKey = I2PCore.TransportLayer.Crypto.HKDF.DeriveKey(ck, Array.Empty<byte>(), System.Text.Encoding.ASCII.GetBytes("SessionReplyTags"), 32);
+                var tagsetKey = HKDF.DeriveKey(ck, Array.Empty<byte>(), System.Text.Encoding.ASCII.GetBytes("SessionReplyTags"), 32);
                 var handshakeTagSet = new ECIESTagSet(ck, tagsetKey);
                 var (bTag, _) = handshakeTagSet.ConsumeNext();
 
@@ -486,7 +486,7 @@ namespace I2PCore.SessionLayer.ECIES
 
                 // Bob uses deterministic tags derived from handshake shared secret
                 // 1. Handshake tags for Message B
-                var tagsetKey = I2PCore.TransportLayer.Crypto.HKDF.DeriveKey(ck, Array.Empty<byte>(), System.Text.Encoding.ASCII.GetBytes("SessionReplyTags"), 32);
+                var tagsetKey = HKDF.DeriveKey(ck, Array.Empty<byte>(), System.Text.Encoding.ASCII.GetBytes("SessionReplyTags"), 32);
                 var handshakeTagSet = new ECIESTagSet(ck, tagsetKey);
                 var (bTag, _) = handshakeTagSet.ConsumeNext();
 

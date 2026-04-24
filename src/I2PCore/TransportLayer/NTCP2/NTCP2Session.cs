@@ -3,12 +3,13 @@ using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading.Tasks;
+using I2PCore.Crypto;
+using I2PCore.Crypto.Noise;
 using I2PCore.Data;
 using I2PCore.SessionLayer;
 using I2PCore.Utils;
 using I2PCore.TunnelLayer.I2NP.Messages;
 using I2PCore.TunnelLayer.I2NP.Data;
-using I2PCore.TransportLayer.Crypto;
 using I2PCore.TransportLayer.NTCP2.Messages;
 using I2PCore.TransportLayer.Log;
 
@@ -1505,7 +1506,7 @@ namespace I2PCore.TransportLayer.NTCP2
             var bobPub = Host.GetStaticPublicKey();
 
             // DIAG: verify private key matches public key
-            var derivedPub = Crypto.X25519.GetPublicKey(bobPriv);
+            var derivedPub = X25519.GetPublicKey(bobPriv);
             var match = derivedPub.SequenceEqual(bobPub);
             Logging.LogInformation($"{DebugId}: DIAG-KeyPairCheck: bobPub[0:4]={BitConverter.ToString(bobPub, 0, 4).Replace("-","")} derivedPub[0:4]={BitConverter.ToString(derivedPub, 0, 4).Replace("-","")} match={match}");
 

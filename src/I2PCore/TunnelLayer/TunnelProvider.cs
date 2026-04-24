@@ -19,6 +19,9 @@ using System.Net.Sockets;
 using System.Text;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using I2PCore.Crypto;
+using I2PCore.Crypto.Noise;
+using ChaCha20Poly1305 = I2PCore.Crypto.ChaCha20Poly1305;
 
 namespace I2PCore.TunnelLayer
 {
@@ -111,7 +114,7 @@ namespace I2PCore.TunnelLayer
                 var nonce = new byte[12];
                 var ad = data[..8]; // AD = the tag bytes
 
-                var decrypted = TransportLayer.Crypto.ChaCha20Poly1305.Decrypt(
+                var decrypted = ChaCha20Poly1305.Decrypt(
                     entry.Key, nonce, encrypted, ad);
 
                 if (decrypted == null)
@@ -245,7 +248,7 @@ namespace I2PCore.TunnelLayer
             // AEAD encrypt: ChaChaPoly(key, nonce=0, AD=tagBytes, plaintext)
             var tagBytes = BitConverter.GetBytes( BufUtils.Flip64( garlicTag ) );
             var nonce = new byte[12];
-            var encrypted = TransportLayer.Crypto.ChaCha20Poly1305.Encrypt( garlicKey, nonce, plaintext, tagBytes );
+            var encrypted = ChaCha20Poly1305.Encrypt( garlicKey, nonce, plaintext, tagBytes );
 
             // I2NP Garlic payload format for ECIES: tag(8) + ciphertext(N)
             // NO 4-byte count prefix (per Proposal 144)
@@ -338,7 +341,7 @@ namespace I2PCore.TunnelLayer
                 Logging.LogCritical( $"[SELF-TEST] NoiseN: Cleartext ({cleartext.Length}b): {BitConverter.ToString(cleartext, 0, Math.Min(16, cleartext.Length))}..." );
 
                 // Encrypt with Noise N (initiator)
-                var noiseInit = TransportLayer.Crypto.NoiseN.CreateInitiator( encPubKey );
+                var noiseInit = NoiseN.CreateInitiator( encPubKey );
                 var noiseMessage = noiseInit.CreateMessage( cleartext );
                 var initCK = noiseInit.GetChainingKey();
                 var initHash = noiseInit.GetHash();
@@ -355,7 +358,7 @@ namespace I2PCore.TunnelLayer
 
                 // Now decrypt (responder) - this is what remote peers do
                 var decPrivKey = ourPrivKey.Length == 32 ? ourPrivKey : ourPrivKey.Skip(ourPrivKey.Length - 32).Take(32).ToArray();
-                var noiseResp = TransportLayer.Crypto.NoiseN.CreateResponder( decPrivKey, encPubKey );
+                var noiseResp = NoiseN.CreateResponder( decPrivKey, encPubKey );
                 var decrypted = noiseResp.ProcessMessage( noiseMessage );
                 var respCK = noiseResp.GetChainingKey();
                 var respHash = noiseResp.GetHash();
@@ -433,7 +436,7 @@ namespace I2PCore.TunnelLayer
                 // Also test direct decryption of extracted bytes (bypassing BufLen)
                 try
                 {
-                    var noiseResp2 = TransportLayer.Crypto.NoiseN.CreateResponder( decPrivKey, encPubKey );
+                    var noiseResp2 = NoiseN.CreateResponder( decPrivKey, encPubKey );
                     var decrypted2 = noiseResp2.ProcessMessage( extractedNoise );
                     noiseResp2.Dispose();
                     Logging.LogCritical( $"[SELF-TEST] NoiseN: Direct decrypt of extracted bytes: OK ({decrypted2.Length}b)" );
@@ -1370,7 +1373,7 @@ namespace I2PCore.TunnelLayer
             {
                 if (i == result.RecordIndex) continue;
 
-                var nonce = TransportLayer.Crypto.ChaCha20Poly1305.CreateNonce( (ulong)i );
+                var nonce = ChaCha20Poly1305.CreateNonce( (ulong)i );
 
                 var recordData = stbm.Records[i];
                 var cipher = new Org.BouncyCastle.Crypto.Engines.ChaCha7539Engine();
@@ -1768,10 +1771,10 @@ namespace I2PCore.TunnelLayer
 
                 if ( hop.ReplyKey != null && hop.HandshakeHash != null )
                 {
-                    var nonce = TransportLayer.Crypto.ChaCha20Poly1305.CreateNonce( (ulong)recordIdx );
+                    var nonce = ChaCha20Poly1305.CreateNonce( (ulong)recordIdx );
 
                     var recordData = msg.Records[recordIdx].ToByteArray();
-                    var decrypted = TransportLayer.Crypto.ChaCha20Poly1305.Decrypt(
+                    var decrypted = ChaCha20Poly1305.Decrypt(
                         hop.ReplyKey, nonce, recordData, hop.HandshakeHash );
                     
                     if ( decrypted != null )
@@ -1864,10 +1867,10 @@ namespace I2PCore.TunnelLayer
 
                 if ( hop.ReplyKey != null && hop.HandshakeHash != null )
                 {
-                    var nonce = TransportLayer.Crypto.ChaCha20Poly1305.CreateNonce( (ulong)recordIdx );
+                    var nonce = ChaCha20Poly1305.CreateNonce( (ulong)recordIdx );
 
                     var recordData = msg.Records[recordIdx].ToByteArray();
-                    var decrypted = TransportLayer.Crypto.ChaCha20Poly1305.Decrypt(
+                    var decrypted = ChaCha20Poly1305.Decrypt(
                         hop.ReplyKey, nonce, recordData, hop.HandshakeHash );
                     
                     if ( decrypted != null )
@@ -1919,7 +1922,7 @@ namespace I2PCore.TunnelLayer
 
         private static void ChaCha20DecryptRecord(ShortTunnelBuildReplyMessage msg, int recordIndex, byte[] replyKey)
         {
-            var nonce = TransportLayer.Crypto.ChaCha20Poly1305.CreateNonce( (ulong)recordIndex );
+            var nonce = ChaCha20Poly1305.CreateNonce( (ulong)recordIndex );
 
             var cipher = new Org.BouncyCastle.Crypto.Engines.ChaCha7539Engine();
             var parameters = new Org.BouncyCastle.Crypto.Parameters.ParametersWithIV(

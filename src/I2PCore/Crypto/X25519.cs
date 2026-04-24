@@ -1,11 +1,10 @@
 using System;
-using System.Security.Cryptography;
 using Org.BouncyCastle.Crypto.Agreement;
 using Org.BouncyCastle.Crypto.Generators;
 using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Security;
 
-namespace I2PCore.TransportLayer.Crypto
+namespace I2PCore.Crypto
 {
     /// <summary>
     /// X25519 Elliptic Curve Diffie-Hellman key exchange

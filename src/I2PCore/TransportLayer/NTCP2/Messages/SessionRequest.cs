@@ -1,7 +1,8 @@
 using System;
+using I2PCore.Crypto;
+using I2PCore.Crypto.Noise;
 using I2PCore.Data;
 using I2PCore.Utils;
-using I2PCore.TransportLayer.Crypto;
 
 namespace I2PCore.TransportLayer.NTCP2.Messages
 {
@@ -130,13 +131,13 @@ namespace I2PCore.TransportLayer.NTCP2.Messages
             // AES-256-CBC encryption for obfuscation
             // key = router hash (32 bytes)
             // IV = Bob's published IV (16 bytes)
-            return Crypto.AESObfuscation.Encrypt(key, routerHash, iv);
+            return AESObfuscation.Encrypt(key, routerHash, iv);
         }
 
         private static byte[] DecryptEphemeralKey(BufLen encryptedKey, byte[] routerHash, byte[] iv)
         {
             // AES-256-CBC decryption
-            return Crypto.AESObfuscation.Decrypt(encryptedKey.ToByteArray(), routerHash, iv);
+            return AESObfuscation.Decrypt(encryptedKey.ToByteArray(), routerHash, iv);
         }
 
         private byte[] EncryptOptions(byte[] options)

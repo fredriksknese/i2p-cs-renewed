@@ -5,10 +5,10 @@ using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
+using I2PCore.Crypto;
 using I2PCore.Data;
 using I2PCore.SessionLayer;
 using I2PCore.Utils;
-using I2PCore.TransportLayer.Crypto;
 
 namespace I2PCore.TransportLayer.NTCP2
 {
@@ -68,7 +68,7 @@ namespace I2PCore.TransportLayer.NTCP2
                 StaticPublicKey = loadedKeys.Value.publicKey;
                 IV = loadedKeys.Value.iv;
                 // DIAG: verify loaded key pair
-                var derivedPub = Crypto.X25519.GetPublicKey(StaticPrivateKey);
+                var derivedPub = X25519.GetPublicKey(StaticPrivateKey);
                 var match = derivedPub.SequenceEqual(StaticPublicKey);
                 Logging.LogInformation($"NTCP2Host: Loaded static keys. pub[0:4]={BitConverter.ToString(StaticPublicKey, 0, 4).Replace("-","")} derivedPub[0:4]={BitConverter.ToString(derivedPub, 0, 4).Replace("-","")} keyPairMatch={match}");
             }
@@ -103,7 +103,7 @@ namespace I2PCore.TransportLayer.NTCP2
                 StaticPublicKey = pub;
 
                 // DIAG: verify generated key pair
-                var derivedPub2 = Crypto.X25519.GetPublicKey(StaticPrivateKey);
+                var derivedPub2 = X25519.GetPublicKey(StaticPrivateKey);
                 var match2 = derivedPub2.SequenceEqual(StaticPublicKey);
                 Logging.LogInformation($"NTCP2Host: Generated valid static key (MSB clear) after {attempts} attempt(s). pub[0:4]={BitConverter.ToString(StaticPublicKey, 0, 4).Replace("-","")} keyPairMatch={match2}");
 

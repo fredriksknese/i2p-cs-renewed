@@ -1,9 +1,7 @@
 using System;
-using Org.BouncyCastle.Crypto.Modes;
-using Org.BouncyCastle.Crypto.Engines;
 using Org.BouncyCastle.Crypto.Parameters;
 
-namespace I2PCore.TransportLayer.Crypto
+namespace I2PCore.Crypto
 {
     /// <summary>
     /// ChaCha20-Poly1305 AEAD (Authenticated Encryption with Associated Data)

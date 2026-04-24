@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using I2PCore.Crypto;
-using I2PCore.TransportLayer.Crypto;
 using I2PCore.Utils;
 
 namespace I2PCore.SessionLayer.ECIES

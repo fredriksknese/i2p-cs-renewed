@@ -1,10 +1,10 @@
 using System;
 using System.Linq;
+using I2PCore.Crypto;
 using NUnit.Framework;
 using Assert = NUnit.Framework.Legacy.ClassicAssert;
 using I2PCore.TransportLayer.SSU2;
 using I2PCore.TransportLayer.SSU2.Messages;
-using I2PCore.TransportLayer.Crypto;
 using I2PCore.Utils;
 
 namespace I2PTests

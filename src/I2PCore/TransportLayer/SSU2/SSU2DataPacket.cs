@@ -1,10 +1,10 @@
 using System;
 using System.Collections.Generic;
+using I2PCore.Crypto;
 using I2PCore.Data;
 using I2PCore.Utils;
 using I2PCore.TunnelLayer.I2NP.Messages;
 using I2PCore.TunnelLayer.I2NP.Data;
-using I2PCore.TransportLayer.Crypto;
 using I2PCore.TransportLayer.SSU2.Messages;
 
 namespace I2PCore.TransportLayer.SSU2

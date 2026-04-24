@@ -1,6 +1,6 @@
 using System;
 
-namespace I2PCore.TransportLayer.Crypto
+namespace I2PCore.Crypto
 {
     /// <summary>
     /// NTCP2 SipHash-2-4 implementation for length field obfuscation

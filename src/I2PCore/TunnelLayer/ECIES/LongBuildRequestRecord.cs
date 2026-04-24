@@ -1,4 +1,5 @@
 using System;
+using I2PCore.Crypto;
 using I2PCore.Data;
 using I2PCore.Utils;
 
@@ -180,13 +181,13 @@ namespace I2PCore.TunnelLayer.ECIES
         {
             // Use HKDF to derive layer encryption keys
             // These are used for tunnel data encryption (AES-256)
-            var layerKeyMaterial = TransportLayer.Crypto.HKDF.DeriveKey(
+            var layerKeyMaterial = HKDF.DeriveKey(
                 chainingKey,
                 BitConverter.GetBytes(layerKeyIndex),
                 System.Text.Encoding.ASCII.GetBytes("layer-key"),
                 32);
 
-            var ivKeyMaterial = TransportLayer.Crypto.HKDF.DeriveKey(
+            var ivKeyMaterial = HKDF.DeriveKey(
                 chainingKey,
                 BitConverter.GetBytes(ivKeyIndex),
                 System.Text.Encoding.ASCII.GetBytes("iv-key"),
@@ -204,13 +205,13 @@ namespace I2PCore.TunnelLayer.ECIES
             uint replyIVIndex)
         {
             // Use HKDF to derive ChaCha20 reply encryption keys
-            var replyKeyMaterial = TransportLayer.Crypto.HKDF.DeriveKey(
+            var replyKeyMaterial = HKDF.DeriveKey(
                 chainingKey,
                 BitConverter.GetBytes(replyKeyIndex),
                 System.Text.Encoding.ASCII.GetBytes("reply-key"),
                 32);
 
-            var replyIVMaterial = TransportLayer.Crypto.HKDF.DeriveKey(
+            var replyIVMaterial = HKDF.DeriveKey(
                 chainingKey,
                 BitConverter.GetBytes(replyIVIndex),
                 System.Text.Encoding.ASCII.GetBytes("reply-iv"),

@@ -1,7 +1,8 @@
 using System;
+using I2PCore.Crypto;
+using I2PCore.Crypto.Noise;
 using I2PCore.Data;
 using I2PCore.Utils;
-using I2PCore.TransportLayer.Crypto;
 using I2PCore.TransportLayer.NTCP2;
 
 namespace I2PCore.TransportLayer.NTCP2.Messages

@@ -1,7 +1,7 @@
 using System;
 using System.Text;
+using I2PCore.Crypto;
 using I2PCore.Utils;
-using I2PCore.TransportLayer.Crypto;
 using Org.BouncyCastle.Crypto.Digests;
 using Org.BouncyCastle.Math;
 using Org.BouncyCastle.Asn1.X9;

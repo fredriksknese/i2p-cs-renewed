@@ -1,6 +1,6 @@
 using System;
 
-namespace I2PCore.TransportLayer.Crypto
+namespace I2PCore.Crypto.Noise
 {
     /// <summary>
     /// Noise Protocol XK Pattern Implementation

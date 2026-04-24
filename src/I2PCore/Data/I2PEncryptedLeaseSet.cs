@@ -1,7 +1,7 @@
 using System;
 using System.Text;
+using I2PCore.Crypto;
 using I2PCore.TunnelLayer.I2NP.Messages;
-using I2PCore.TransportLayer.Crypto;
 using I2PCore.Utils;
 using Org.BouncyCastle.Crypto.Engines;
 using Org.BouncyCastle.Crypto.Parameters;
