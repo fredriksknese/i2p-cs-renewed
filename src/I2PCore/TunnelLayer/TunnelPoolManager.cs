@@ -38,6 +38,13 @@ namespace I2PCore.TunnelLayer
 
         private PeriodicAction TunnelBuild = new( TickSpan.Seconds( 1 ) );
         private PeriodicAction LogStatus = new( TickSpan.Seconds( 30 ) );
+        private readonly TickCounter _startTime = TickCounter.Now;
+
+        /// <summary>
+        /// Grace period after startup before attempting multi-hop tunnel builds.
+        /// Allows time for NTCP2 connections to be established with peers.
+        /// </summary>
+        private static readonly TickSpan StartupGracePeriod = TickSpan.Seconds( 15 );
 
         public void Execute()
         {
@@ -49,6 +56,10 @@ namespace I2PCore.TunnelLayer
             {
                 _outboundExploratory.CreateFallbackTunnel();
             }
+
+            // Wait for peer connections to be established before building multi-hop tunnels
+            if ( _startTime.DeltaToNow < StartupGracePeriod )
+                return;
 
             TunnelBuild.Do( BuildNewTunnels );
             LogStatus.Do( LogStatusReport );

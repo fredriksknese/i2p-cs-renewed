@@ -98,49 +98,20 @@ namespace I2PCore.Data
         }
 
         /// <summary>
-        /// Get the X25519 static public key for ECIES communication.
-        /// Per I2P spec, the Noise N handshake uses the router's NTCP2/SSU2
-        /// static key ("s" parameter from RouterInfo address), NOT the
-        /// identity's encryption public key.
+        /// Get the X25519 public key for ECIES communication (garlic, tunnel builds, etc).
+        /// Per Java I2P MessageWrapper.wrap() and BuildRequestor.java:
+        ///   key = to.getIdentity().getPublicKey();
+        /// Always uses the router's identity public key, NOT the NTCP2/SSU2
+        /// transport static key ('s' parameter). The NTCP2 's' key is a separate
+        /// key pair used only for transport-level sessions.
         /// </summary>
         public byte[] GetECIESPublicKey()
         {
-            if ( Addresses != null )
-            {
-                // Try NTCP2 "s" parameter first (preferred)
-                var ntcp2Addr = Addresses.FirstOrDefault( a =>
-                    ( a.TransportStyle == "NTCP2" || a.TransportStyle == "NTCP" ) &&
-                    a.Options.Contains( "s" ) );
-
-                if ( ntcp2Addr != null )
-                {
-                    try
-                    {
-                        var sKey = Utils.FreenetBase64.Decode( ntcp2Addr.Options["s"] );
-                        if ( sKey.Length == 32 ) return sKey;
-                    }
-                    catch ( Exception ) { }
-                }
-
-                // Try SSU2 "s" parameter as fallback
-                var ssu2Addr = Addresses.FirstOrDefault( a =>
-                    a.TransportStyle == "SSU2" && a.Options.Contains( "s" ) );
-
-                if ( ssu2Addr != null )
-                {
-                    try
-                    {
-                        var sKey = Utils.FreenetBase64.Decode( ssu2Addr.Options["s"] );
-                        if ( sKey.Length == 32 ) return sKey;
-                    }
-                    catch ( Exception ) { }
-                }
-            }
-
-            // Fallback: try the identity public key
+            // Use the identity public key
             var pubkey = Identity.PublicKey.ToByteArray();
             if ( pubkey.Length == 32 ) return pubkey;
 
+            // For hybrid PQ keys (ML-KEM + X25519), extract the X25519 component (last 32 bytes)
             var keyType = Identity.Certificate.PublicKeyType;
             if ( keyType == I2PKeyType.KeyTypes.MLKEM512_X25519 ||
                  keyType == I2PKeyType.KeyTypes.MLKEM768_X25519 ||

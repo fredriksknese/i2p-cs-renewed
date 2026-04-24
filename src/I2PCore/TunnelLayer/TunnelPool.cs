@@ -55,10 +55,22 @@ namespace I2PCore.TunnelLayer
         {
             for ( int i = 0; i < count; ++i )
             {
-                var tunnel = CreateTunnel();
-                if ( tunnel == null )
+                try
                 {
-                    Logging.LogDebug( $"TunnelPool: CreateTunnel failed for {this}. No routers available?" );
+                    var tunnel = CreateTunnel();
+                    if ( tunnel == null )
+                    {
+                        var msg = $"CreateTunnel returned null for {this}. No routers available?";
+                        Logging.LogInformation( $"TunnelPool: {msg}" );
+                        TunnelBuildLogger.Inst.Log( msg, "---", Settings.IsExploratory ? "Exploratory" : "Client", Settings.IsInbound ? "Inbound" : "Outbound" );
+                        break;
+                    }
+                }
+                catch ( Exception ex )
+                {
+                    var msg = $"CreateTunnel exception for {this}: {ex.Message}";
+                    Logging.LogWarning( $"TunnelPool: {msg}" );
+                    TunnelBuildLogger.Inst.Log( msg, "---", Settings.IsExploratory ? "Exploratory" : "Client", Settings.IsInbound ? "Inbound" : "Outbound" );
                     break;
                 }
             }
