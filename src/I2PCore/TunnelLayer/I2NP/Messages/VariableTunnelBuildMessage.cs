@@ -378,7 +378,7 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
             // Place real records at shuffled positions
             for (int i = 0; i < numHops; ++i)
             {
-                allRecords[recordIndices[i]] = stbmReal.Records[i];
+                allRecords[recordIndices[i]] = stbmReal.Records[i].ToByteArray();
                 setup.Hops[i].RecordIndex = recordIndices[i];
             }
 
@@ -486,7 +486,7 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
 
             for (int i = 0; i < externalHopCount; ++i)
             {
-                allRecords[recordIndices[i]] = stbmReal.Records[i];
+                allRecords[recordIndices[i]] = stbmReal.Records[i].ToByteArray();
                 setup.Hops[i].RecordIndex = recordIndices[i];
             }
             for (int i = externalHopCount; i < numRecords; ++i)
@@ -589,87 +589,38 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
         }
 
         /// <summary>
-        /// Check if a router supports ECIES (vs ElGamal)
-        /// ECIES routers use X25519 or ML-KEM hybrid keys
+        /// Check if a router supports ECIES short tunnel builds.
+        /// Per Java I2P BuildRequestor.supportsShortTBM(): the router's identity
+        /// key type must be ECIES_X25519 (or a hybrid PQ variant).
+        /// Having an NTCP2 transport key is NOT sufficient — the identity key
+        /// itself must be X25519 for short tunnel build records.
         /// </summary>
         private static bool IsECIESRouter(I2PKeysAndCert peer)
         {
             var keyType = peer.Certificate.PublicKeyType;
-            if ( keyType == I2PKeyType.KeyTypes.X25519 ||
-                 keyType == I2PKeyType.KeyTypes.MLKEM512_X25519 ||
-                 keyType == I2PKeyType.KeyTypes.MLKEM768_X25519 ||
-                 keyType == I2PKeyType.KeyTypes.MLKEM1024_X25519 ) return true;
-
-            // Also check addresses if it's an ElGamal identity but supports ECIES
-            var ri = NetDb.Inst?[peer.IdentHash];
-
-            if ( ri != null )
-            {
-                var result = ri.Addresses.Any( a =>
-                    ( a.TransportStyle == "NTCP2" && a.Options.Contains( "s" ) ) ||
-                    a.TransportStyle == "SSU2" );
-                Console.WriteLine($"[DEBUG_LOG] IsECIESRouter: {peer.IdentHash.Id32Short} found in NetDb, keyType={keyType}, result={result}");
-                return result;
-            }
-
-            Console.WriteLine($"[DEBUG_LOG] IsECIESRouter: {peer.IdentHash.Id32Short} ({peer.IdentHash}) NOT found in NetDb, keyType={keyType}");
-            return false;
+            return keyType == I2PKeyType.KeyTypes.X25519 ||
+                   keyType == I2PKeyType.KeyTypes.MLKEM512_X25519 ||
+                   keyType == I2PKeyType.KeyTypes.MLKEM768_X25519 ||
+                   keyType == I2PKeyType.KeyTypes.MLKEM1024_X25519;
         }
 
         /// <summary>
-        /// Extract X25519 public key from peer (for ECIES routers)
-        /// Handles Hybrid PQ keys by extracting the X25519 component.
-        /// </summary>
-        /// <summary>
-        /// Get the X25519 static public key for ECIES tunnel builds.
-        /// Per I2P spec, the Noise N handshake uses the router's NTCP2/SSU2
-        /// static key ("s" parameter from RouterInfo address), NOT the
-        /// identity's encryption public key.
+        /// Get the X25519 public key for ECIES tunnel build encryption.
+        /// Per Java I2P BuildRequestor.java line 520:
+        ///   key = peerInfo.getIdentity().getPublicKey();
+        /// The tunnel build Noise N handshake ALWAYS uses the router's identity
+        /// public key, NOT the NTCP2/SSU2 transport static key ('s' parameter).
+        /// The NTCP2 's' key is a separate key pair used only for transport sessions.
+        /// Handles hybrid PQ keys by extracting the X25519 component.
         /// </summary>
         private static byte[] GetECIESPublicKey(I2PKeysAndCert peer)
         {
-            // Look up the full RouterInfo to get the NTCP2 static key
-            var identHash = peer.IdentHash;
-            var routerInfo = I2PCore.NetDb.Inst?[identHash];
-
-            if (routerInfo?.Addresses != null)
-            {
-                // Try NTCP2 "s" parameter first (preferred)
-                var ntcp2Addr = routerInfo.Addresses.FirstOrDefault(a =>
-                    (a.TransportStyle == "NTCP2" || a.TransportStyle == "NTCP") &&
-                    a.Options.Contains("s"));
-
-                if (ntcp2Addr != null)
-                {
-                    var sKey = Utils.FreenetBase64.Decode(ntcp2Addr.Options["s"]);
-                    if (sKey.Length == 32)
-                    {
-                        var identKey = peer.PublicKey.ToByteArray();
-                        var identKeyShort = identKey.Length > 4 ? BitConverter.ToString(identKey, 0, 4) : "?";
-                        var sKeyShort = BitConverter.ToString(sKey, 0, 4);
-                        var sameKey = identKey.Length == 32 && sKey.SequenceEqual(identKey);
-                        Utils.Logging.LogInformation(
-                            $"GetECIESPublicKey: {identHash.Id32Short} using NTCP2 's' key [{sKeyShort}] " +
-                            $"(identKey [{identKeyShort}] len={identKey.Length}, same={sameKey})");
-                        return sKey;
-                    }
-                }
-
-                // Try SSU2 "s" parameter as fallback
-                var ssu2Addr = routerInfo.Addresses.FirstOrDefault(a =>
-                    a.TransportStyle == "SSU2" && a.Options.Contains("s"));
-
-                if (ssu2Addr != null)
-                {
-                    var sKey = Utils.FreenetBase64.Decode(ssu2Addr.Options["s"]);
-                    if (sKey.Length == 32) return sKey;
-                }
-            }
-
-            // Fallback: try the identity public key (for routers not yet in NetDb)
             var pubkey = peer.PublicKey.ToByteArray();
+
+            // For X25519 identity keys, use directly
             if (pubkey.Length == 32) return pubkey;
 
+            // For hybrid PQ keys (ML-KEM + X25519), extract the X25519 component (last 32 bytes)
             var keyType = peer.Certificate.PublicKeyType;
             if (keyType == I2PKeyType.KeyTypes.MLKEM512_X25519 ||
                 keyType == I2PKeyType.KeyTypes.MLKEM768_X25519 ||
@@ -679,8 +630,8 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
             }
 
             throw new InvalidOperationException(
-                $"ECIES public key must be 32 bytes, got {pubkey.Length} for type {keyType}. " +
-                $"No NTCP2/SSU2 static key found in RouterInfo for {identHash.Id32Short}");
+                $"ECIES public key must be 32 bytes, got {pubkey.Length} for type {keyType} " +
+                $"for {peer.IdentHash.Id32Short}");
         }
     }
 }

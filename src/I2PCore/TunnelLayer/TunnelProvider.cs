@@ -1172,7 +1172,7 @@ namespace I2PCore.TunnelLayer
                 var dummy = new byte[64];
                 cipher.ProcessBytes(dummy, 0, 64, dummy, 0);
 
-                cipher.ProcessBytes(recordData, 0, recordData.Length, recordData, 0);
+                cipher.ProcessBytes(recordData.BaseArray, recordData.BaseArrayOffset, recordData.Length, recordData.BaseArray, recordData.BaseArrayOffset);
             }
 
             if ( replyStatus == TunnelLayer.ECIES.ShortBuildReplyRecord.TunnelBuildReplyStatus.Accept )
@@ -1474,7 +1474,7 @@ namespace I2PCore.TunnelLayer
 
         internal void HandleShortTunnelBuildReply( ShortTunnelBuildReplyMessage msg )
         {
-            Logging.LogInformation( $"[DEBUG_LOG] HandleShortTunnelBuildReply: Received reply MessageId={msg.MessageId:X8}, Records={msg.Records?.Count}" );
+            Console.WriteLine( $"[DEBUG_LOG] HandleShortTunnelBuildReply: Received reply MessageId={msg.MessageId:X8}, Records={msg.Records?.Count}" );
             Logging.LogInformation( $"HandleShortTunnelBuildReply: Received reply MessageId={msg.MessageId:X8}, Records={msg.Records?.Count}" );
 
             // Check outbound tunnels first
@@ -1553,14 +1553,15 @@ namespace I2PCore.TunnelLayer
                 {
                     var nonce = TransportLayer.Crypto.ChaCha20Poly1305.CreateNonce( (ulong)recordIdx );
 
+                    var recordData = msg.Records[recordIdx].ToByteArray();
                     var decrypted = TransportLayer.Crypto.ChaCha20Poly1305.Decrypt(
-                        hop.ReplyKey, nonce, msg.Records[recordIdx], hop.HandshakeHash );
+                        hop.ReplyKey, nonce, recordData, hop.HandshakeHash );
                     
                     if ( decrypted != null )
                     {
                         var fullRecord = new byte[218];
                         Array.Copy( decrypted, 0, fullRecord, 0, decrypted.Length );
-                        msg.Records[recordIdx] = fullRecord;
+                        msg.SetRecord( recordIdx, fullRecord );
                     }
                     else
                     {
@@ -1648,14 +1649,15 @@ namespace I2PCore.TunnelLayer
                 {
                     var nonce = TransportLayer.Crypto.ChaCha20Poly1305.CreateNonce( (ulong)recordIdx );
 
+                    var recordData = msg.Records[recordIdx].ToByteArray();
                     var decrypted = TransportLayer.Crypto.ChaCha20Poly1305.Decrypt(
-                        hop.ReplyKey, nonce, msg.Records[recordIdx], hop.HandshakeHash );
+                        hop.ReplyKey, nonce, recordData, hop.HandshakeHash );
                     
                     if ( decrypted != null )
                     {
                         var fullRecord = new byte[218];
                         Array.Copy( decrypted, 0, fullRecord, 0, decrypted.Length );
-                        msg.Records[recordIdx] = fullRecord;
+                        msg.SetRecord( recordIdx, fullRecord );
                     }
                     else
                     {
@@ -1713,7 +1715,8 @@ namespace I2PCore.TunnelLayer
             var dummy = new byte[64];
             cipher.ProcessBytes(dummy, 0, 64, dummy, 0);
 
-            cipher.ProcessBytes(msg.Records[recordIndex], 0, msg.Records[recordIndex].Length, msg.Records[recordIndex], 0);
+            var recordData = msg.Records[recordIndex];
+            cipher.ProcessBytes(recordData.BaseArray, recordData.BaseArrayOffset, recordData.Length, recordData.BaseArray, recordData.BaseArrayOffset);
         }
 
         private bool HandleReceivedInboundTunnelBuildReply( InboundTunnel intunnel, VariableTunnelBuildReplyMessage msg )

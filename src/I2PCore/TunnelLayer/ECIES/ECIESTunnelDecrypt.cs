@@ -113,7 +113,7 @@ namespace I2PCore.TunnelLayer.ECIES
         /// Strips the 16-byte router hash prefix before passing to Noise N.
         /// Saves chaining key and handshake hash for reply key derivation.
         /// </summary>
-        public ShortBuildRequestRecord DecryptShortRecord(byte[] encryptedRecord)
+        public ShortBuildRequestRecord DecryptShortRecord(BufLen encryptedRecord)
         {
             if (encryptedRecord == null || encryptedRecord.Length != ShortBuildRequestRecord.OnWireRecordSize)
                 throw new ArgumentException(
@@ -122,8 +122,7 @@ namespace I2PCore.TunnelLayer.ECIES
 
             // Strip the 16-byte router hash prefix; Noise N message starts at offset 16
             var noiseMessage = new byte[encryptedRecord.Length - ShortBuildRequestRecord.EncryptedOffset];
-            Array.Copy(encryptedRecord, ShortBuildRequestRecord.EncryptedOffset,
-                noiseMessage, 0, noiseMessage.Length);
+            encryptedRecord.Peek(noiseMessage, 0, ShortBuildRequestRecord.EncryptedOffset, noiseMessage.Length);
 
             var noiseN = NoiseN.CreateResponder(_staticPrivateKey, _staticPublicKey);
             var plaintext = noiseN.ProcessMessage(noiseMessage);
@@ -143,7 +142,7 @@ namespace I2PCore.TunnelLayer.ECIES
         /// <summary>
         /// Decrypt a long build request record using Noise N pattern
         /// </summary>
-        public LongBuildRequestRecord DecryptLongRecord(byte[] encryptedRecord)
+        public LongBuildRequestRecord DecryptLongRecord(BufLen encryptedRecord)
         {
             if (encryptedRecord == null || encryptedRecord.Length != LongBuildRequestRecord.EncryptedRecordSize)
                 throw new ArgumentException(
@@ -152,7 +151,7 @@ namespace I2PCore.TunnelLayer.ECIES
 
             // Strip the 16-byte router hash prefix
             var noiseMessage = new byte[encryptedRecord.Length - 16];
-            Array.Copy(encryptedRecord, 16, noiseMessage, 0, noiseMessage.Length);
+            encryptedRecord.Peek(noiseMessage, 0, 16, noiseMessage.Length);
 
             var noiseN = NoiseN.CreateResponder(_staticPrivateKey, _staticPublicKey);
             var plaintext = noiseN.ProcessMessage(noiseMessage);
