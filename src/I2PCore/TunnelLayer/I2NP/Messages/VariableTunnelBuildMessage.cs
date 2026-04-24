@@ -344,7 +344,13 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
             {
                 var endpoint = i == numHops - 1;
                 var hop = setup.Hops[i];
-                Logging.LogCritical($"[DEBUG_LOG] BuildECIESOutboundTunnel: hop={i}/{numHops} endpoint={endpoint} router={hop.Peer.IdentHash.Id32Short}");
+                var hopPubKey = GetECIESPublicKey(hop.Peer);
+                // Also get the NTCP2 's' key for comparison (should be DIFFERENT from identity key)
+                var ri = NetDb.Inst?[hop.Peer.IdentHash];
+                var ntcp2Key = ri?.GetECIESPublicKey();
+                var ntcp2Hex = ntcp2Key != null ? BitConverter.ToString(ntcp2Key, 0, Math.Min(8, ntcp2Key.Length)) : "null";
+                var hashPrefix = BitConverter.ToString(hop.Peer.IdentHash.Hash.ToByteArray(), 0, 8);
+                Logging.LogCritical($"[DEBUG_LOG] BuildECIESOutboundTunnel: hop={i}/{numHops} endpoint={endpoint} router={hop.Peer.IdentHash.Id32Short} identityPubKey({hopPubKey.Length}b)={BitConverter.ToString(hopPubKey, 0, Math.Min(8, hopPubKey.Length))}... ntcp2Key={ntcp2Hex}... hashPrefix={hashPrefix}...");
 
                 var shortRecord = new ShortBuildRequestRecord
                 {

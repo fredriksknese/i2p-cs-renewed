@@ -646,7 +646,7 @@ namespace I2PCore.SessionLayer
                             Logging.LogDebug(
                                 $"Router: ProcessGarlicCloves: Delivered Local: {clove.Message}" );
 
-                            TunnelProvider.Inst.HandleIncommingMessage( clove.Message.CreateHeader16, from );
+                            TunnelProvider.Inst.HandleIncomingMessage( clove.Message.CreateHeader16, from );
                             break;
 
                         default:
@@ -709,7 +709,7 @@ namespace I2PCore.SessionLayer
                             if ( msg != null )
                             {
                                 msg.Expiration = new I2PDate( (ulong)expirationSeconds * 1000 );
-                                TunnelProvider.Inst.HandleIncommingMessage( msg.CreateHeader16, from );
+                                TunnelProvider.Inst.HandleIncomingMessage( msg.CreateHeader16, from );
                             }
                         }
                         else if ( block is ECIES.NextKeyBlock nextKey )

@@ -37,7 +37,7 @@ namespace I2PCore.TransportLayer.Crypto
         }
 
         private NoiseN(
-            bool isInitiator, 
+            bool isInitiator,
             byte[] remoteStaticPublicKey = null,
             byte[] localStaticPrivateKey = null,
             byte[] localStaticPublicKey = null)
@@ -81,8 +81,9 @@ namespace I2PCore.TransportLayer.Crypto
                     localStaticPublicKey = localStaticPublicKey.Skip(localStaticPublicKey.Length - 32).Take(32).ToArray();
                 }
 
-                state.LocalStaticPrivateKey = localStaticPrivateKey;
-                state.LocalStaticPublicKey = localStaticPublicKey;
+                // Clone keys so Dispose() doesn't wipe the caller's arrays
+                state.LocalStaticPrivateKey = (byte[])localStaticPrivateKey.Clone();
+                state.LocalStaticPublicKey = (byte[])localStaticPublicKey.Clone();
 
                 // Java I2P's Noise N responder DOES MixHash(rs) as a pre-message step.
                 state.MixHash(localStaticPublicKey);

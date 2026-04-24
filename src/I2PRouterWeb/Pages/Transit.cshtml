@@ -12,27 +12,35 @@
 </div>
 
 <div class="row g-3 mb-4">
-    <div class="col-md-4">
+    <div class="col-md-3">
         <div class="card">
             <div class="card-body">
-                <h6 class="card-subtitle mb-2 text-muted">Total Transit Tunnels</h6>
+                <h6 class="card-subtitle mb-2 text-muted">Total</h6>
                 <h3 class="mb-0">@Model.TotalTransitTunnels</h3>
             </div>
         </div>
     </div>
-    <div class="col-md-4">
+    <div class="col-md-3">
         <div class="card">
             <div class="card-body">
-                <h6 class="card-subtitle mb-2 text-muted">Endpoint Tunnels</h6>
-                <h3 class="mb-0 text-success">@Model.EndpointCount</h3>
+                <h6 class="card-subtitle mb-2 text-muted">Gateway</h6>
+                <h3 class="mb-0 text-warning">@Model.GatewayCount</h3>
             </div>
         </div>
     </div>
-    <div class="col-md-4">
+    <div class="col-md-3">
         <div class="card">
             <div class="card-body">
-                <h6 class="card-subtitle mb-2 text-muted">Transit Tunnels</h6>
+                <h6 class="card-subtitle mb-2 text-muted">Transit</h6>
                 <h3 class="mb-0 text-info">@Model.TransitCount</h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-body">
+                <h6 class="card-subtitle mb-2 text-muted">Endpoint</h6>
+                <h3 class="mb-0 text-success">@Model.EndpointCount</h3>
             </div>
         </div>
     </div>
@@ -56,6 +64,7 @@
                                     <th>To</th>
                                     <th>Role</th>
                                     <th>Messages</th>
+                                    <th>Bandwidth</th>
                                     <th>Last Activity</th>
                                 </tr>
                             </thead>
@@ -64,14 +73,36 @@
                                 {
                                     <tr>
                                         <td class="router-hash">@tunnel.TunnelId</td>
-                                        <td class="router-hash small">@tunnel.FromRouter</td>
-                                        <td class="router-hash small">@tunnel.ToRouter</td>
+                                        <td class="router-hash small">
+                                            @if (tunnel.FromRouterHash != null)
+                                            {
+                                                <a href="/RouterDetail?hash=@tunnel.FromRouter">@tunnel.FromRouter</a>
+                                            }
+                                            else
+                                            {
+                                                @tunnel.FromRouter
+                                            }
+                                        </td>
+                                        <td class="router-hash small">
+                                            @if (tunnel.ToRouterHash != null)
+                                            {
+                                                <a href="/RouterDetail?hash=@Uri.EscapeDataString(tunnel.ToRouter)">@tunnel.ToRouter</a>
+                                            }
+                                            else
+                                            {
+                                                @tunnel.ToRouter
+                                            }
+                                        </td>
                                         <td>
-                                            <span class="badge bg-@(tunnel.IsEndpoint ? "success" : "info")">
-                                                @(tunnel.IsEndpoint ? "Endpoint" : "Transit")
+                                            <span class="badge bg-@(tunnel.IsGateway ? "warning" : tunnel.IsEndpoint ? "success" : "info")">
+                                                @(tunnel.IsGateway ? "Gateway" : tunnel.IsEndpoint ? "Endpoint" : "Transit")
                                             </span>
                                         </td>
                                         <td>@tunnel.MessageCount</td>
+                                        <td class="small">
+                                            <span title="Send">&#x2191; @tunnel.SendBitrateKBps.ToString("F1") KB/s</span><br/>
+                                            <span title="Receive">&#x2193; @tunnel.ReceiveBitrateKBps.ToString("F1") KB/s</span>
+                                        </td>
                                         <td class="small text-muted">@tunnel.LastActivity.ToString("HH:mm:ss")</td>
                                     </tr>
                                 }

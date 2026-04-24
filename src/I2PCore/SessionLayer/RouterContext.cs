@@ -20,7 +20,7 @@ using System.Net.Sockets;
 // DONE: Floodfill server support (see NetDb/FloodfillServer.cs)
 // DONE: Connection limits (see NTCP2Host.MaxInboundConnections and SSU2Host.MaxIncomingSessions)
 // DONE: NTCP2 uses async AcceptTcpClientAsync + ReadAsync; Watchdog removed (dead code)
-// DONE: Decaying Bloom filter for packet dedup (see TunnelProvider.HandleIncommingMessage)
+// DONE: Decaying Bloom filter for packet dedup (see TunnelProvider.HandleIncomingMessage)
 
 namespace I2PCore.SessionLayer
 {

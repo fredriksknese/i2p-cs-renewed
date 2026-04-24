@@ -13,9 +13,10 @@ namespace I2PCore.Data
     public class I2PKeysAndCert : I2PType, IEquatable<I2PKeysAndCert>
     {
         /// <summary>
-        /// The usable encryption public key bytes. When the signing key is larger
-        /// than 128 bytes, it overflows into the end of the 256-byte encryption
-        /// key area, reducing the available encryption key space.
+        /// The usable encryption public key bytes. Per Java I2P KeysAndCert.writeBytes():
+        /// the key is written first (left-justified), followed by padding to fill 256 bytes.
+        /// When the signing key is larger than 128 bytes, it overflows into the end of
+        /// the 256-byte encryption key area, reducing the available encryption key space.
         /// </summary>
         public BufLen PublicKeyBuf
         {

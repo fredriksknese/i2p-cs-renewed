@@ -192,7 +192,7 @@ namespace I2PCore.TunnelLayer
                                 }
                                 else
                                 {
-                                    HandleIncommingMessage(msg.CreateHeader16, from);
+                                    HandleIncomingMessage(msg.CreateHeader16, from);
                                 }
                             }
                         }
@@ -298,6 +298,195 @@ namespace I2PCore.TunnelLayer
         {
             if ( Inst != null ) return;
             Inst = new TunnelProvider();
+
+            // Run self-loopback test to verify our Noise N encryption
+            // is compatible with our own decryption
+            RunNoiseNSelfTest();
+        }
+
+        /// <summary>
+        /// Self-loopback test: encrypt a ShortTunnelBuild record to our own identity key,
+        /// then decrypt it with our transit handler. If this fails, our Noise N encryption
+        /// is incompatible and remote peers will also fail to decrypt our build requests.
+        /// </summary>
+        private static void RunNoiseNSelfTest()
+        {
+            try
+            {
+                var ourIdentHash = RouterContext.Inst.MyRouterIdentity.IdentHash;
+                var ourPubKey = RouterContext.Inst.X25519PublicKey;
+                var ourPrivKey = RouterContext.Inst.X25519PrivateKey;
+
+                // Extract X25519 component if hybrid
+                var encPubKey = ourPubKey.Length == 32 ? ourPubKey : ourPubKey.Skip(ourPubKey.Length - 32).Take(32).ToArray();
+
+                Logging.LogCritical( $"[SELF-TEST] NoiseN: Identity pubkey ({encPubKey.Length}b): {BitConverter.ToString(encPubKey, 0, 8)}..." );
+
+                // Create a test build request record
+                var testRecord = new ECIES.ShortBuildRequestRecord
+                {
+                    ReceiveTunnelId = new I2PTunnelId( 12345u ),
+                    NextRouterHash = ourIdentHash,
+                    NextTunnelId = new I2PTunnelId( 67890u ),
+                    Flags = (byte)ECIES.ShortBuildRequestRecord.BuildRequestFlags.OutboundEndpoint,
+                    RequestTime = (uint)((DateTime.UtcNow - I2PDate.RefDate).TotalMinutes),
+                    RequestExpiration = 600,
+                    NextMessageId = 0xDEADBEEF,
+                };
+
+                var cleartext = testRecord.ToByteArray();
+                Logging.LogCritical( $"[SELF-TEST] NoiseN: Cleartext ({cleartext.Length}b): {BitConverter.ToString(cleartext, 0, Math.Min(16, cleartext.Length))}..." );
+
+                // Encrypt with Noise N (initiator)
+                var noiseInit = TransportLayer.Crypto.NoiseN.CreateInitiator( encPubKey );
+                var noiseMessage = noiseInit.CreateMessage( cleartext );
+                var initCK = noiseInit.GetChainingKey();
+                var initHash = noiseInit.GetHash();
+                noiseInit.Dispose();
+
+                Logging.LogCritical( $"[SELF-TEST] NoiseN: Encrypted ({noiseMessage.Length}b): ephemeral={BitConverter.ToString(noiseMessage, 0, 8)}..." );
+                Logging.LogCritical( $"[SELF-TEST] NoiseN: Initiator CK={BitConverter.ToString(initCK, 0, 8)}..., Hash={BitConverter.ToString(initHash, 0, 8)}..." );
+
+                // Build the on-wire record (218 bytes)
+                var onWireRecord = new byte[ECIES.ShortBuildRequestRecord.OnWireRecordSize];
+                var hashBytes = ourIdentHash.Hash.ToByteArray();
+                Array.Copy( hashBytes, 0, onWireRecord, 0, 16 ); // Router hash prefix
+                Array.Copy( noiseMessage, 0, onWireRecord, 16, noiseMessage.Length ); // Noise N message
+
+                // Now decrypt (responder) - this is what remote peers do
+                var decPrivKey = ourPrivKey.Length == 32 ? ourPrivKey : ourPrivKey.Skip(ourPrivKey.Length - 32).Take(32).ToArray();
+                var noiseResp = TransportLayer.Crypto.NoiseN.CreateResponder( decPrivKey, encPubKey );
+                var decrypted = noiseResp.ProcessMessage( noiseMessage );
+                var respCK = noiseResp.GetChainingKey();
+                var respHash = noiseResp.GetHash();
+                noiseResp.Dispose();
+
+                Logging.LogCritical( $"[SELF-TEST] NoiseN: Decrypted ({decrypted.Length}b): {BitConverter.ToString(decrypted, 0, Math.Min(16, decrypted.Length))}..." );
+                Logging.LogCritical( $"[SELF-TEST] NoiseN: Responder CK={BitConverter.ToString(respCK, 0, 8)}..., Hash={BitConverter.ToString(respHash, 0, 8)}..." );
+
+                // Verify cleartext matches
+                bool cleartextMatch = cleartext.SequenceEqual( decrypted );
+                bool ckMatch = initCK.SequenceEqual( respCK );
+                bool hashMatch = initHash.SequenceEqual( respHash );
+
+                Logging.LogCritical( $"[SELF-TEST] NoiseN: Cleartext match={cleartextMatch}, CK match={ckMatch}, Hash match={hashMatch}" );
+
+                if ( !cleartextMatch || !ckMatch || !hashMatch )
+                {
+                    Logging.LogCritical( "[SELF-TEST] NoiseN: FAILED - Noise N encryption/decryption mismatch!" );
+                    return;
+                }
+
+                // Verify key derivation matches on both sides
+                var (initLayer, initIv, initReply, initAD, initGarlic, initTag) =
+                    ECIES.ShortBuildRequestRecord.DeriveAllKeys( initCK, initHash, true );
+                var (respLayer, respIv, respReply, respAD, respGarlic, respTag) =
+                    ECIES.ShortBuildRequestRecord.DeriveAllKeys( respCK, respHash, true );
+
+                bool layerMatch = initLayer.SequenceEqual( respLayer );
+                bool ivMatch = initIv.SequenceEqual( respIv );
+                bool replyMatch = initReply.SequenceEqual( respReply );
+                bool garlicMatch = initGarlic != null && respGarlic != null && initGarlic.SequenceEqual( respGarlic );
+                bool tagMatch = initTag == respTag;
+
+                Logging.LogCritical( $"[SELF-TEST] NoiseN: Key derivation: layer={layerMatch}, iv={ivMatch}, reply={replyMatch}, garlic={garlicMatch}, tag={tagMatch}" );
+                Logging.LogCritical( $"[SELF-TEST] NoiseN: Garlic tag init={initTag:X16}, resp={respTag:X16}" );
+
+                if ( !layerMatch || !ivMatch || !replyMatch || !garlicMatch || !tagMatch )
+                {
+                    Logging.LogCritical( "[SELF-TEST] NoiseN: FAILED - Key derivation mismatch!" );
+                    return;
+                }
+
+                // Now test the full pipeline: create a ShortTunnelBuildMessage and process it
+                var stbm = new ShortTunnelBuildMessage( new System.Collections.Generic.List<byte[]> { onWireRecord,
+                    BufUtils.RandomBytes( ECIES.ShortBuildRequestRecord.OnWireRecordSize ),
+                    BufUtils.RandomBytes( ECIES.ShortBuildRequestRecord.OnWireRecordSize ),
+                    BufUtils.RandomBytes( ECIES.ShortBuildRequestRecord.OnWireRecordSize ) } );
+
+                // Verify bytes survived STBM round-trip
+                var stbmRecord = stbm.Records[0];
+                var stbmRecordBytes = stbmRecord.ToByteArray();
+                bool bytesPreserved = onWireRecord.SequenceEqual( stbmRecordBytes );
+                Logging.LogCritical( $"[SELF-TEST] NoiseN: STBM bytes preserved={bytesPreserved}, " +
+                    $"origLen={onWireRecord.Length}, stbmLen={stbmRecordBytes.Length}" );
+
+                if ( !bytesPreserved )
+                {
+                    // Find first difference
+                    for ( int d = 0; d < Math.Min( onWireRecord.Length, stbmRecordBytes.Length ); ++d )
+                    {
+                        if ( onWireRecord[d] != stbmRecordBytes[d] )
+                        {
+                            Logging.LogCritical( $"[SELF-TEST] NoiseN: First diff at offset {d}: orig=0x{onWireRecord[d]:X2}, stbm=0x{stbmRecordBytes[d]:X2}" );
+                            break;
+                        }
+                    }
+                }
+
+                // Also verify extracting just the Noise N message portion
+                var extractedNoise = new byte[202];
+                Array.Copy( stbmRecordBytes, 16, extractedNoise, 0, 202 );
+                bool noisePreserved = noiseMessage.SequenceEqual( extractedNoise );
+                Logging.LogCritical( $"[SELF-TEST] NoiseN: Noise msg preserved={noisePreserved}" );
+
+                // Also test direct decryption of extracted bytes (bypassing BufLen)
+                try
+                {
+                    var noiseResp2 = TransportLayer.Crypto.NoiseN.CreateResponder( decPrivKey, encPubKey );
+                    var decrypted2 = noiseResp2.ProcessMessage( extractedNoise );
+                    noiseResp2.Dispose();
+                    Logging.LogCritical( $"[SELF-TEST] NoiseN: Direct decrypt of extracted bytes: OK ({decrypted2.Length}b)" );
+                }
+                catch ( Exception ex2 )
+                {
+                    Logging.LogCritical( $"[SELF-TEST] NoiseN: Direct decrypt of extracted bytes FAILED: {ex2.Message}" );
+                }
+
+                // Test with BufLen.Peek extraction (same as ECIESTunnelDecrypt uses)
+                var peekNoise = new byte[202];
+                stbmRecord.Peek( peekNoise, 0, 16, 202 );
+                bool peekPreserved = noiseMessage.SequenceEqual( peekNoise );
+                Logging.LogCritical( $"[SELF-TEST] NoiseN: Peek-extracted noise preserved={peekPreserved}" );
+
+                if ( !peekPreserved )
+                {
+                    Logging.LogCritical( $"[SELF-TEST] NoiseN: peekNoise[0:8]={BitConverter.ToString(peekNoise, 0, 8)}, expected={BitConverter.ToString(noiseMessage, 0, 8)}" );
+                }
+
+                var decrypt = new ECIES.ECIESTunnelDecrypt( decPrivKey, encPubKey );
+                var result = decrypt.ProcessShortTunnelBuild( stbm );
+
+                Logging.LogCritical( $"[SELF-TEST] NoiseN: Full pipeline: success={result.Success}, recordIdx={result.RecordIndex}" );
+
+                if ( result.Success )
+                {
+                    var parsed = result.ShortRequest;
+                    Logging.LogCritical( $"[SELF-TEST] NoiseN: Parsed record: recv={parsed.ReceiveTunnelId}, " +
+                        $"next={parsed.NextRouterHash?.Id32Short}, flags=0x{parsed.Flags:X2}, msgId={parsed.NextMessageId:X8}" );
+
+                    bool recvMatch = (uint)parsed.ReceiveTunnelId == 12345u;
+                    bool nextMatch = parsed.NextRouterHash?.Equals( ourIdentHash ) ?? false;
+                    bool flagsMatch = parsed.Flags == (byte)ECIES.ShortBuildRequestRecord.BuildRequestFlags.OutboundEndpoint;
+                    bool msgIdMatch = parsed.NextMessageId == 0xDEADBEEF;
+
+                    Logging.LogCritical( $"[SELF-TEST] NoiseN: Field verification: recv={recvMatch}, next={nextMatch}, flags={flagsMatch}, msgId={msgIdMatch}" );
+
+                    if ( recvMatch && nextMatch && flagsMatch && msgIdMatch )
+                        Logging.LogCritical( "[SELF-TEST] NoiseN: ALL TESTS PASSED - Noise N crypto is internally consistent" );
+                    else
+                        Logging.LogCritical( "[SELF-TEST] NoiseN: FAILED - Field values don't match after round-trip!" );
+                }
+                else
+                {
+                    Logging.LogCritical( "[SELF-TEST] NoiseN: FAILED - Full pipeline decryption failed!" );
+                }
+            }
+            catch ( Exception ex )
+            {
+                Logging.LogCritical( $"[SELF-TEST] NoiseN: EXCEPTION - {ex.GetType().Name}: {ex.Message}" );
+                Logging.LogCritical( $"[SELF-TEST] NoiseN: Stack: {ex.StackTrace}" );
+            }
         }
 
         /// <summary>
@@ -608,6 +797,16 @@ namespace I2PCore.TunnelLayer
                 if (endpointHop.GarlicKey != null && endpointHop.GarlicTag != 0)
                 {
                     RegisterBuildReplyGarlicTag(endpointHop.GarlicTag, endpointHop.GarlicKey, tunnel);
+                    Logging.LogInformation( $"TunnelProvider: OB build {tunnel.TunnelDebugTrace}: dest={tunnel.Destination.Id32Short}, " +
+                        $"replyTunnel={replytunnel.TunnelDebugTrace} (GW={replytunnel.GatewayTunnelId}, Recv={replytunnel.ReceiveTunnelId}), " +
+                        $"garlicTag={endpointHop.GarlicTag:X16}, msgType={req.MessageType}, " +
+                        $"hops={config.Info.Hops.Count}, replyHops={replytunnel.Config.Info.Hops.Count}, " +
+                        $"timeout={tunnel.TunnelEstablishmentTimeout}" );
+                }
+                else
+                {
+                    Logging.LogWarning( $"TunnelProvider: OB build {tunnel.TunnelDebugTrace}: NO garlic key/tag! " +
+                        $"GarlicKey={endpointHop.GarlicKey != null}, GarlicTag={endpointHop.GarlicTag:X16}" );
                 }
 
                 TransportProvider.Send( tunnel.Destination, req );
@@ -857,7 +1056,7 @@ namespace I2PCore.TunnelLayer
                         if ( !IncomingMessageQueue.TryDequeue( out var item ) )
                             continue;
 
-                        HandleIncommingMessage( item.msg, transportFrom: item.transportFrom );
+                        HandleIncomingMessage( item.msg, transportFrom: item.transportFrom );
                     }
                 }
                 catch ( Exception ex )
@@ -873,7 +1072,7 @@ namespace I2PCore.TunnelLayer
         /// </summary>
         private static readonly DecayingBloomFilter DuplicateMessageFilter = new();
 
-        internal void HandleIncommingMessage( Ii2NpHeader msg, InboundTunnel from = null, I2PIdentHash transportFrom = null )
+        internal void HandleIncomingMessage( Ii2NpHeader msg, InboundTunnel from = null, I2PIdentHash transportFrom = null )
         {
             if ( msg.MessageType == I2NpMessage.MessageTypes.Garlic )
             {
@@ -944,13 +1143,13 @@ namespace I2PCore.TunnelLayer
                                 if ( !TryHandleBuildReplyGarlic( garlicMsg, tunnel as InboundTunnel ) )
                                 {
                                     // Not a build reply — dispatch to general handler
-                                    HandleIncommingMessage( innerMsg, tunnel as InboundTunnel );
+                                    HandleIncomingMessage( innerMsg, tunnel as InboundTunnel );
                                 }
                             }
                             else
                             {
                                 // ShortTunnelBuildReply, DatabaseStore, etc.
-                                HandleIncommingMessage( innerMsg, tunnel as InboundTunnel );
+                                HandleIncomingMessage( innerMsg, tunnel as InboundTunnel );
                             }
                         }
                     }
@@ -960,7 +1159,7 @@ namespace I2PCore.TunnelLayer
                         // Java I2P/i2pd use this for ECIES inbound tunnel build replies (replyTunnel=0).
                         var innerMsg0 = I2NpMessage.ReadHeader16( (BufRefLen)tg.GatewayMessage );
                         Logging.LogInformation( $"TunnelProvider: TunnelGateway(0) inner message: {innerMsg0.MessageType}" );
-                        HandleIncommingMessage( innerMsg0, null );
+                        HandleIncomingMessage( innerMsg0, null );
                     }
                     else
                     {
@@ -1105,23 +1304,26 @@ namespace I2PCore.TunnelLayer
 
         private void HandleShortTunnelBuildRecords( Ii2NpHeader msg, ShortTunnelBuildMessage stbm, I2PIdentHash from )
         {
-            var privateKey = TransportLayer.TransportProvider.Inst?.GetNTCP2StaticPrivateKey() 
-                ?? RouterContext.Inst.X25519PrivateKey;
-            var publicKey = TransportLayer.TransportProvider.Inst?.GetNTCP2StaticPublicKey() 
-                ?? RouterContext.Inst.X25519PublicKey;
+            // Java I2P BuildHandler uses ctx.keyManager().getPublicKey() = identity key.
+            // Tunnel build records are encrypted to the router's IDENTITY key, not the NTCP2 transport key.
+            // Use identity key as primary, fall back to NTCP2 key for compatibility.
+            var privateKey = RouterContext.Inst.X25519PrivateKey;
+            var publicKey = RouterContext.Inst.X25519PublicKey;
 
-            Console.WriteLine( $"[DEBUG_LOG] HandleShortTunnelBuildRecords: Using privateKey={(privateKey == RouterContext.Inst.X25519PrivateKey ? "Identity" : "NTCP2")}" );
             var decrypt = new TunnelLayer.ECIES.ECIESTunnelDecrypt( privateKey, publicKey );
             var result = decrypt.ProcessShortTunnelBuild( stbm );
 
-            if (!result.Success && privateKey != RouterContext.Inst.X25519PrivateKey)
+            if (!result.Success)
             {
-                // Fallback to identity key if NTCP2 key failed
-                Logging.LogDebug( "HandleShortTunnelBuildRecords: NTCP2 key failed, trying Identity key" );
-                decrypt = new TunnelLayer.ECIES.ECIESTunnelDecrypt( 
-                    RouterContext.Inst.X25519PrivateKey, 
-                    RouterContext.Inst.X25519PublicKey );
-                result = decrypt.ProcessShortTunnelBuild( stbm );
+                // Fallback to NTCP2 transport key in case some implementations encrypt to the transport key
+                var ntcp2Private = TransportLayer.TransportProvider.Inst?.GetNTCP2StaticPrivateKey();
+                var ntcp2Public = TransportLayer.TransportProvider.Inst?.GetNTCP2StaticPublicKey();
+                if (ntcp2Private != null && ntcp2Public != null && ntcp2Private != privateKey)
+                {
+                    Logging.LogDebug( "HandleShortTunnelBuildRecords: Identity key failed, trying NTCP2 key" );
+                    decrypt = new TunnelLayer.ECIES.ECIESTunnelDecrypt( ntcp2Private, ntcp2Public );
+                    result = decrypt.ProcessShortTunnelBuild( stbm );
+                }
             }
 
             if (!result.Success)

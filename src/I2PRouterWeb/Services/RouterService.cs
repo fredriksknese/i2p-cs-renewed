@@ -256,13 +256,57 @@ public class RouterService
 
         foreach (var tunnel in Router.TransitTunnelMgr.GetTunnels())
         {
+            var isGateway = tunnel is GatewayTunnel;
+            var isEndpoint = tunnel is EndpointTunnel;
+            var destHash = tunnel.Destination;
+
+            // Extract ReceiveFrom (previous hop) from the specific tunnel type
+            I2PCore.Data.I2PIdentHash receiveFrom = null;
+            if (tunnel is TransitTunnel tt) receiveFrom = tt.ReceiveFrom;
+            else if (tunnel is EndpointTunnel et) receiveFrom = et.ReceiveFrom;
+            else if (tunnel is GatewayTunnel gt) receiveFrom = gt.ReceiveFrom;
+
+            string fromLabel;
+            string? fromHash = null;
+            if (isGateway)
+            {
+                fromLabel = "Any peer (Gateway)";
+            }
+            else if (receiveFrom != null)
+            {
+                fromLabel = receiveFrom.Id32Short;
+                fromHash = receiveFrom.Id64;
+            }
+            else
+            {
+                fromLabel = "Unknown";
+            }
+
+            string toLabel;
+            string? toHash = null;
+            if (isEndpoint)
+            {
+                toLabel = destHash?.Id32Short ?? "Endpoint";
+                toHash = destHash?.Id64;
+            }
+            else
+            {
+                toLabel = destHash?.Id32Short ?? "Unknown";
+                toHash = destHash?.Id64;
+            }
+
             result.Add(new TransitTunnelInfo
             {
                 TunnelId = tunnel.ReceiveTunnelId.ToString(),
-                FromRouter = "Unknown",
-                ToRouter = tunnel.Destination?.Id32Short ?? "Endpoint",
-                IsEndpoint = tunnel is EndpointTunnel,
-                MessageCount = 0, // Not tracked per-tunnel yet
+                FromRouter = fromLabel,
+                FromRouterHash = fromHash,
+                ToRouter = toLabel,
+                ToRouterHash = toHash,
+                IsEndpoint = isEndpoint,
+                IsGateway = isGateway,
+                MessageCount = tunnel.MessageCount,
+                SendBitrateKBps = tunnel.Bandwidth.SendBandwidth.Bitrate / 8192f,
+                ReceiveBitrateKBps = tunnel.Bandwidth.ReceiveBandwidth.Bitrate / 8192f,
                 LastActivity = DateTime.UtcNow - TimeSpan.FromMilliseconds( tunnel.EstablishedTime.DeltaToNowMilliseconds )
             });
         }
@@ -275,9 +319,14 @@ public class TransitTunnelInfo
 {
     public string TunnelId { get; set; } = string.Empty;
     public string FromRouter { get; set; } = string.Empty;
+    public string? FromRouterHash { get; set; }
     public string ToRouter { get; set; } = string.Empty;
+    public string? ToRouterHash { get; set; }
     public bool IsEndpoint { get; set; }
+    public bool IsGateway { get; set; }
     public int MessageCount { get; set; }
+    public float SendBitrateKBps { get; set; }
+    public float ReceiveBitrateKBps { get; set; }
     public DateTime LastActivity { get; set; }
 }
 

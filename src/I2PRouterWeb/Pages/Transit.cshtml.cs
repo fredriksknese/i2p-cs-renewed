@@ -9,8 +9,9 @@ public class TransitModel : PageModel
 
     public List<TransitTunnelInfo> TransitTunnels { get; set; } = new();
     public int TotalTransitTunnels => TransitTunnels.Count;
+    public int GatewayCount => TransitTunnels.Count(t => t.IsGateway);
     public int EndpointCount => TransitTunnels.Count(t => t.IsEndpoint);
-    public int TransitCount => TransitTunnels.Count(t => !t.IsEndpoint);
+    public int TransitCount => TransitTunnels.Count(t => !t.IsEndpoint && !t.IsGateway);
 
     public TransitModel(RouterService routerService)
     {
