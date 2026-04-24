@@ -154,13 +154,14 @@ namespace I2PCore.TunnelLayer
 
         internal void HandleTunnelBuildRecords(
             Ii2NpHeader msg,
-            TunnelBuildRequestDecrypt decrypt )
+            TunnelBuildRequestDecrypt decrypt,
+            I2PIdentHash from )
         {
             if ( decrypt.Decrypted.ToAnyone )
             {
                 // Im outbound endpoint
                 Logging.LogDebug( $"HandleTunnelBuildRecords: Outbound endpoint request {decrypt}" );
-                HandleEndpointTunnelRequest( msg, decrypt );
+                HandleEndpointTunnelRequest( msg, decrypt, from );
                 return;
             }
 
@@ -168,7 +169,7 @@ namespace I2PCore.TunnelLayer
             {
                 // Im inbound gateway
                 Logging.LogDebug( $"HandleTunnelBuildRecords: Inbound gateway request {decrypt}" );
-                HandleGatewayTunnelRequest( msg, decrypt );
+                HandleGatewayTunnelRequest( msg, decrypt, from );
                 return;
             }
 
@@ -176,7 +177,7 @@ namespace I2PCore.TunnelLayer
             {
                 // Im transit tunnel
                 Logging.LogDebug( $"HandleTunnelBuildRecords: Transit tunnel request {decrypt}" );
-                HandleTransitTunnelRequest( msg, decrypt );
+                HandleTransitTunnelRequest( msg, decrypt, from );
                 return;
             }
 
@@ -185,8 +186,17 @@ namespace I2PCore.TunnelLayer
 
         private void HandleGatewayTunnelRequest(
             Ii2NpHeader msg,
-            TunnelBuildRequestDecrypt decrypt )
+            TunnelBuildRequestDecrypt decrypt,
+            I2PIdentHash from )
         {
+            // Validate NextHop RouterInfo exists in our NetDb before accepting
+            var nextHop = new I2PIdentHash( new BufRefLen( decrypt.Decrypted.NextIdent.Hash.Clone() ) );
+            if ( !NetDb.Inst.Contains( nextHop ) )
+            {
+                Logging.LogDebug( $"HandleGatewayTunnelRequest: Dropping - NextHop {nextHop.Id32Short} not in NetDb" );
+                return;
+            }
+
             var config = new TunnelConfig(
                 TunnelConfig.TunnelDirection.Inbound,
                 TunnelConfig.TunnelPool.External,
@@ -200,14 +210,15 @@ namespace I2PCore.TunnelLayer
 
             var tunnel = new GatewayTunnel( this, config, decrypt.Decrypted );
             tunnel.EstablishedTime.SetNow();
+            // Gateways accept from any peer, so ReceiveFrom stays null
 
             var doaccept = AcceptingTunnels( decrypt.Decrypted );
 
-            var response = doaccept 
-                    ? BuildResponseRecord.RequestResponse.Accept 
+            var response = doaccept
+                    ? BuildResponseRecord.RequestResponse.Accept
                     : BuildResponseRecord.DefaultErrorReply;
 
-            Logging.LogDebug( $"HandleEndpointTunnelRequest {tunnel.TunnelDebugTrace}: " +
+            Logging.LogDebug( $"HandleGatewayTunnelRequest {tunnel.TunnelDebugTrace}: " +
                 $"{tunnel.Destination.Id32Short} Gateway tunnel request: {response} " +
                 $"for tunnel id {tunnel.ReceiveTunnelId}." );
 
@@ -225,7 +236,8 @@ namespace I2PCore.TunnelLayer
 
         private void HandleEndpointTunnelRequest(
             Ii2NpHeader msg,
-            TunnelBuildRequestDecrypt decrypt )
+            TunnelBuildRequestDecrypt decrypt,
+            I2PIdentHash from )
         {
             var config = new TunnelConfig(
                 TunnelConfig.TunnelDirection.Inbound,
@@ -240,11 +252,12 @@ namespace I2PCore.TunnelLayer
 
             var tunnel = new EndpointTunnel( this, config, decrypt.Decrypted );
             tunnel.EstablishedTime.SetNow();
+            tunnel.ReceiveFrom = from;
 
             var doaccept = AcceptingTunnels( decrypt.Decrypted );
 
-            var response = doaccept 
-                    ? BuildResponseRecord.RequestResponse.Accept 
+            var response = doaccept
+                    ? BuildResponseRecord.RequestResponse.Accept
                     : BuildResponseRecord.DefaultErrorReply;
 
             Logging.LogDebug( $"HandleEndpointTunnelRequest {tunnel.TunnelDebugTrace}: " +
@@ -257,7 +270,7 @@ namespace I2PCore.TunnelLayer
                     newrecords.Select( r => new BuildResponseRecord( r ) ),
                     tunnel.ResponseMessageId );
 
-            var buildreplymsg = new TunnelGatewayMessage( 
+            var buildreplymsg = new TunnelGatewayMessage(
                     responsemessage,
                     tunnel.ResponseTunnelId );
 
@@ -272,8 +285,17 @@ namespace I2PCore.TunnelLayer
 
         private void HandleTransitTunnelRequest(
             Ii2NpHeader msg,
-            TunnelBuildRequestDecrypt decrypt )
+            TunnelBuildRequestDecrypt decrypt,
+            I2PIdentHash from )
         {
+            // Validate NextHop RouterInfo exists in our NetDb before accepting
+            var nextHop = new I2PIdentHash( new BufRefLen( decrypt.Decrypted.NextIdent.Hash.Clone() ) );
+            if ( !NetDb.Inst.Contains( nextHop ) )
+            {
+                Logging.LogDebug( $"HandleTransitTunnelRequest: Dropping - NextHop {nextHop.Id32Short} not in NetDb" );
+                return;
+            }
+
             var config = new TunnelConfig(
                 TunnelConfig.TunnelDirection.Inbound,
                 TunnelConfig.TunnelPool.External,
@@ -287,26 +309,27 @@ namespace I2PCore.TunnelLayer
 
             var tunnel = new TransitTunnel( this, config, decrypt.Decrypted );
             tunnel.EstablishedTime.SetNow();
+            tunnel.ReceiveFrom = from;
 
             var doaccept = AcceptingTunnels( decrypt.Decrypted );
 
-            var response = doaccept 
-                    ? BuildResponseRecord.RequestResponse.Accept 
+            var response = doaccept
+                    ? BuildResponseRecord.RequestResponse.Accept
                     : BuildResponseRecord.DefaultErrorReply;
 
-            Logging.LogDebug( $"HandleEndpointTunnelRequest {tunnel.TunnelDebugTrace}: " +
+            Logging.LogDebug( $"HandleTransitTunnelRequest {tunnel.TunnelDebugTrace}: " +
                 $"{tunnel.Destination.Id32Short} Transit tunnel request: {response} " +
                 $"for tunnel id {tunnel.ReceiveTunnelId}." );
 
-            var replymsg = CreateReplyMessage( msg, decrypt, response );
+            var replymsg2 = CreateReplyMessage( msg, decrypt, response );
 
             if ( response == BuildResponseRecord.RequestResponse.Accept )
             {
                 RunningTransitTunnels[tunnel] = 1;
-                TunnelMgr.AddTunnel( tunnel ); 
+                TunnelMgr.AddTunnel( tunnel );
                 AcceptedTunnelBuildRequest( decrypt.Decrypted );
             }
-            TransportProvider.Send( tunnel.Destination, replymsg );
+            TransportProvider.Send( tunnel.Destination, replymsg2 );
         }
 
         #region Request filter

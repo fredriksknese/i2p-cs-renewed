@@ -19,6 +19,11 @@ namespace I2PCore.TunnelLayer
         protected readonly I2PIdentHash NextHop;
         public override I2PIdentHash Destination { get { return NextHop; } }
 
+        /// <summary>
+        /// Gateways accept from any peer, so this is typically null.
+        /// </summary>
+        public I2PIdentHash ReceiveFrom { get; internal set; }
+
         public override bool Established { get => true; set => base.Established = value; }
 
         internal I2PTunnelId SendTunnelId;

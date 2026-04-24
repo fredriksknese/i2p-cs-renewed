@@ -77,52 +77,53 @@ namespace I2PCore.TunnelLayer
             var inNeeded = _inboundExploratory.CountHowManyToBuild();
             var outNeeded = _outboundExploratory.CountHowManyToBuild();
 
-            var inEstablished = _inboundExploratory.EstablishedCount;
-            var outEstablished = _outboundExploratory.EstablishedCount;
             var inProgress = _inboundExploratory.InProgressCount;
             var outProgress = _outboundExploratory.InProgressCount;
 
             if ( inNeeded <= 0 && outNeeded <= 0 ) return;
 
-            var establishedCount = inEstablished + outEstablished;
+            // Use real (non-0-hop) counts to decide aggressiveness.
+            // 0-hop fallback tunnels are useful but don't indicate healthy network participation.
+            var realEstablished = _inboundExploratory.RealEstablishedCount + _outboundExploratory.RealEstablishedCount;
             var connectedCount = TransportProvider.Inst.ConnectedRoutersCount;
 
-            // Immediate retry if we have nothing at all
-            if ( establishedCount == 0 && ( inProgress + outProgress ) == 0 && connectedCount > 0 )
+            // Panic mode: no real tunnels. Fire even if some are in-progress — they
+            // may all be timing out and we shouldn't wait for them.
+            if ( realEstablished == 0 && connectedCount > 0 )
             {
-                Logging.LogInformation( "TunnelPoolManager: Panic mode! No exploratory tunnels and none in progress. Starting builds immediately." );
+                Logging.LogDebug( $"TunnelPoolManager: Panic mode — no real tunnels (in-progress: {inProgress + outProgress}). Building aggressively." );
                 _outboundExploratory.CreateTunnels( 5 );
                 _inboundExploratory.CreateTunnels( 5 );
                 return;
             }
 
             // Adjust frequency dynamically for bootstrapping
-            TunnelBuild.Frequency = ( establishedCount < 2 || connectedCount < 10 ) 
-                ? TickSpan.Milliseconds( 500 ) 
+            TunnelBuild.Frequency = ( realEstablished < 2 || connectedCount < 10 )
+                ? TickSpan.Milliseconds( 500 )
                 : TickSpan.Seconds( 1 );
 
-            // Proactive bootstrapping from ExplorationTunnelProvider
-            if ( connectedCount < 3 || _outboundExploratory.EstablishedCount == 0 )
+            // Proactive bootstrapping: build outbound first since inbound build
+            // requests need to be sent via an outbound tunnel.
+            if ( connectedCount < 3 || _outboundExploratory.RealEstablishedCount == 0 )
             {
                 var targetBootstrap = ( connectedCount == 0 ) ? 5 : 2;
-                _inboundExploratory.CreateTunnels( targetBootstrap );
                 _outboundExploratory.CreateTunnels( targetBootstrap );
+                _inboundExploratory.CreateTunnels( targetBootstrap );
             }
 
             // Max tunnels to build per cycle
-            var maxTunnels = ( establishedCount < 2 || connectedCount < 10 ) ? 20 : 5;
-            var built = 0;
+            var maxTunnels = ( realEstablished < 2 || connectedCount < 10 ) ? 20 : 5;
 
-
-            // Build both directions fairly to avoid deadlocks.
-            var toBuildTotal = Math.Min( inNeeded + outNeeded, maxTunnels - built );
+            // Build both directions fairly — outbound first since inbound
+            // build requests are sent through outbound tunnels.
+            var toBuildTotal = Math.Min( inNeeded + outNeeded, maxTunnels );
             if ( toBuildTotal > 0 )
             {
-                var inToBuild = ( inNeeded > 0 && outNeeded > 0 ) ? toBuildTotal / 2 : ( inNeeded > 0 ? toBuildTotal : 0 );
-                var outToBuild = toBuildTotal - inToBuild;
+                var outToBuild = ( inNeeded > 0 && outNeeded > 0 ) ? ( toBuildTotal + 1 ) / 2 : ( outNeeded > 0 ? toBuildTotal : 0 );
+                var inToBuild = toBuildTotal - outToBuild;
 
-                if ( inToBuild > 0 ) _inboundExploratory.CreateTunnels( inToBuild );
                 if ( outToBuild > 0 ) _outboundExploratory.CreateTunnels( outToBuild );
+                if ( inToBuild > 0 ) _inboundExploratory.CreateTunnels( inToBuild );
             }
         }
 

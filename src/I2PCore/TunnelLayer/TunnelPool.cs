@@ -25,34 +25,41 @@ namespace I2PCore.TunnelLayer
         }
 
         public int EstablishedCount => Tunnels.Count( t => t.Value && !t.Key.NeedsRecreation );
+        public int RealEstablishedCount => Tunnels.Count( t => t.Value && !t.Key.NeedsRecreation && !( t.Key is ZeroHopTunnel || t.Key is ZeroHopOutboundTunnel ) );
         public int InProgressCount => Tunnels.Count( t => !t.Value );
 
         public int CountHowManyToBuild()
         {
             var establishedCount = EstablishedCount;
-            var realEstablishedCount = Tunnels.Count( t => t.Value && !t.Key.NeedsRecreation && !( t.Key is ZeroHopTunnel || t.Key is ZeroHopOutboundTunnel ) );
+            var realEstablishedCount = RealEstablishedCount;
             var connectedCount = TransportProvider.Inst.ConnectedRoutersCount;
-            
+
             // Java-like logic: if we have very few tunnels or connections, be more aggressive
-            var target = ( establishedCount < Settings.Quantity || connectedCount < 5 ) 
-                ? Math.Max( 10, Settings.Quantity * 2 ) 
+            var target = ( establishedCount < Settings.Quantity || connectedCount < 5 )
+                ? Math.Max( 10, Settings.Quantity * 2 )
                 : Settings.Quantity;
-            
+
             var inProgress = InProgressCount;
 
-            // If we have absolutely no real tunnels, be even more aggressive and ignore some in-progress
-            // to avoid getting stuck during long timeouts.
             if ( realEstablishedCount == 0 && connectedCount > 0 )
             {
+                // No real tunnels yet — in-progress tunnels are likely timing out so
+                // don't let them block new builds. Only count a third of them.
                 target = Math.Max( target, 30 );
+                var needed = target - establishedCount - ( inProgress / 3 );
+                return Math.Max( 0, needed );
             }
 
-            var needed = target - establishedCount - inProgress;
-            return Math.Max( 0, needed );
+            var result = target - establishedCount - inProgress;
+            return Math.Max( 0, result );
         }
 
         public void CreateTunnels( int count )
         {
+            var pool = Settings.IsExploratory ? "Exploratory" : "Client";
+            var dir = Settings.IsInbound ? "Inbound" : "Outbound";
+            var consecutiveFailures = 0;
+
             for ( int i = 0; i < count; ++i )
             {
                 try
@@ -60,18 +67,24 @@ namespace I2PCore.TunnelLayer
                     var tunnel = CreateTunnel();
                     if ( tunnel == null )
                     {
-                        var msg = $"CreateTunnel returned null for {this}. No routers available?";
+                        ++consecutiveFailures;
+                        var msg = $"Chain creation returned null ({this}, attempt {i + 1}/{count}). Connected: {TransportProvider.Inst.ConnectedRoutersCount}, NetDb: {NetDb.Inst.RouterCount}";
                         Logging.LogInformation( $"TunnelPool: {msg}" );
-                        TunnelBuildLogger.Inst.Log( msg, "---", Settings.IsExploratory ? "Exploratory" : "Client", Settings.IsInbound ? "Inbound" : "Outbound" );
-                        break;
+                        TunnelBuildLogger.Inst.Log( msg, "---", pool, dir );
+
+                        if ( consecutiveFailures >= 3 ) break;
+                        continue;
                     }
+                    consecutiveFailures = 0;
                 }
                 catch ( Exception ex )
                 {
-                    var msg = $"CreateTunnel exception for {this}: {ex.Message}";
+                    ++consecutiveFailures;
+                    var msg = $"CreateTunnel exception ({this}, attempt {i + 1}/{count}): {ex.Message}";
                     Logging.LogWarning( $"TunnelPool: {msg}" );
-                    TunnelBuildLogger.Inst.Log( msg, "---", Settings.IsExploratory ? "Exploratory" : "Client", Settings.IsInbound ? "Inbound" : "Outbound" );
-                    break;
+                    TunnelBuildLogger.Inst.Log( msg, "---", pool, dir );
+
+                    if ( consecutiveFailures >= 3 ) break;
                 }
             }
         }
@@ -102,15 +115,21 @@ namespace I2PCore.TunnelLayer
         private Tunnel CreateTunnel()
         {
             TunnelInfo chain;
-            var realEstablished = Tunnels.Count( t => t.Value && !t.Key.NeedsRecreation && !( t.Key is ZeroHopTunnel || t.Key is ZeroHopOutboundTunnel ) );
+            var realEstablished = RealEstablishedCount;
             var bootstrapping = realEstablished == 0;
+
+            // During bootstrap, use shorter tunnels (1-hop to a connected peer) for
+            // much higher success rates. 2-hop tunnels through unknown routers almost
+            // always time out when we have no established tunnels yet.
+            var hops = bootstrapping ? Math.Min( Settings.Length, 1 ) : Settings.Length;
+
             if ( Settings.IsInbound )
             {
-                chain = Tunnel.CreateInboundTunnelChain( Settings.Length, Settings.IsExploratory, bootstrapping );
+                chain = Tunnel.CreateInboundTunnelChain( hops, Settings.IsExploratory, bootstrapping );
             }
             else
             {
-                chain = Tunnel.CreateOutboundTunnelChain( Settings.Length, Settings.IsExploratory, bootstrapping );
+                chain = Tunnel.CreateOutboundTunnelChain( hops, Settings.IsExploratory, bootstrapping );
             }
 
             if ( chain == null ) return null;

@@ -29,8 +29,9 @@ namespace I2PCore.TunnelLayer
 
         /// <summary>
         /// Tunnel build requests that is not a known Inbound or Outbound tunnel.
+        /// The I2PIdentHash parameter is the transport-level sender (previous hop).
         /// </summary>
-        public event Action<Ii2NpHeader, TunnelBuildRequestDecrypt>
+        public event Action<Ii2NpHeader, TunnelBuildRequestDecrypt, I2PIdentHash>
             TunnelBuildRequestEvents;
 
         /// <summary>
@@ -267,7 +268,7 @@ namespace I2PCore.TunnelLayer
 
         protected static Thread Worker;
 
-        private ConcurrentQueue<Ii2NpHeader> IncomingMessageQueue = new();
+        private ConcurrentQueue<(Ii2NpHeader msg, I2PIdentHash transportFrom)> IncomingMessageQueue = new();
 
         protected static Thread IncomingMessagePump;
 
@@ -853,10 +854,10 @@ namespace I2PCore.TunnelLayer
 
                     while ( !IncomingMessageQueue.IsEmpty )
                     {
-                        if ( !IncomingMessageQueue.TryDequeue( out var msg ) )
+                        if ( !IncomingMessageQueue.TryDequeue( out var item ) )
                             continue;
 
-                        HandleIncommingMessage( msg );
+                        HandleIncommingMessage( item.msg, transportFrom: item.transportFrom );
                     }
                 }
                 catch ( Exception ex )
@@ -872,7 +873,7 @@ namespace I2PCore.TunnelLayer
         /// </summary>
         private static readonly DecayingBloomFilter DuplicateMessageFilter = new();
 
-        internal void HandleIncommingMessage( Ii2NpHeader msg, InboundTunnel from = null )
+        internal void HandleIncommingMessage( Ii2NpHeader msg, InboundTunnel from = null, I2PIdentHash transportFrom = null )
         {
             if ( msg.MessageType == I2NpMessage.MessageTypes.Garlic )
             {
@@ -895,15 +896,15 @@ namespace I2PCore.TunnelLayer
             switch ( msg.MessageType )
             {
                 case I2NpMessage.MessageTypes.VariableTunnelBuild:
-                    HandleVariableTunnelBuild( msg );
+                    HandleVariableTunnelBuild( msg, transportFrom );
                     break;
 
                 case I2NpMessage.MessageTypes.TunnelBuild:
-                    HandleTunnelBuild( msg );
+                    HandleTunnelBuild( msg, transportFrom );
                     break;
 
                 case I2NpMessage.MessageTypes.ShortTunnelBuild:
-                    HandleShortTunnelBuild( msg );
+                    HandleShortTunnelBuild( msg, transportFrom );
                     break;
 
                 case I2NpMessage.MessageTypes.VariableTunnelBuildReply:
@@ -1052,29 +1053,29 @@ namespace I2PCore.TunnelLayer
                 return;
             }
 
-            IncomingMessageQueue.Enqueue( msg );
+            IncomingMessageQueue.Enqueue( (msg, transp?.RemoteRouterIdentity?.IdentHash) );
             IncommingMessageReceived.Set();
         }
 
-        private void HandleTunnelBuild( Ii2NpHeader msg )
+        private void HandleTunnelBuild( Ii2NpHeader msg, I2PIdentHash from )
         {
             var trmsg = (TunnelBuildMessage)msg.Message;
 #if LOG_ALL_TUNNEL_TRANSFER
             Logging.Log( $"HandleTunnelBuild: {trmsg}" );
 #endif
-            HandleTunnelBuildRecords( msg, trmsg.Records );
+            HandleTunnelBuildRecords( msg, trmsg.Records, from );
         }
 
-        private void HandleVariableTunnelBuild( Ii2NpHeader msg )
+        private void HandleVariableTunnelBuild( Ii2NpHeader msg, I2PIdentHash from )
         {
             var trmsg = (VariableTunnelBuildMessage)msg.Message;
 #if LOG_ALL_TUNNEL_TRANSFER
             Logging.Log( $"HandleVariableTunnelBuild: {trmsg}" );
 #endif
-            HandleTunnelBuildRecords( msg, trmsg.Records );
+            HandleTunnelBuildRecords( msg, trmsg.Records, from );
         }
 
-        private void HandleShortTunnelBuild( Ii2NpHeader msg )
+        private void HandleShortTunnelBuild( Ii2NpHeader msg, I2PIdentHash from )
         {
             Logging.LogInformation( $"[DEBUG_LOG] HandleShortTunnelBuild: Received request MessageId={msg.Message.MessageId:X8}" );
             var stbm = (ShortTunnelBuildMessage)msg.Message;
@@ -1099,10 +1100,10 @@ namespace I2PCore.TunnelLayer
                 return;
             }
 
-            HandleShortTunnelBuildRecords( msg, stbm );
+            HandleShortTunnelBuildRecords( msg, stbm, from );
         }
 
-        private void HandleShortTunnelBuildRecords( Ii2NpHeader msg, ShortTunnelBuildMessage stbm )
+        private void HandleShortTunnelBuildRecords( Ii2NpHeader msg, ShortTunnelBuildMessage stbm, I2PIdentHash from )
         {
             var privateKey = TransportLayer.TransportProvider.Inst?.GetNTCP2StaticPrivateKey() 
                 ?? RouterContext.Inst.X25519PrivateKey;
@@ -1135,6 +1136,14 @@ namespace I2PCore.TunnelLayer
 
             Logging.LogInformation( $"HandleShortTunnelBuildRecords: Decrypted ECIES request: recv={request.ReceiveTunnelId}, " +
                 $"next={request.NextRouterHash?.Id32Short}, flags=0x{request.Flags:X2}, gw={isGateway}, ep={isEndpoint}" );
+
+            // Validate NextHop RouterInfo exists in our NetDb (like Java I2P BuildHandler)
+            // Without it we can't establish a transport connection to forward tunnel data
+            if ( !isEndpoint && request.NextRouterHash != null && !NetDb.Inst.Contains( request.NextRouterHash ) )
+            {
+                Logging.LogDebug( $"HandleShortTunnelBuildRecords: Dropping - NextHop {request.NextRouterHash.Id32Short} not in NetDb" );
+                return;
+            }
 
             // Check if we should accept this transit tunnel
             var replyStatus = Router.TransitTunnelMgr.AcceptingTunnels( request.NextRouterHash )
@@ -1217,6 +1226,12 @@ namespace I2PCore.TunnelLayer
                     }
 
                     tunnel.EstablishedTime.SetNow();
+
+                    // Store the previous hop identity (transport-level sender of the build request)
+                    if ( tunnel is TransitTunnel tt ) tt.ReceiveFrom = from;
+                    else if ( tunnel is EndpointTunnel et ) et.ReceiveFrom = from;
+                    // GatewayTunnel.ReceiveFrom stays null — gateways accept from any peer
+
                     AddTunnel( tunnel );
                     Router.TransitTunnelMgr.RegisterTransitTunnel( tunnel );
                 }
@@ -1273,10 +1288,10 @@ namespace I2PCore.TunnelLayer
             }
         }
 
-        private void HandleTunnelBuildRecords( Ii2NpHeader msg, IList<AesEgBuildRequestRecord> records )
+        private void HandleTunnelBuildRecords( Ii2NpHeader msg, IList<AesEgBuildRequestRecord> records, I2PIdentHash from )
         {
-            var decrypt = new TunnelBuildRequestDecrypt( 
-                records, 
+            var decrypt = new TunnelBuildRequestDecrypt(
+                records,
                 RouterContext.Inst.MyRouterIdentity.IdentHash,
                 RouterContext.Inst.PrivateKey );
 
@@ -1292,11 +1307,11 @@ namespace I2PCore.TunnelLayer
                 return;
             }
 
-            if ( decrypt.Decrypted.ToAnyone 
-                    || decrypt.Decrypted.FromAnyone 
+            if ( decrypt.Decrypted.ToAnyone
+                    || decrypt.Decrypted.FromAnyone
                     || decrypt.Decrypted.NextIdent != RouterContext.Inst.MyRouterIdentity.IdentHash )
             {
-                TunnelBuildRequestEvents?.Invoke( msg, decrypt );
+                TunnelBuildRequestEvents?.Invoke( msg, decrypt, from );
                 return;
             }
 

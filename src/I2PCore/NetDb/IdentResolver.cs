@@ -6,8 +6,10 @@ using I2PCore.Utils;
 using I2PCore.TunnelLayer;
 using I2PCore.TunnelLayer.I2NP.Data;
 using I2PCore.SessionLayer;
+using I2PCore.SessionLayer.ECIES;
 using I2PCore.TunnelLayer.I2NP.Messages;
 using I2PCore.TransportLayer;
+using I2PCore.TransportLayer.Crypto;
 using I2PCore.Data;
 using System.Threading;
 using System.Collections.Concurrent;
@@ -500,8 +502,11 @@ namespace I2PCore
         {
             // LeaseSet lookups MUST ALWAYS go through tunnels - NEVER direct transport.
             // Direct contact with floodfills for LS lookups is a deanonymization vulnerability.
-            // Java I2P: IterativeSearchJob uses client's own outbound tunnel to send the query
-            // and specifies the client's own inbound tunnel gateway+tunnelId as the reply address.
+            //
+            // Java I2P IterativeSearchJob.sendQuery() always:
+            // 1. Sets reply encryption (session key + ratchet tag) on the DLM
+            // 2. Garlic-wraps the DLM to the floodfill's ECIES public key
+            // Without garlic wrapping, modern floodfills may ignore LS lookups.
 
             try
             {
@@ -560,18 +565,50 @@ namespace I2PCore
                 {
                     try
                     {
-                        // Send DatabaseLookupMessage through our outbound tunnel.
-                        // The floodfill will reply to replytunnel.Destination (our inbound gateway)
-                        // using replytunnel.GatewayTunnelId as the tunnel entry point.
-                        var msg = new DatabaseLookupMessage(
-                            ident,
-                            replytunnel.Destination,
-                            replytunnel.GatewayTunnelId,
-                            DatabaseLookupMessage.LookupTypes.LeaseSet,
-                            excluded );
-                        outtunnel.Send( new TunnelMessageRouter( msg, oneffid ) );
+                        var ri = NetDb.Inst[oneffid];
+                        if ( ri == null )
+                        {
+                            Logging.LogDebug( $"IdentResolver: LS lookup {ident.Id32Short} -> ff {oneffid.Id32Short}: no RouterInfo, skipping" );
+                            continue;
+                        }
 
-                        Logging.LogInformation( $"IdentResolver: LS lookup {ident.Id32Short} -> ff {oneffid.Id32Short} (via tunnels)" );
+                        // Determine floodfill's encryption type
+                        var ffKeyType = ri.Identity.Certificate.PublicKeyType;
+                        var isEcies = ffKeyType == I2PKeyType.KeyTypes.X25519
+                            || ffKeyType == I2PKeyType.KeyTypes.MLKEM512_X25519
+                            || ffKeyType == I2PKeyType.KeyTypes.MLKEM768_X25519
+                            || ffKeyType == I2PKeyType.KeyTypes.MLKEM1024_X25519;
+
+                        I2NpMessage outMsg;
+
+                        if ( isEcies )
+                        {
+                            // ECIES floodfill: garlic-wrap the DLM using Noise N
+                            // Java: MessageWrapper.wrap(ctx, dlm, ri) + dlm.setReplySession(key, rtag)
+                            outMsg = CreateEciesWrappedLookup( ident, replytunnel, excluded, ri, oneffid );
+                        }
+                        else
+                        {
+                            // ElGamal floodfill: garlic-wrap using ElGamal encryption
+                            outMsg = CreateElGamalWrappedLookup( ident, replytunnel, excluded, ri, oneffid );
+                        }
+
+                        if ( outMsg == null )
+                        {
+                            // Fallback: send plain DLM (should not normally happen)
+                            Logging.LogWarning( $"IdentResolver: LS lookup {ident.Id32Short} -> ff {oneffid.Id32Short}: garlic wrap failed, sending plain DLM" );
+                            var plainMsg = new DatabaseLookupMessage(
+                                ident,
+                                replytunnel.Destination,
+                                replytunnel.GatewayTunnelId,
+                                DatabaseLookupMessage.LookupTypes.LeaseSet,
+                                excluded );
+                            outMsg = plainMsg;
+                        }
+
+                        outtunnel.Send( new TunnelMessageRouter( outMsg, oneffid ) );
+
+                        Logging.LogInformation( $"IdentResolver: LS lookup {ident.Id32Short} -> ff {oneffid.Id32Short} ({(isEcies ? "ECIES" : "ElG")} garlic-wrapped)" );
                         IdentUpdateRequestInfo.AlreadyQueried[oneffid] = 1;
                     }
                     catch ( Exception ex )
@@ -585,6 +622,157 @@ namespace I2PCore
             catch ( Exception ex )
             {
                 Logging.Log( "SendLSDatabaseLookup2", ex );
+            }
+        }
+
+        /// <summary>
+        /// Create an ECIES garlic-wrapped DatabaseLookupMessage for LS lookups.
+        /// Mirrors Java I2P IterativeSearchJob.sendQuery() for ECIES floodfills:
+        /// 1. Generate reply session (ratchet tag + key) so FF encrypts the reply
+        /// 2. Set the reply session on the DLM
+        /// 3. Garlic-wrap the DLM to the floodfill's X25519 public key using Noise N
+        /// </summary>
+        private I2NpMessage CreateEciesWrappedLookup(
+            I2PIdentHash ident,
+            InboundTunnel replytunnel,
+            ICollection<I2PIdentHash> excluded,
+            I2PRouterInfo ri,
+            I2PIdentHash ffHash )
+        {
+            try
+            {
+                var ffPubKey = ri.GetECIESPublicKey();
+                if ( ffPubKey == null || ffPubKey.Length != 32 )
+                {
+                    Logging.LogWarning( $"IdentResolver: ff {ffHash.Id32Short} has no ECIES public key" );
+                    return null;
+                }
+
+                // Generate a one-time reply session (ratchet tag + key).
+                // The floodfill will use these to encrypt its DatabaseStoreMessage reply.
+                // Java: MessageWrapper.generateSession(ctx, skm, SINGLE_SEARCH_MSG_TIME, false)
+                var replyKey = BufUtils.RandomBytes( 32 );
+                var ratchetTag = SessionTag.Generate();
+
+                // Register the one-time session so we can decrypt the reply when it arrives
+                var eciesProcessor = Router.EciesRouterProcessor;
+                eciesProcessor?.SessionManager?.RegisterOneTimeSession( ratchetTag, replyKey );
+
+                // Build the DLM with ECIES reply encryption.
+                // The DLM includes: Ecies flag + reply key (our X25519 pub) + ratchet tag
+                // Java: dlm.setReplySession(sess.key, sess.rtag)
+                var replyKeyInfo = new DatabaseLookupKeyInfo
+                {
+                    EncryptionFlag = false,
+                    EciesFlag = true,
+                    ReplyKey = new BufLen( replyKey ),
+                    Tags = new BufLen[] { new BufLen( ratchetTag.ToByteArray() ) }
+                };
+
+                var dlm = new DatabaseLookupMessage(
+                    ident,
+                    replytunnel.Destination,
+                    replytunnel.GatewayTunnelId,
+                    DatabaseLookupMessage.LookupTypes.LeaseSet,
+                    excluded,
+                    replyKeyInfo );
+
+                // Garlic-wrap the DLM to the floodfill's ECIES public key using Noise N.
+                // Java: outMsg = MessageWrapper.wrap(ctx, dlm, ri)
+                // This creates a GarlicMessage containing the DLM as a local-delivery clove.
+                var garlicMsg = WrapInEciesGarlic( dlm, ffPubKey );
+
+                Logging.LogDebug( $"IdentResolver: ECIES garlic-wrapped DLM for {ident.Id32Short} to ff {ffHash.Id32Short}" );
+                return garlicMsg;
+            }
+            catch ( Exception ex )
+            {
+                Logging.LogWarning( $"IdentResolver: ECIES garlic wrap failed for ff {ffHash.Id32Short}: {ex.Message}" );
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Wrap a DatabaseLookupMessage in an ECIES garlic message (Noise N).
+        /// Uses the same ECIES block format as TunnelProvider.CreateECIESGarlicMessage().
+        /// The clove uses local delivery instructions so the floodfill processes the DLM locally.
+        /// </summary>
+        private static GarlicMessage WrapInEciesGarlic( DatabaseLookupMessage dlm, byte[] ffPublicKey )
+        {
+            // Build the garlic clove with local delivery instructions.
+            // ECIES clove format (per Proposal 144 / readBytesRatchet):
+            //   DeliveryInstructions(1 byte: 0x00 = local) + type(1) + msgID(4) + expiration_secs(4) + payload
+            var cloveStream = new BufRefStream();
+            cloveStream.Write( (byte)0 ); // Local delivery
+            cloveStream.Write( (byte)dlm.MessageType );
+            cloveStream.Write( BufUtils.Flip32Bl( dlm.MessageId ) );
+            var expirationSecs = (uint)( DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 20 ); // 20s like Java SINGLE_SEARCH_MSG_TIME
+            cloveStream.Write( BufUtils.Flip32Bl( expirationSecs ) );
+            cloveStream.Write( dlm.Payload );
+
+            // Build ECIES blocks: DateTime + GarlicClove + Padding
+            var blocks = new List<SessionLayer.ECIES.Block>
+            {
+                new DateTimeBlock { Timestamp = (uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds() },
+                new SessionLayer.ECIES.GarlicCloveBlock { Data = cloveStream.ToByteArray() },
+                new PaddingBlock { Data = BufUtils.RandomBytes( 16 + BufUtils.RandomInt( 32 ) ) }
+            };
+
+            var plaintext = ECIESBlockFormat.BuildBlocks( blocks );
+
+            // Encrypt using Noise N to the floodfill's X25519 public key
+            var noiseN = NoiseN.CreateInitiator( ffPublicKey );
+            var encrypted = noiseN.CreateMessage( plaintext );
+            noiseN.Dispose();
+
+            // The Noise N output IS the garlic payload (no tag prefix for new sessions).
+            // Wrap in GarlicMessage which adds the 4-byte length prefix.
+            return new GarlicMessage( encrypted );
+        }
+
+        /// <summary>
+        /// Create an ElGamal garlic-wrapped DatabaseLookupMessage for legacy floodfills.
+        /// Java: MessageWrapper.wrap(ctx, dlm, ri) with ElGamal encryption.
+        /// </summary>
+        private I2NpMessage CreateElGamalWrappedLookup(
+            I2PIdentHash ident,
+            InboundTunnel replytunnel,
+            ICollection<I2PIdentHash> excluded,
+            I2PRouterInfo ri,
+            I2PIdentHash ffHash )
+        {
+            try
+            {
+                // For ElGamal floodfills, create a plain DLM without reply encryption
+                // (ElGamal reply encryption uses AES session tags which is complex;
+                // send the DLM garlic-wrapped but with unencrypted reply for now).
+                var dlm = new DatabaseLookupMessage(
+                    ident,
+                    replytunnel.Destination,
+                    replytunnel.GatewayTunnelId,
+                    DatabaseLookupMessage.LookupTypes.LeaseSet,
+                    excluded );
+
+                // Garlic-wrap using ElGamal to the floodfill's public key
+                var sessionkey = new I2PSessionKey();
+                var clove = new TunnelLayer.I2NP.Data.GarlicClove( new GarlicCloveDeliveryLocal( dlm ) );
+                var garlic = new Garlic(
+                    new I2PDate( DateTime.UtcNow.AddSeconds( 20 ) ),
+                    clove );
+
+                var garlicMsg = Garlic.EgEncryptGarlic(
+                    garlic,
+                    ri.Identity.PublicKey,
+                    sessionkey,
+                    new List<I2PSessionTag>() );
+
+                Logging.LogDebug( $"IdentResolver: ElGamal garlic-wrapped DLM for {ident.Id32Short} to ff {ffHash.Id32Short}" );
+                return garlicMsg;
+            }
+            catch ( Exception ex )
+            {
+                Logging.LogWarning( $"IdentResolver: ElGamal garlic wrap failed for ff {ffHash.Id32Short}: {ex.Message}" );
+                return null;
             }
         }
 

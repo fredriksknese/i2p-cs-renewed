@@ -113,6 +113,9 @@ namespace I2PCore.TunnelLayer
         public static readonly BandwidthStatistics BandwidthTotal = new();
         public readonly BandwidthStatistics Bandwidth = new( BandwidthTotal );
 
+        private int _messageCount;
+        public int MessageCount => _messageCount;
+
         internal int AggregateErrors = 0;
         internal ITunnelOwner Owner { get; private set; }
 
@@ -146,6 +149,7 @@ namespace I2PCore.TunnelLayer
             Logging.LogDebug( $"{this}: MessageReceived {msg}" );
 #endif
             Bandwidth.DataReceived( recvdatasize );
+            Interlocked.Increment( ref _messageCount );
 
             //Logging.LogDebug( $"{this}: MessageReceived {msg.MessageType} TDM len {recvsize}" );
             ReceiveQueue.Enqueue( msg );

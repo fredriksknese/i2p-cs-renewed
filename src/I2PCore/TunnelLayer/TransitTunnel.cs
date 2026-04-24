@@ -19,6 +19,12 @@ namespace I2PCore.TunnelLayer
         protected I2PIdentHash NextHop;
         public override I2PIdentHash Destination { get { return NextHop; } }
 
+        /// <summary>
+        /// The previous hop in the tunnel (who sends data to us).
+        /// Set from the transport-level sender of the build request.
+        /// </summary>
+        public I2PIdentHash ReceiveFrom { get; internal set; }
+
         internal I2PTunnelId SendTunnelId;
 
         private BufLen IvKey;
