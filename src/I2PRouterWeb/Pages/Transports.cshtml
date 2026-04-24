@@ -1,0 +1,70 @@
+@page
+@model TransportsModel
+@{
+    ViewData["Title"] = "Transports";
+}
+
+<div class="row mb-3">
+    <div class="col-12">
+        <h1 class="mb-4">Transport Connections</h1>
+        <p class="text-muted">Active NTCP2 and SSU2 transport connections</p>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h6 class="card-title">NTCP2 Sessions</h6>
+                <p class="display-6">@Model.Ntcp2Sessions</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h6 class="card-title">SSU2 Sessions</h6>
+                <p class="display-6">@Model.Ssu2Sessions</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h6 class="card-title">Bytes Sent</h6>
+                <p class="display-6">@Model.FormattedBytesSent</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h6 class="card-title">Bytes Received</h6>
+                <p class="display-6">@Model.FormattedBytesReceived</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">NTCP2 (TCP)</div>
+            <div class="card-body">
+                <p>Active sessions: @Model.Ntcp2Sessions</p>
+                <p>Blocked IPs: @Model.Ntcp2BlockedIPs</p>
+                <p>Post-quantum: @(Model.Ntcp2PQEnabled ? "Enabled (ML-KEM 1024)" : "Disabled")</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">SSU2 (UDP)</div>
+            <div class="card-body">
+                <p>Active sessions: @Model.Ssu2Sessions</p>
+                <p>Blocked IPs: @Model.Ssu2BlockedIPs</p>
+                <p>Firewalled: @(Model.IsFirewalled ? "Yes" : "No")</p>
+            </div>
+        </div>
+    </div>
+</div>

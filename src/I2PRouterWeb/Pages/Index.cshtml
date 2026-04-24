@@ -1,0 +1,255 @@
+﻿@page
+@model IndexModel
+@{
+    ViewData["Title"] = "Dashboard";
+}
+
+<div class="row mb-3">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center">
+            <h1 class="mb-0">I2P Router Dashboard</h1>
+            <div>
+                @if (Model.RouterStats.IsRunning)
+                {
+                    <span class="badge bg-success fs-6 me-2">Running</span>
+                    <form method="post" asp-page-handler="Reseed" class="d-inline">
+                        <button type="submit" class="btn btn-outline-primary me-2">
+                            <i class="bi bi-download"></i> Reseed
+                        </button>
+                    </form>
+                    <form method="post" asp-page-handler="Stop" class="d-inline">
+                        <button type="submit" class="btn btn-danger">
+                            <i class="bi bi-stop-circle"></i> Stop Router
+                        </button>
+                    </form>
+                    @if (Model.RouterStats.HTTPProxyRunning)
+                    {
+                        <span class="badge bg-info fs-6 ms-3 me-2">Proxy :@Model.RouterStats.HTTPProxyPort</span>
+                        <form method="post" asp-page-handler="StopProxy" class="d-inline">
+                            <button type="submit" class="btn btn-outline-warning btn-sm">
+                                Stop HTTP Proxy
+                            </button>
+                        </form>
+                    }
+                    else
+                    {
+                        <form method="post" asp-page-handler="StartProxy" class="d-inline ms-3">
+                            <button type="submit" class="btn btn-info">
+                                Start HTTP Proxy
+                            </button>
+                        </form>
+                    }
+                }
+                else
+                {
+                    <span class="badge bg-secondary fs-6 me-2">Stopped</span>
+                    <form method="post" asp-page-handler="Start" class="d-inline">
+                        <button type="submit" class="btn btn-success">
+                            <i class="bi bi-play-circle"></i> Start Router
+                        </button>
+                    </form>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-6 col-lg-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="card-subtitle mb-2 text-muted">Router Hash</h6>
+                <p class="card-text router-hash">@Model.RouterStats.RouterHash</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-lg-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="card-subtitle mb-2 text-muted">Version</h6>
+                <p class="card-text">@Model.RouterStats.Version</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-lg-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="card-subtitle mb-2 text-muted">Uptime</h6>
+                <p class="card-text">@Model.FormattedUptime</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-lg-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="card-subtitle mb-2 text-muted">Key Type</h6>
+                <p class="card-text">@Model.RouterStats.KeyType</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-6 col-lg-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="card-subtitle mb-2 text-muted">Known Routers</h6>
+                <p class="card-text fs-4">@Model.RouterStats.KnownRouters</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-lg-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="card-subtitle mb-2 text-muted">Floodfills</h6>
+                <p class="card-text fs-4">@Model.RouterStats.KnownFloodfills</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-lg-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="card-subtitle mb-2 text-muted">Bandwidth Class</h6>
+                <p class="card-text fs-4">@Model.RouterStats.BandwidthClass</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-lg-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="card-subtitle mb-2 text-muted">Transport Sessions</h6>
+                <p class="card-text fs-4">NTCP2: @Model.RouterStats.NTCP2SessionCount / SSU2: @Model.RouterStats.SSU2SessionCount</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-6 col-lg-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="card-subtitle mb-2 text-muted">Inbound Tunnels</h6>
+                <p class="card-text fs-4 text-success">@Model.RouterStats.InboundTunnels</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-lg-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="card-subtitle mb-2 text-muted">Outbound Tunnels</h6>
+                <p class="card-text fs-4 text-primary">@Model.RouterStats.OutboundTunnels</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-lg-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="card-subtitle mb-2 text-muted">Exploratory Tunnels</h6>
+                <p class="card-text fs-4 text-warning">@Model.RouterStats.ExploratoryTunnels</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-lg-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h6 class="card-subtitle mb-2 text-muted">Transit Tunnels</h6>
+                <p class="card-text fs-4 text-secondary">@Model.RouterStats.TransitTunnels</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Quick Links</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-4 mb-3">
+                        <a href="/Tunnels" class="btn btn-outline-primary w-100">
+                            View Tunnels
+                        </a>
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <a href="/Routers" class="btn btn-outline-primary w-100">
+                            Known Routers
+                        </a>
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <a href="/Settings" class="btn btn-outline-primary w-100">
+                            Settings
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header bg-light border-bottom">
+                <h5 class="mb-0">Manual Reseed</h5>
+            </div>
+            <div class="card-body">
+                <p class="card-text text-muted mb-3 small">
+                    If automatic reseed fails, you can manually upload a <strong>.su3</strong> or <strong>.zip</strong> reseed file.
+                    These files contain RouterInfo for bootstrapping the network.
+                </p>
+                <form method="post" asp-page-handler="ManualReseed" enctype="multipart/form-data" class="row g-2 align-items-center">
+                    <div class="col-auto">
+                        <input type="file" name="reseedFile" class="form-control form-control-sm" accept=".su3,.zip" required>
+                    </div>
+                    <div class="col-auto">
+                        <button type="submit" class="btn btn-primary btn-sm">
+                            <i class="bi bi-upload me-1"></i> Upload and Import
+                        </button>
+                    </div>
+                </form>
+                @if (TempData["ReseedMessage"] != null)
+                {
+                    <div class="alert alert-info mt-2 mb-0 py-1 small">
+                        <i class="bi bi-info-circle me-1"></i> @TempData["ReseedMessage"]
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Recent Activity</h5>
+                <a href="/Activity" class="btn btn-sm btn-primary">View All</a>
+            </div>
+            <div class="card-body">
+                @if (Model.RecentActivity.Any())
+                {
+                    <div class="list-group">
+                        @foreach (var entry in Model.RecentActivity)
+                        {
+                            <div class="list-group-item">
+                                <div class="d-flex w-100 justify-content-between">
+                                    <div>
+                                        <span class="badge bg-secondary badge-category">@entry.Category</span>
+                                        <span class="ms-2">@entry.Message</span>
+                                    </div>
+                                    <small class="text-muted">@entry.Timestamp.ToString("HH:mm:ss")</small>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <p class="text-muted mb-0">No recent activity</p>
+                }
+            </div>
+        </div>
+    </div>
+</div>

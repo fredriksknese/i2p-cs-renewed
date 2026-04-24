@@ -1,0 +1,17 @@
+# NTCP2 Transport Implementation
+
+This directory contains the NTCP2 (NIO-based TCP version 2) transport implementation.
+
+NTCP2 is based on:
+- Noise Protocol Framework (XK pattern)
+- X25519 for key exchange
+- ChaCha20-Poly1305 for encryption
+- SHA256 for hashing
+
+Key differences from NTCP1:
+- Uses Noise XK handshake instead of DH
+- ChaCha20-Poly1305 AEAD instead of AES-CBC
+- Ephemeral key obfuscation with AES
+- Frame-based protocol with SipHash length obfuscation
+- Improved resistance to DPI and traffic analysis
+- Block-based payload format

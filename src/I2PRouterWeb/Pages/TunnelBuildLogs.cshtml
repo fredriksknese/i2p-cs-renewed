@@ -1,0 +1,76 @@
+@page
+@model I2PRouterWeb.Pages.TunnelBuildLogsModel
+@{
+    ViewData["Title"] = "Tunnel Build Logs";
+}
+
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                    <h2 class="mb-0 h4">Tunnel Build Logs</h2>
+                    <span class="badge bg-light text-primary">Last 1000 entries</span>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive" style="max-height: 80vh; overflow-y: auto;">
+                        <table class="table table-hover table-striped mb-0">
+                            <thead class="table-light sticky-top">
+                                <tr>
+                                    <th style="width: 180px;">Timestamp (UTC)</th>
+                                    <th style="width: 120px;">Pool</th>
+                                    <th style="width: 100px;">Dir</th>
+                                    <th style="width: 200px;">Tunnel ID</th>
+                                    <th>Message</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @if (Model.LogEntries != null && Model.LogEntries.Any())
+                                {
+                                    foreach (var entry in Model.LogEntries)
+                                    {
+                                        <tr>
+                                            <td class="text-nowrap small text-muted">@entry.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff")</td>
+                                            <td>
+                                                @if (!string.IsNullOrEmpty(entry.Pool))
+                                                {
+                                                    var poolClass = entry.Pool switch
+                                                    {
+                                                        "Exploratory" => "bg-info",
+                                                        "Client" => "bg-success",
+                                                        "Initial" => "bg-warning text-dark",
+                                                        "External" => "bg-secondary",
+                                                        _ => "bg-secondary"
+                                                    };
+                                                    <span class="badge @poolClass">@entry.Pool</span>
+                                                }
+                                            </td>
+                                            <td>
+                                                @if (!string.IsNullOrEmpty(entry.Direction))
+                                                {
+                                                    var dirClass = entry.Direction == "Inbound" ? "bg-primary" : "bg-dark";
+                                                    <span class="badge @dirClass">@entry.Direction</span>
+                                                }
+                                            </td>
+                                            <td><span class="badge bg-secondary font-monospace">@entry.TunnelId</span></td>
+                                            <td>@entry.Message</td>
+                                        </tr>
+                                    }
+                                }
+                                else
+                                {
+                                    <tr>
+                                        <td colspan="5" class="text-center py-4">No tunnel build logs available yet.</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="card-footer text-muted small">
+                    Showing most recent logs first.
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

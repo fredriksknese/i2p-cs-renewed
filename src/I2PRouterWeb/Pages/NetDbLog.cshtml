@@ -1,0 +1,93 @@
+@page
+@using I2PRouterWeb.Services
+@model NetDbLogModel
+@{
+    ViewData["Title"] = "NetDb Log";
+}
+
+<div class="row mb-3">
+    <div class="col-12">
+        <h1 class="mb-4">Network Database Log</h1>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Recent NetDb Events</h5>
+                <span class="badge bg-info">Auto-refresh: 5s</span>
+            </div>
+            <div class="card-body p-0">
+                @if (Model.Logs.Any())
+                {
+                    <div class="table-responsive">
+                        <table class="table table-hover table-striped mb-0">
+                            <thead>
+                                <tr>
+                                    <th style="width: 180px;">Timestamp</th>
+                                    <th style="width: 200px;">Event Type</th>
+                                    <th style="width: 150px;">Hash</th>
+                                    <th>Details</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var entry in Model.Logs)
+                                {
+                                    <tr>
+                                        <td class="text-muted small">
+                                            @entry.Timestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+                                        </td>
+                                        <td>
+                                            <span class="badge bg-@GetCategoryColor(entry.Category)">
+                                                @SplitCamelCase(entry.Category.ToString())
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <code class="text-primary">@entry.IdentHash</code>
+                                        </td>
+                                        <td>@entry.Message</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+                else
+                {
+                    <div class="p-4 text-center text-muted">
+                        <p class="mb-0">No NetDb events recorded yet.</p>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@functions {
+    private string GetCategoryColor(NetDbLogCategory category)
+    {
+        return category switch
+        {
+            NetDbLogCategory.RouterInfoDiscovered => "success",
+            NetDbLogCategory.RouterInfoExpired => "warning",
+            NetDbLogCategory.LeaseSetAnnounced => "info",
+            NetDbLogCategory.PeerHashesDiscovered => "secondary",
+            _ => "secondary"
+        };
+    }
+
+    private string SplitCamelCase(string input)
+    {
+        return System.Text.RegularExpressions.Regex.Replace(input, "([A-Z])", " $1", System.Text.RegularExpressions.RegexOptions.Compiled).Trim();
+    }
+}
+
+@section Scripts {
+    <script>
+        // Auto-refresh every 5 seconds
+        setTimeout(function() {
+            location.reload();
+        }, 5000);
+    </script>
+}

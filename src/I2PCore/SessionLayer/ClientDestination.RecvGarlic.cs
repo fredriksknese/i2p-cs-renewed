@@ -1,0 +1,142 @@
+using System;
+using System.Linq;
+using I2PCore.Data;
+using I2PCore.TransportLayer;
+using I2PCore.TunnelLayer;
+using I2PCore.TunnelLayer.I2NP.Data;
+using I2PCore.TunnelLayer.I2NP.Messages;
+using I2PCore.Utils;
+using System.Threading;
+using System.Collections.Generic;
+
+namespace I2PCore.SessionLayer
+{
+    public partial class ClientDestination : IClient
+    {
+        internal void InboundTunnel_GarlicMessageReceived( GarlicMessage msg )
+        {
+            try
+            {
+                var decr = MySessions.DecryptMessage( msg );
+                if ( decr == null )
+                {
+                    Logging.LogWarning( $"{this}: GarlicMessageReceived: Failed to decrypt garlic." );
+                    return;
+                }
+
+                HandleDecryptedGarlic( decr, null );
+            }
+            catch ( Exception ex )
+            {
+                Logging.Log( "ClientDestination GarlicDecrypt", ex );
+            }
+        }
+
+        internal void HandleDecryptedGarlic( Garlic decr, InboundTunnel from )
+        {
+            try
+            {
+#if LOG_ALL_LEASE_MGMT
+                Logging.LogDebug( $"{this}: HandleDecryptedGarlic: {decr}: {string.Join( ',', decr.Cloves.Select( c => c.Message ) ) }" );
+#endif
+                List<Tuple<DataMessage, I2PDestination>> destinationMessages = null;
+                I2PDestination lastSender = null;
+
+                foreach ( var clove in decr.Cloves )
+                {
+                    try
+                    {
+                        switch ( clove.Delivery.Delivery )
+                        {
+                            case GarlicCloveDelivery.DeliveryMethod.Local:
+#if LOG_ALL_LEASE_MGMT
+                                Logging.LogDebug(
+                                    $"{this}: HandleDecryptedGarlic: Delivered Local: {clove.Message}" );
+#endif
+                                TunnelProvider.Inst.DistributeIncomingMessage( null, clove.Message.CreateHeader16 );
+                                break;
+
+                            case GarlicCloveDelivery.DeliveryMethod.Router:
+                                var dest = ( (GarlicCloveDeliveryRouter)clove.Delivery ).Destination;
+#if LOG_ALL_LEASE_MGMT
+                                Logging.LogDebug(
+                                    $"{this}: HandleDecryptedGarlic: Delivered Router: {dest.Id32Short} {clove.Message}" );
+#endif
+                                ThreadPool.QueueUserWorkItem( a => TransportProvider.Send( dest, clove.Message ) );
+                                break;
+
+                            case GarlicCloveDelivery.DeliveryMethod.Tunnel:
+                                var tone = (GarlicCloveDeliveryTunnel)clove.Delivery;
+#if LOG_ALL_LEASE_MGMT
+                                Logging.LogDebug(
+                                    $"{this}: HandleDecryptedGarlic: " +
+                                    $"Delivered Tunnel: {tone.Destination.Id32Short} " +
+                                    $"TunnelId: {tone.Tunnel} {clove.Message}" );
+#endif
+                                ThreadPool.QueueUserWorkItem( a => TransportProvider.Send(
+                                        tone.Destination,
+                                        new TunnelGatewayMessage(
+                                            clove.Message,
+                                            tone.Tunnel ) ) );
+                                break;
+
+                            case GarlicCloveDelivery.DeliveryMethod.Destination:
+#if LOG_ALL_LEASE_MGMT
+                                Logging.LogDebug(
+                                    $"{this}: HandleDecryptedGarlic: " +
+                                    $"Delivered Destination: {clove.Message}" );
+#endif
+                                switch ( clove?.Message )
+                                {
+                                    case DatabaseStoreMessage dbsmsg when dbsmsg?.LeaseSet != null:
+                                        MySessions.RemoteIsActive( dbsmsg.LeaseSet?.Destination?.IdentHash );
+
+                                        if ( dbsmsg.LeaseSet.Expire > DateTime.UtcNow )
+                                        {
+                                            Logging.LogDebug( $"{this}: New lease set received in stream for {dbsmsg.LeaseSet.Destination} {dbsmsg.LeaseSet}." );
+                                            MySessions.LeaseSetReceived( dbsmsg.LeaseSet );
+                                            lastSender = dbsmsg.LeaseSet.Destination;
+                                            ThreadPool.QueueUserWorkItem( a => UpdateClientState() );
+                                        }
+                                        break;
+
+                                    case DataMessage dmsg when DataReceived != null:
+                                        if ( destinationMessages is null )
+                                                destinationMessages = new List<Tuple<DataMessage, I2PDestination>>();
+                                        destinationMessages.Add( new Tuple<DataMessage, I2PDestination>( dmsg, lastSender ) );
+                                        break;
+
+                                    default:
+                                        Logging.LogDebug( $"{this}: Garlic discarded {clove.Message}" );
+                                        break;
+                                }
+                                break;
+                        }
+                    }
+                    catch ( Exception ex )
+                    {
+                        Logging.Log( "ClientDestination GarlicDecrypt Clove", ex );
+                    }
+                }
+
+                if ( destinationMessages != null )
+                {
+                    ThreadPool.QueueUserWorkItem( a => 
+                    {
+                        foreach( var dmsg in destinationMessages )
+                        {
+#if LOG_ALL_LEASE_MGMT
+                            Logging.LogDebug( $"{this}: DestinationMessageReceived: {dmsg.Item1}" );
+#endif
+                            DataReceived?.Invoke( this, dmsg.Item1.DataMessagePayload, dmsg.Item2 );
+                        }
+                    } );
+                }
+            }
+            catch ( Exception ex )
+            {
+                Logging.Log( "ClientDestination HandleDecryptedGarlic", ex );
+            }
+        }
+    }
+}

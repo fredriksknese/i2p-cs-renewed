@@ -1,0 +1,251 @@
+@page
+@model RouterDetailModel
+@{
+    ViewData["Title"] = "Router Detail";
+}
+
+<div class="mb-3">
+    <a href="/Routers" class="btn btn-outline-secondary btn-sm">&larr; Back to Routers</a>
+</div>
+
+@if (!Model.Found)
+{
+    <div class="alert alert-warning">Router not found: @Model.Hash</div>
+}
+else
+{
+    <h2 class="mb-3">Router <code>@Model.Hash</code></h2>
+
+    <div class="row g-3 mb-4">
+        <div class="col-md-2">
+            <div class="card @(Model.IsConnected ? "border-success" : "")">
+                <div class="card-body py-2 text-center">
+                    @if (Model.IsConnected)
+                    {
+                        <span class="badge bg-success fs-6">@Model.Protocol</span>
+                        @if (Model.IsPQ)
+                        {
+                            <span class="badge bg-info fs-6">PQ</span>
+                        }
+                    }
+                    else
+                    {
+                        <span class="badge bg-secondary fs-6">Not Connected</span>
+                    }
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card">
+                <div class="card-body py-2 text-center">
+                    <small class="text-muted">Score</small><br>
+                    <strong>@Model.Score.ToString("F2")</strong>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card">
+                <div class="card-body py-2 text-center">
+                    <small class="text-muted">Caps</small><br>
+                    <code class="fs-6">@Model.Caps</code>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card">
+                <div class="card-body py-2 text-center">
+                    <small class="text-muted">Version</small><br>
+                    <strong>@Model.Version</strong>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card">
+                <div class="card-body py-2 text-center">
+                    <small class="text-muted">Floodfill</small><br>
+                    <strong>@(Model.IsFloodfill ? "Yes" : "No")</strong>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card">
+                <div class="card-body py-2 text-center">
+                    <small class="text-muted">Published</small><br>
+                    <small>@Model.PublishedDate.ToString("yyyy/MM/dd HH:mm")</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Identity -->
+    <div class="card mb-3">
+        <div class="card-header py-2"><strong>Identity</strong></div>
+        <div class="card-body p-0">
+            <table class="table table-sm mb-0" style="font-size:0.85rem;">
+                <tr><td class="fw-bold" style="width:200px">Full Hash</td><td><code style="word-break:break-all">@Model.FullIdentHash</code></td></tr>
+                <tr><td class="fw-bold">Signature Type</td><td>@Model.SignatureType</td></tr>
+                <tr><td class="fw-bold">Crypto Type</td><td>@Model.CryptoType</td></tr>
+                <tr><td class="fw-bold">NetId</td><td>@Model.NetId</td></tr>
+            </table>
+        </div>
+    </div>
+
+    <!-- Router Options -->
+    <div class="card mb-3">
+        <div class="card-header py-2"><strong>Router Options</strong></div>
+        <div class="card-body p-0">
+            <table class="table table-sm mb-0" style="font-size:0.85rem;">
+                @foreach (var opt in Model.Options)
+                {
+                    <tr><td class="fw-bold" style="width:200px">@opt.Key</td><td><code>@opt.Value</code></td></tr>
+                }
+            </table>
+        </div>
+    </div>
+
+    <!-- Addresses -->
+    <div class="card mb-3">
+        <div class="card-header py-2"><strong>Addresses (@Model.Addresses.Count)</strong></div>
+        <div class="card-body p-0">
+            @foreach (var addr in Model.Addresses)
+            {
+                <div class="border-bottom p-2">
+                    <div class="d-flex align-items-center mb-1">
+                        <span class="badge bg-primary me-2">@addr.Transport</span>
+                        <strong>@addr.Host:@addr.Port</strong>
+                        <span class="text-muted ms-2">(cost: @addr.Cost)</span>
+                    </div>
+                    <table class="table table-sm mb-0 ms-3" style="font-size:0.8rem;">
+                        @foreach (var opt in addr.Options)
+                        {
+                            <tr><td class="fw-bold" style="width:80px">@opt.Key</td><td><code style="word-break:break-all">@opt.Value</code></td></tr>
+                        }
+                    </table>
+                </div>
+            }
+        </div>
+    </div>
+
+    <!-- Statistics -->
+    <div class="card mb-3">
+        <div class="card-header py-2"><strong>Statistics</strong></div>
+        <div class="card-body p-0">
+            <table class="table table-sm mb-0" style="font-size:0.85rem;">
+                <tr><td class="fw-bold" style="width:250px">Last Seen</td><td>@Model.LastSeen</td></tr>
+                <tr><td class="fw-bold">Score</td><td>@Model.Score.ToString("F2")</td></tr>
+                <tr><td class="fw-bold">Successful Connects</td><td class="text-success">@Model.SuccessfulConnects</td></tr>
+                <tr><td class="fw-bold">Failed Connects</td><td class="text-danger">@Model.FailedConnects</td></tr>
+                <tr><td class="fw-bold">Successful Tunnel Member</td><td class="text-success">@Model.SuccessfulTunnelMember</td></tr>
+                <tr><td class="fw-bold">Declined Tunnel Member</td><td class="text-warning">@Model.DeclinedTunnelMember</td></tr>
+                <tr><td class="fw-bold">Tunnel Build Timeout</td><td class="text-danger">@Model.TunnelBuildTimeout</td></tr>
+                <tr><td class="fw-bold">Tunnel Build Time (ms/hop)</td><td>@Model.TunnelBuildTimeMsPerHop</td></tr>
+                <tr><td class="fw-bold">Successful Tunnel Test</td><td>@Model.SuccessfulTunnelTest</td></tr>
+                <tr><td class="fw-bold">Failed Tunnel Test</td><td>@Model.FailedTunnelTest</td></tr>
+                <tr><td class="fw-bold">Floodfill Update Success</td><td>@Model.FloodfillUpdateSuccess</td></tr>
+                <tr><td class="fw-bold">Floodfill Update Timeout</td><td>@Model.FloodfillUpdateTimeout</td></tr>
+                <tr><td class="fw-bold">Information Faulty</td><td>@Model.InformationFaulty</td></tr>
+                <tr><td class="fw-bold">Slow Handshake</td><td>@Model.SlowHandshakeConnect</td></tr>
+                <tr><td class="fw-bold">Max Bandwidth Seen</td><td>@Model.MaxBandwidthSeen.ToString("F0") bytes/s</td></tr>
+                <tr><td class="fw-bold">Is Firewalled</td><td>@Model.StatsIsFirewalled</td></tr>
+            </table>
+        </div>
+    </div>
+
+    <!-- Score Breakdown -->
+    <div class="card mb-3">
+        <div class="card-header py-2"><strong>Score Breakdown</strong></div>
+        <div class="card-body p-0">
+            <table class="table table-sm mb-0" style="font-size:0.85rem;">
+                <thead>
+                    <tr>
+                        <th style="width:250px">Component</th>
+                        <th>Score Change</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td class="fw-bold">Connection Performance</td>
+                        <td class="@(Model.ConnectScore >= 0 ? "text-success" : "text-danger")">@Model.ConnectScore.ToString("F2")</td>
+                        <td>Successful vs Failed connections & slow handshakes</td>
+                    </tr>
+                    <tr>
+                        <td class="fw-bold">Tunnel Membership</td>
+                        <td class="@(Model.TunnelMemberScore >= 0 ? "text-success" : "text-danger")">@Model.TunnelMemberScore.ToString("F2")</td>
+                        <td>Successful vs Declined tunnel build requests & timeouts</td>
+                    </tr>
+                    <tr>
+                        <td class="fw-bold">Floodfill Reliability</td>
+                        <td class="@(Model.FloodfillScore >= 0 ? "text-success" : "text-danger")">@Model.FloodfillScore.ToString("F2")</td>
+                        <td>Successful vs Failed Database Store operations</td>
+                    </tr>
+                    <tr>
+                        <td class="fw-bold">Tunnel Testing</td>
+                        <td class="@(Model.TunnelTestScore >= 0 ? "text-success" : "text-danger")">@Model.TunnelTestScore.ToString("F2")</td>
+                        <td>Successful vs Failed tunnel tests through this router</td>
+                    </tr>
+                    <tr>
+                        <td class="fw-bold">Ident Resolution</td>
+                        <td class="@(Model.IdentResolveScore >= 0 ? "text-success" : "text-danger")">@Model.IdentResolveScore.ToString("F2")</td>
+                        <td>NetDb lookup success rate</td>
+                    </tr>
+                    <tr>
+                        <td class="fw-bold">Firewall Penalty</td>
+                        <td class="text-danger">@((Model.FirewallPenalty * -1).ToString("F2"))</td>
+                        <td>Fixed penalty for firewalled routers</td>
+                    </tr>
+                    <tr>
+                        <td class="fw-bold">Bandwidth Bonus</td>
+                        <td class="text-success">@Model.BandwidthBonus.ToString("F2")</td>
+                        <td>Relative bandwidth contribution</td>
+                    </tr>
+                    <tr>
+                        <td class="fw-bold">Build Time Penalty</td>
+                        <td class="text-danger">@((Model.BuildTimePenalty * -1).ToString("F2"))</td>
+                        <td>Penalty for slow tunnel build times</td>
+                    </tr>
+                    <tr>
+                        <td class="fw-bold">Info Faulty Penalty</td>
+                        <td class="text-danger">@((Model.InfoFaultyPenalty * -1).ToString("F2"))</td>
+                        <td>Penalty for reported incorrect router info</td>
+                    </tr>
+                    <tr class="table-light">
+                        <td class="fw-bold">Total Score</td>
+                        <td class="fw-bold @(Model.Score >= 0 ? "text-success" : "text-danger")">@Model.Score.ToString("F2")</td>
+                        <td>Final selection weight</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Tunnel Participation -->
+    @if (Model.Tunnels.Any())
+    {
+        <div class="card mb-3">
+            <div class="card-header py-2"><strong>Tunnel Participation (@Model.Tunnels.Count)</strong></div>
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0" style="font-size:0.85rem;">
+                    <thead><tr><th>Tunnel</th><th>Direction</th><th>Pool</th><th>Active</th></tr></thead>
+                    <tbody>
+                        @foreach (var t in Model.Tunnels)
+                        {
+                            <tr>
+                                <td><code>@t.TunnelId</code></td>
+                                <td>@t.Direction</td>
+                                <td>@t.Pool</td>
+                                <td>@(t.IsActive ? "Active" : "Inactive")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+}
+
+@section Scripts {
+    <script>
+        setTimeout(function() { location.reload(); }, 10000);
+    </script>
+}

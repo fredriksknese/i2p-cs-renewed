@@ -1,0 +1,159 @@
+@page
+@model RoutersModel
+@{
+    ViewData["Title"] = "Known Routers";
+}
+
+<div class="row mb-3">
+    <div class="col-12">
+        <h1 class="mb-2">Known Routers</h1>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-2">
+        <div class="card stat-card">
+            <div class="card-body py-2">
+                <h6 class="card-subtitle mb-1 text-muted small">Total Routers</h6>
+                <h3 class="mb-0">@Model.TotalRouters</h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card stat-card">
+            <div class="card-body py-2">
+                <h6 class="card-subtitle mb-1 text-muted small">Connected</h6>
+                <h3 class="mb-0 text-success">@Model.ConnectedCount</h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card stat-card">
+            <div class="card-body py-2">
+                <h6 class="card-subtitle mb-1 text-muted small">Floodfills</h6>
+                <h3 class="mb-0 text-info">@Model.FloodfillCount</h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card stat-card">
+            <div class="card-body py-2">
+                <h6 class="card-subtitle mb-1 text-muted small">NTCP2</h6>
+                <h3 class="mb-0 text-primary">@Model.Ntcp2Count</h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card stat-card">
+            <div class="card-body py-2">
+                <h6 class="card-subtitle mb-1 text-muted small">SSU2</h6>
+                <h3 class="mb-0 text-primary">@Model.Ssu2Count</h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card stat-card">
+            <div class="card-body py-2">
+                <h6 class="card-subtitle mb-1 text-muted small">Updated</h6>
+                <p class="mb-0 small">@DateTime.Now.ToString("HH:mm:ss")</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-3">
+    <div class="col-12">
+        <form method="get" class="row g-2 align-items-end">
+            <div class="col-md-8">
+                <input type="text" class="form-control form-control-sm" name="search"
+                       value="@Model.SearchQuery" placeholder="Search by hash or IP...">
+            </div>
+            <div class="col-md-2">
+                <button type="submit" class="btn btn-primary btn-sm w-100">Search</button>
+            </div>
+            <div class="col-md-2">
+                <a href="/Routers" class="btn btn-outline-secondary btn-sm w-100">Clear</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header py-2">
+                <strong>All Routers (@Model.Routers.Count)</strong>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover table-striped table-sm mb-0" style="font-size: 0.8rem;">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>Hash</th>
+                                <th>Host:Port</th>
+                                <th>Caps</th>
+                                <th>Ver</th>
+                                <th>FF</th>
+                                <th>Transports</th>
+                                <th>Connection</th>
+                                <th>Score</th>
+                                <th>Connects OK/Fail</th>
+                                <th>Tunnels OK/Reject/Timeout</th>
+                                <th>Addrs</th>
+                                <th>Published</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var r in Model.Routers)
+                            {
+                                <tr class="@(r.IsConnected ? "table-success" : "")">
+                                    <td class="router-hash">
+                                        <a href="/RouterDetail?hash=@r.Hash" class="text-decoration-none">@r.Hash</a>
+                                    </td>
+                                    <td class="text-nowrap">@r.Host:@r.Port</td>
+                                    <td><code>@r.Caps</code></td>
+                                    <td>@r.Version</td>
+                                    <td>@(r.IsFloodfill ? "Y" : "")</td>
+                                    <td>
+                                        @foreach (var t in r.Transports)
+                                        {
+                                            <span class="badge bg-secondary me-1">@t</span>
+                                        }
+                                    </td>
+                                    <td>
+                                        @if (r.IsConnected)
+                                        {
+                                            <span class="badge bg-success">@r.Protocol</span>
+                                            @if (r.IsPQ)
+                                            {
+                                                <span class="badge bg-info">PQ</span>
+                                            }
+                                        }
+                                    </td>
+                                    <td>@r.Score.ToString("F1")</td>
+                                    <td class="text-nowrap">
+                                        <span class="text-success">@r.SuccessfulConnects</span> /
+                                        <span class="text-danger">@r.FailedConnects</span>
+                                    </td>
+                                    <td class="text-nowrap">
+                                        <span class="text-success">@r.SuccessfulTunnelMember</span> /
+                                        <span class="text-warning">@r.DeclinedTunnelMember</span> /
+                                        <span class="text-danger">@r.TunnelBuildTimeout</span>
+                                    </td>
+                                    <td>@r.AddressCount</td>
+                                    <td class="text-nowrap text-muted">@r.PublishedDate.ToString("MM/dd HH:mm")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        setTimeout(function() { location.reload(); }, 15000);
+    </script>
+}

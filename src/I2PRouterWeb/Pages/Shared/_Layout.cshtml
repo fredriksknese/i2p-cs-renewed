@@ -1,0 +1,108 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@ViewData["Title"] - I2P Router Console</title>
+    <script type="importmap"></script>
+    <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" />
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/I2PRouterWeb.styles.css" asp-append-version="true" />
+    <style>
+        .navbar-brand {
+            font-weight: bold;
+        }
+        .stat-card {
+            border-left: 4px solid #0d6efd;
+        }
+        .activity-log {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .badge-category {
+            min-width: 80px;
+        }
+        .tunnel-chain {
+            font-family: monospace;
+            font-size: 0.85rem;
+        }
+        .router-hash {
+            font-family: monospace;
+            font-size: 0.85rem;
+            word-break: break-all;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+            <div class="container-fluid">
+                <a class="navbar-brand" asp-page="/Index">I2P Router Console</a>
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <div class="collapse navbar-collapse" id="navbarNav">
+                    <ul class="navbar-nav">
+                        <li class="nav-item">
+                            <a class="nav-link" asp-page="/Index">Dashboard</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" asp-page="/Tunnels">Tunnels</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" asp-page="/Transit">Transit</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" asp-page="/Routers">Routers</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" asp-page="/Transports">Transports</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" asp-page="/LeaseSets">Lease Sets</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" asp-page="/NetDbLookup">NetDB Lookup</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" asp-page="/NetDbLog">NetDb Log</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" asp-page="/TunnelBuildLogs">Build Logs</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" asp-page="/ConnectionLogs">Conn Logs</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" asp-page="/HttpProxyLogs">Proxy Logs</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" asp-page="/Activity">Activity</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" asp-page="/Settings">Settings</a>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </nav>
+    </header>
+    <div class="container-fluid mt-4">
+        <main role="main" class="pb-3">
+            @RenderBody()
+        </main>
+    </div>
+
+    <footer class="border-top footer text-muted mt-5">
+        <div class="container-fluid">
+            &copy; 2026 - I2P Router Web Console
+        </div>
+    </footer>
+
+    <script src="~/lib/jquery/dist/jquery.min.js"></script>
+    <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="~/js/site.js" asp-append-version="true"></script>
+
+    @await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>
