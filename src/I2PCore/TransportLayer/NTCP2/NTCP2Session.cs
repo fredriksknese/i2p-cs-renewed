@@ -145,45 +145,54 @@ namespace I2PCore.TransportLayer.NTCP2
             if (State != NTCP2SessionState.Initial)
                 throw new InvalidOperationException($"Cannot connect from state {State}");
 
-            try
+            // Perform connection in background to avoid blocking the caller (e.g. NetDb thread)
+            Task.Run(() =>
             {
-                // Extract endpoint from RouterInfo
-                var endpoint = ExtractRemoteEndpoint();
-
-                // Create TCP connection (optionally through SOCKS5 proxy)
-                TcpClient = new TcpClient();
-
-                if ( Socks5Client.UsingProxy )
+                try
                 {
-                    Socks5Client.ConnectThroughProxy( TcpClient, endpoint );
-                    Logging.LogDebug( $"{DebugId}: TCP connected to {endpoint} via SOCKS5 proxy" );
-                    TransportConnectionLogger.Inst.Log($"TCP connected to {endpoint} via SOCKS5 proxy", RemoteRouterInfo?.Identity?.IdentHash?.Id32Short, "NTCP2", "Outbound");
+                    // Extract endpoint from RouterInfo
+                    var endpoint = ExtractRemoteEndpoint();
+
+                    // Create TCP connection (optionally through SOCKS5 proxy)
+                    TcpClient = new TcpClient();
+
+                    if (Socks5Client.UsingProxy)
+                    {
+                        Socks5Client.ConnectThroughProxy(TcpClient, endpoint);
+                        Logging.LogDebug($"{DebugId}: TCP connected to {endpoint} via SOCKS5 proxy");
+                        TransportConnectionLogger.Inst.Log($"TCP connected to {endpoint} via SOCKS5 proxy", RemoteRouterInfo?.Identity?.IdentHash?.Id32Short, "NTCP2", "Outbound");
+                    }
+                    else
+                    {
+                        // Use a reasonable timeout for TCP connection (e.g. 10s)
+                        var connectTask = TcpClient.ConnectAsync(endpoint.Address, endpoint.Port);
+                        if (!connectTask.Wait(10000))
+                        {
+                            throw new TimeoutException($"TCP connection to {endpoint} timed out after 10s");
+                        }
+                        Logging.LogDebug($"{DebugId}: TCP connected to {endpoint}");
+                        TransportConnectionLogger.Inst.Log($"TCP connected to {endpoint}", RemoteRouterInfo?.Identity?.IdentHash?.Id32Short, "NTCP2", "Outbound");
+                    }
+
+                    // Initialize Noise protocol as Alice (initiator)
+                    InitializeNoiseAsAlice();
+
+                    // Send SessionRequest
+                    SendSessionRequest();
+
+                    State = NTCP2SessionState.SessionRequestSent;
+
+                    // Start receiving responses
+                    StartReceiveLoop();
                 }
-                else
+                catch (Exception ex)
                 {
-                    TcpClient.Connect( endpoint );
-                    Logging.LogDebug( $"{DebugId}: TCP connected to {endpoint}" );
-                    TransportConnectionLogger.Inst.Log($"TCP connected to {endpoint}", RemoteRouterInfo?.Identity?.IdentHash?.Id32Short, "NTCP2", "Outbound");
+                    Logging.LogWarning($"{DebugId}: Connect failed: {ex.Message}");
+                    TransportConnectionLogger.Inst.Log($"Connect failed: {ex.Message}", RemoteRouterInfo?.Identity?.IdentHash?.Id32Short, "NTCP2", "Outbound");
+                    ConnectionException?.Invoke(this, ex);
+                    Terminate($"Connect failed: {ex.Message}");
                 }
-
-                // Initialize Noise protocol as Alice (initiator)
-                InitializeNoiseAsAlice();
-
-                // Send SessionRequest
-                SendSessionRequest();
-
-                State = NTCP2SessionState.SessionRequestSent;
-
-                // Start receiving responses
-                StartReceiveLoop();
-            }
-            catch (Exception ex)
-            {
-                Logging.LogWarning($"{DebugId}: Connect failed: {ex}");
-                TransportConnectionLogger.Inst.Log($"Connect failed: {ex.Message}", RemoteRouterInfo?.Identity?.IdentHash?.Id32Short, "NTCP2", "Outbound");
-                ConnectionException?.Invoke(this, ex);
-                Terminate();
-            }
+            });
         }
 
         public void Send(I2NpMessage msg)

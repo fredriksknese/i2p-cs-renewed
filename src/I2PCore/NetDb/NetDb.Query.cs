@@ -249,33 +249,78 @@ namespace I2PCore
         public IEnumerable<I2PIdentHash> GetClosestFloodfill(
                 I2PIdentHash dest,
                 int count,
-                ICollection<I2PIdentHash> exclude )
+                ICollection<I2PIdentHash> exclude,
+                bool useIpDiversity = false )
         {
-            return GetClosestFloodfill( dest, DateTime.UtcNow, count, exclude );
+            return GetClosestFloodfill( dest, DateTime.UtcNow, count, exclude, useIpDiversity );
         }
 
         public IEnumerable<I2PIdentHash> GetClosestFloodfill(
                 I2PIdentHash dest,
                 DateTime targetDate,
                 int count,
-                ICollection<I2PIdentHash> exclude )
+                ICollection<I2PIdentHash> exclude,
+                bool useIpDiversity = false )
         {
-            var subset = ( exclude != null && exclude.Any() )
-                ? FloodfillInfos.Where( inf => !exclude.Contains( inf.Key ) )
-                : FloodfillInfos;
+            var subset = FloodfillInfos.Where( inf => 
+                ( exclude == null || !exclude.Contains( inf.Key ) ) &&
+                !Statistics.NodeInactive( Statistics[inf.Key] ) );
+
+            if ( !subset.Any() )
+            {
+                subset = ( exclude != null && exclude.Any() )
+                    ? FloodfillInfos.Where( inf => !exclude.Contains( inf.Key ) )
+                    : FloodfillInfos;
+            }
 
             var refkey = dest.GetRoutingKey( targetDate );
 
-            return subset
+            var sorted = subset
                 .Select( ri => new
                 {
                     Id = ri.Key,
                     Dist = ri.Key ^ refkey,
                 } )
-                .OrderBy( p => p.Dist )
-                .Take( count )
-                .Select( p => p.Id )
-                .ToArray();
+                .OrderBy( p => p.Dist );
+
+            if ( !useIpDiversity )
+            {
+                return sorted
+                    .Take( count )
+                    .Select( p => p.Id )
+                    .ToArray();
+            }
+
+            var result = new List<I2PIdentHash>();
+            var usedSubnets = new HashSet<uint>();
+
+            foreach ( var p in sorted )
+            {
+                var subnet = GetIpSubnet( p.Id );
+                if ( subnet == 0 || usedSubnets.Add( subnet ) )
+                {
+                    result.Add( p.Id );
+                    if ( result.Count >= count ) break;
+                }
+            }
+
+            return result;
+        }
+
+        private static uint GetIpSubnet( I2PIdentHash ih )
+        {
+            var ri = NetDb.Inst[ih];
+            if ( ri == null ) return 0;
+            foreach ( var addr in ri.Addresses )
+            {
+                var ip = addr.Host;
+                if ( ip != null && ip.AddressFamily == AddressFamily.InterNetwork )
+                {
+                    var bytes = ip.GetAddressBytes();
+                    return (uint)( ( bytes[0] << 24 ) | ( bytes[1] << 16 ) | ( bytes[2] << 8 ) );
+                }
+            }
+            return 0;
         }
 
         public IEnumerable<I2PRouterInfo> GetClosestFloodfillInfo(

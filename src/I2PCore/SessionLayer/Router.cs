@@ -67,6 +67,9 @@ namespace I2PCore.SessionLayer
                     _transitTunnelMgr = new TransitTunnelProvider( TunnelProvider.Inst );
 
                     _floodfillServer = new FloodfillServer();
+                    _floodfillServer.DatabaseLookupReceived += ( lookup, from, result ) =>
+                        NetDb.Inst?.InvokeDatabaseLookupReceived( lookup, from, result );
+
                     if ( rci.FloodfillEnabled )
                     {
                         _floodfillServer.Start();
@@ -495,7 +498,7 @@ namespace I2PCore.SessionLayer
         {
             if ( RouterContext.Inst.FloodfillEnabled && _floodfillServer != null )
             {
-                _floodfillServer.HandleDatabaseLookup( dlm );
+                _floodfillServer.HandleDatabaseLookup( dlm, from?.Destination );
                 return;
             }
 

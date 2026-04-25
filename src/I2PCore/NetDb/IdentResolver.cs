@@ -20,10 +20,26 @@ namespace I2PCore
 {
     public class IdentResolver
     {
+        public class XORComparator : IComparer<I2PIdentHash>
+        {
+            private readonly I2PRoutingKey _routingKey;
+            public XORComparator( I2PRoutingKey routingKey ) => _routingKey = routingKey;
+            public int Compare( I2PIdentHash x, I2PIdentHash y )
+            {
+                if ( ReferenceEquals( x, y ) ) return 0;
+                if ( x is null ) return -1;
+                if ( y is null ) return 1;
+                var dx = x ^ _routingKey;
+                var dy = y ^ _routingKey;
+                var cmp = dx.CompareTo( dy );
+                return cmp != 0 ? cmp : x.CompareTo( y );
+            }
+        }
+
         public const int DatabaseLookupRetriesRi = 4;
         public const int DatabaseLookupRetriesLs = 20;
         public const int DatabaseLookupSelectFloodfillCountRi = 3;
-        public const int DatabaseLookupSelectFloodfillCountLs = 3;
+        public const int DatabaseLookupSelectFloodfillCountLs = 6;
         public static TickSpan WaitForRouterInfo = TickSpan.Seconds( 10 );
         public static TickSpan WaitForLeaseSet = TickSpan.Seconds( 10 );
 
@@ -46,11 +62,12 @@ namespace I2PCore
         public event IdentResolverResultRouterInfoEx RouterInfoReceivedEx;
         public event IdentResolverResultLeaseSetEx LeaseSetReceivedEx;
 
-        public enum ReceivedFloodfillResponses { NoResponse, Timeout, SearchReply, DatabaseStore }
+        public enum ReceivedFloodfillResponses { NoResponse, Timeout, SearchReply, DatabaseStore, SendFailed }
         public class FloodfillResponse
         {
             public ReceivedFloodfillResponses Response = ReceivedFloodfillResponses.NoResponse;
             public I2PIdentHash Floodfill;
+            public string Details;
         }
 
         public class LookupAttempt
@@ -74,8 +91,15 @@ namespace I2PCore
             public SessionLayer.ClientDestination ClientContext;
 
             public int Retries;
+            public int? ParallelQueries;
+            public bool UseDirectQueries;
             public ConcurrentDictionary<I2PIdentHash,FloodfillResponse> FloodfillResponses { get; set; }
             public List<LookupAttempt> Attempts = new();
+
+            public SortedSet<I2PIdentHash> ToTry;
+            public ConcurrentDictionary<I2PIdentHash, byte> PendingRi = new();
+            public ConcurrentDictionary<I2PIdentHash, TickCounter> UnheardFrom = new();
+            public HashSet<I2PIdentHash> FailedPeers = new();
 
             public static TimeWindowDictionary<I2PIdentHash,object> AlreadyQueried = new(TickSpan.Minutes(3));
 
@@ -87,6 +111,8 @@ namespace I2PCore
                 LookupIdent = id;
                 LookupType = lookuptype;
                 Retries = 0;
+
+                ToTry = new SortedSet<I2PIdentHash>( new XORComparator( id.RoutingKey ) );
 
                 switch ( lookuptype )
                 {
@@ -156,6 +182,7 @@ namespace I2PCore
 
         private ConcurrentDictionary<I2PIdentHash, IdentUpdateRequestInfo> OutstandingQueries = new();
         private TimeWindowDictionary<I2PIdentHash, IdentUpdateRequestInfo> FinishedLookups = new( TickSpan.Minutes( 5 ) );
+        private ConcurrentDictionary<I2PIdentHash, ConcurrentBag<IdentUpdateRequestInfo>> WaitingForRi = new();
 
         public IdentUpdateRequestInfo GetQueryInfo( I2PIdentHash key )
         {
@@ -202,7 +229,7 @@ namespace I2PCore
             return true;
         }
 
-        public bool LookupLeaseSet( I2PIdentHash ident, ClientDestination clientContext = null )
+        public bool LookupLeaseSet( I2PIdentHash ident, ClientDestination clientContext = null, int? parallelQueries = null, bool useDirectQueries = false )
         {
             bool inprogress = true;
 
@@ -215,7 +242,9 @@ namespace I2PCore
                                 ident,
                                 DatabaseLookupMessage.LookupTypes.LeaseSet )
                         {
-                            ClientContext = clientContext
+                            ClientContext = clientContext,
+                            ParallelQueries = parallelQueries,
+                            UseDirectQueries = useDirectQueries
                         };
                     } );
 
@@ -234,19 +263,38 @@ namespace I2PCore
         private void NetDb_DatabaseSearchReplies( DatabaseSearchReplyMessage dsm )
         {
             if ( dsm == null || dsm.From == null ) return;
+
+            if ( !OutstandingQueries.TryGetValue( dsm.Key, out var info ) )
+            {
+                return;
+            }
+            
+            info.UnheardFrom.TryRemove( dsm.From, out _ );
+
             var peerCount = dsm.Peers?.Count ?? 0;
             var newCount = 0;
-
-            Logging.LogDebug( $"IdentResolver: SearchReply for {dsm.Key.Id32Short} from {dsm.From.Id32Short}: {peerCount} peers" );
+            var addedCount = 0;
+            var alreadyTriedCount = 0;
 
             foreach ( var router in dsm.Peers )
             {
-                if ( NetDb.Inst.Contains( router ) )
+                if ( !NetDb.Inst.Contains( router ) )
                 {
-                    continue;
+                    newCount++;
+                    LookupRouterInfo( router );
                 }
-                newCount++;
-                LookupRouterInfo( router );
+
+                if ( !info.FloodfillResponses.ContainsKey( router ) &&
+                     !info.FailedPeers.Contains( router ) &&
+                     !info.PendingRi.ContainsKey( router ) )
+                {
+                    lock ( info.ToTry ) info.ToTry.Add( router );
+                    addedCount++;
+                }
+                else
+                {
+                    alreadyTriedCount++;
+                }
             }
 
             if ( newCount > 0 )
@@ -254,70 +302,33 @@ namespace I2PCore
                 Logging.LogInformation( $"IdentResolver: Exploration found {newCount} new routers (of {peerCount} total) from {dsm.From.Id32Short}" );
             }
 
-            if ( !OutstandingQueries.TryGetValue( dsm.Key, out var info ) ) return;
+            var dist = dsm.From ^ info.LookupIdent.RoutingKey;
+            var distStr = BufUtils.ToBase32String( dist ).Substring( 0, 8 );
 
-            var isleaseset = info.LookupType == DatabaseLookupMessage.LookupTypes.LeaseSet;
+            var detailParts = new List<string>();
+            detailParts.Add( $"Dist: {distStr}" );
+            if ( peerCount == 0 ) detailParts.Add( "not found, 0 peers returned" );
+            else
+            {
+                detailParts.Add( $"{peerCount} peers" );
+                if ( addedCount > 0 ) detailParts.Add( $"{addedCount} new" );
+                if ( alreadyTriedCount > 0 ) detailParts.Add( $"{alreadyTriedCount} already tried" );
+            }
+            var details = string.Join( ", ", detailParts );
 
             // Collect router performance
-            if ( info.FloodfillResponses.TryGetValue( dsm.From, out var resp )
-                    && resp.Response == ReceivedFloodfillResponses.NoResponse )
+            NetDb.Inst.Statistics.IdentResolveReply( dsm.From );
+
+            var update = new FloodfillResponse()
             {
-                NetDb.Inst.Statistics.IdentResolveReply( dsm.From );
-
-                var update = new FloodfillResponse()
-                {
-                    Floodfill = dsm.From,
-                    Response = ReceivedFloodfillResponses.SearchReply
-                };
-                lock ( info.Attempts )
-                {
-                    if ( info.Attempts.Any() ) info.Attempts.Last().FloodfillResponses[dsm.From] = update;
-                }
-            }
-            else
+                Floodfill = dsm.From,
+                Response = ReceivedFloodfillResponses.SearchReply,
+                Details = details
+            };
+            info.FloodfillResponses[dsm.From] = update;
+            lock ( info.Attempts )
             {
-                // Response from someone we didn't directly query (or already recorded)?
-                // Just record it and continue without failing others.
-                var update = new FloodfillResponse()
-                {
-                    Floodfill = dsm.From,
-                    Response = ReceivedFloodfillResponses.SearchReply
-                };
-                info.FloodfillResponses[dsm.From] = update;
-                lock ( info.Attempts )
-                {
-                    if ( info.Attempts.Any() ) info.Attempts.Last().FloodfillResponses[dsm.From] = update;
-                }
-            }
-
-            ++info.Retries;
-
-            if ( info.Retries <= ( isleaseset ? DatabaseLookupRetriesLs : DatabaseLookupRetriesRi ) )
-            {
-#if LOG_ALL_IDENT_LOOKUPS
-                Logging.Log( string.Format( "IdentResolver: Lookup of {0} {1} resulted in alternative servers to query '{2}'. Retrying.",
-                    ( isleaseset ? "LeaseSet" : "RouterInfo" ),
-                    dsm.Key.Id32Short, peerCount ) );
-#endif
-
-                if ( isleaseset )
-                {
-                    SendLsDatabaseLookup( info.LookupIdent, info );
-                }
-                else
-                {
-                    SendRiDatabaseLookup( info.LookupIdent, info );
-                }
-            }
-            else
-            {
-                Logging.Log( string.Format( "IdentResolver: Lookup of {0} {1} resulted in alternative servers to query '{2}'. Lookup failed.",
-                    ( isleaseset ? "LeaseSet" : "RouterInfo" ),
-                    dsm.Key.Id32Short, peerCount ) );
-
-                OutstandingQueries.TryRemove( dsm.Key, out _ );
-                FinishedLookups[dsm.Key] = info;
-                if ( LookupFailure != null ) ThreadPool.QueueUserWorkItem( a => LookupFailure( dsm.Key ) );
+                if ( info.Attempts.Any() ) info.Attempts.Last().FloodfillResponses[dsm.From] = update;
             }
         }
 
@@ -357,7 +368,11 @@ namespace I2PCore
                 Logging.LogDebug( $"IdentResolver: Lookup of LeaseSet " +
                     $"{ls} succeeded, but has expired. {info.Start.DeltaToNow}" );
 
-                SendRetries( new IdentUpdateRequestInfo[] { info } );
+                // Put back in OutstandingQueries and keep trying
+                if ( OutstandingQueries.TryAdd( ls.Destination.IdentHash, info ) )
+                {
+                    StartMoreQueries( info );
+                }
 
                 return;
             }
@@ -371,11 +386,26 @@ namespace I2PCore
 
         private void NetDb_RouterInfoUpdates( I2PRouterInfo ri )
         {
-            if ( !OutstandingQueries.TryRemove( ri.Identity.IdentHash, out var info ) )
+            var ident = ri.Identity.IdentHash;
+
+            // Resume any lookups waiting for this RI
+            if ( WaitingForRi.TryRemove( ident, out var lookups ) )
+            {
+                foreach ( var lookup in lookups )
+                {
+                    if ( !OutstandingQueries.ContainsKey( lookup.LookupIdent ) ) continue;
+
+                    lookup.PendingRi.TryRemove( ident, out _ );
+                    lock ( lookup.ToTry ) lookup.ToTry.Add( ident );
+                    StartMoreQueries( lookup );
+                }
+            }
+
+            if ( !OutstandingQueries.TryRemove( ident, out var info ) )
             {
                 return;
             }
-            FinishedLookups[ri.Identity.IdentHash] = info;
+            FinishedLookups[ident] = info;
 
             // Collect router performance
             var noresponse = info.FloodfillResponses
@@ -416,208 +446,246 @@ namespace I2PCore
         private void SendRiDatabaseLookup( I2PIdentHash ident, IdentUpdateRequestInfo info )
         {
             var excluded = IdentUpdateRequestInfo.AlreadyQueried.Select( d => d.Key ).ToHashSet();
-
-            // For firewalled routers, prefer connected floodfills for direct delivery
-            var connectedRouters = TransportProvider.Inst.GetConnectedRouterHashes().ToHashSet();
             var allFf = NetDb.Inst.GetClosestFloodfill(
-                ident, 10 + 3 * info.Retries, excluded );
+                ident, 10 + 3 * info.Retries, excluded, true );
 
-            if ( !allFf.Any() )
+            lock ( info.ToTry )
             {
-                var err = $"failed to find a floodfill router to lookup ({ident.Id32Short})";
-                Logging.Log( $"IdentResolver: {err}" );
-                info.RecordError( err );
-                return;
+                foreach ( var ff in allFf ) info.ToTry.Add( ff );
             }
 
-            // Always try to use exploratory tunnels first (even when firewalled).
-            // Only fall back to direct transport if no tunnels are available.
+            StartMoreQueries( info );
+        }
+
+        private void SendOneRiDatabaseLookup( IdentUpdateRequestInfo info, I2PIdentHash oneff )
+        {
+            var ident = info.LookupIdent;
+            var excluded = IdentUpdateRequestInfo.AlreadyQueried.Select( d => d.Key ).ToHashSet();
+            var connectedRouters = TransportProvider.Inst.GetConnectedRouterHashes().ToHashSet();
+
             var outtunnel = TunnelProvider.Inst.GetEstablishedOutboundTunnel( TunnelPoolSelection.RequireExploratory )
                 ?? TunnelProvider.Inst.GetEstablishedOutboundTunnel( TunnelPoolSelection.AllowExploratory );
             var replytunnel = TunnelProvider.Inst.GetEstablishedInboundTunnel( TunnelPoolSelection.RequireExploratory )
                 ?? TunnelProvider.Inst.GetEstablishedInboundTunnel( TunnelPoolSelection.AllowExploratory );
             bool useTunnels = outtunnel != null && replytunnel != null;
 
-            // Prefer connected floodfills for reliable delivery
-            I2PIdentHash[] ff;
-            if ( RouterContext.Inst.IsFirewalled && !useTunnels )
+            try
             {
-                var connFf = allFf.Where( f => connectedRouters.Contains( f ) ).ToArray();
-                ff = connFf.Length > 0
-                    ? new[] { connFf[BufUtils.RandomInt( connFf.Length )] }
-                    : BufUtils.Shuffle( allFf ).Take( DatabaseLookupSelectFloodfillCountRi ).ToArray();
-            }
-            else
-            {
-                ff = BufUtils.Shuffle( allFf ).Take( DatabaseLookupSelectFloodfillCountRi ).ToArray();
-            }
+                DatabaseLookupMessage msg;
 
-            foreach ( var oneff in ff )
-            {
-                try
-                {
-                    DatabaseLookupMessage msg;
+                info.UnheardFrom[oneff] = TickCounter.Now;
+                var dist = oneff ^ info.LookupIdent.RoutingKey;
+                var distStr = BufUtils.ToBase32String( dist ).Substring( 0, 8 );
 
-                    if ( useTunnels )
-                    {
-                        msg = new DatabaseLookupMessage(
-                            ident,
-                            replytunnel.Destination,
-                            replytunnel.GatewayTunnelId,
-                            DatabaseLookupMessage.LookupTypes.RouterInfo,
-                            excluded );
-                        outtunnel.Send( new TunnelMessageRouter( msg, oneff ) );
-                    }
-                    else if ( connectedRouters.Contains( oneff ) )
-                    {
-                        // Direct to connected floodfill - reply on same connection
-                        msg = new DatabaseLookupMessage(
-                            ident,
-                            RouterContext.Inst.MyRouterIdentity.IdentHash,
-                            DatabaseLookupMessage.LookupTypes.RouterInfo,
-                            excluded );
-                        TransportProvider.Send( oneff, msg );
-                    }
-                    else
-                    {
-                        // Direct to unconnected floodfill - less reliable
-                        msg = new DatabaseLookupMessage(
-                            ident,
-                            RouterContext.Inst.MyRouterIdentity.IdentHash,
-                            DatabaseLookupMessage.LookupTypes.RouterInfo,
-                            excluded );
-                        TransportProvider.Send( oneff, msg );
-                    }
-                }
-                catch ( Exception ex )
+                var resp = new FloodfillResponse { Floodfill = oneff, Details = $"Dist: {distStr}" };
+                info.FloodfillResponses[oneff] = resp;
+
+                lock ( info.Attempts )
                 {
-                    Logging.Log( "SendRIDatabaseLookup", ex );
+                    var lastAttempt = info.Attempts.LastOrDefault();
+                    if ( lastAttempt == null || lastAttempt.Details != null ||
+                         lastAttempt.OutboundTunnelGateway != outtunnel?.Destination ||
+                         lastAttempt.InboundTunnelGateway != replytunnel?.Destination )
+                    {
+                        lastAttempt = new LookupAttempt
+                        {
+                            OutboundTunnelGateway = outtunnel?.Destination,
+                            OutboundTunnelId = outtunnel?.SendTunnelId is not null ? (uint)outtunnel.SendTunnelId : (uint?)null,
+                            InboundTunnelGateway = replytunnel?.Destination,
+                            InboundTunnelId = replytunnel?.GatewayTunnelId is not null ? (uint)replytunnel.GatewayTunnelId : (uint?)null,
+                        };
+                        info.Attempts.Add( lastAttempt );
+                    }
+                    lastAttempt.FloodfillResponses[oneff] = resp;
                 }
 
+                if ( useTunnels )
+                {
+                    msg = new DatabaseLookupMessage(
+                        ident,
+                        replytunnel.Destination,
+                        replytunnel.GatewayTunnelId,
+                        DatabaseLookupMessage.LookupTypes.RouterInfo,
+                        excluded );
+                    outtunnel.Send( new TunnelMessageRouter( msg, oneff ) );
+                }
+                else
+                {
+                    msg = new DatabaseLookupMessage(
+                        ident,
+                        RouterContext.Inst.MyRouterIdentity.IdentHash,
+                        DatabaseLookupMessage.LookupTypes.RouterInfo,
+                        excluded );
+
+                    if ( !TransportProvider.Send( oneff, msg ) )
+                    {
+                        resp.Response = ReceivedFloodfillResponses.SendFailed;
+                        resp.Details = "TransportProvider.Send returned false (unresolvable or connection failed)";
+                        info.UnheardFrom.TryRemove( oneff, out _ );
+                        info.FailedPeers.Add( oneff );
+                    }
+                }
                 IdentUpdateRequestInfo.AlreadyQueried[oneff] = 1;
-            }
 
-            info.StartLookup( ff, outtunnel, replytunnel );
+                Logging.LogInformation( $"IdentResolver: RI lookup {ident.Id32Short} -> ff {oneff.Id32Short} ({( useTunnels ? "tunnel" : "direct" )})" );
+            }
+            catch ( Exception ex )
+            {
+                Logging.Log( "SendOneRiDatabaseLookup", ex );
+            }
         }
 
         private void SendLsDatabaseLookup( I2PIdentHash ident, IdentUpdateRequestInfo info )
         {
-            // LeaseSet lookups MUST ALWAYS go through tunnels - NEVER direct transport.
-            // Direct contact with floodfills for LS lookups is a deanonymization vulnerability.
-            //
-            // Java I2P IterativeSearchJob.sendQuery() always:
-            // 1. Sets reply encryption (session key + ratchet tag) on the DLM
-            // 2. Garlic-wraps the DLM to the floodfill's ECIES public key
-            // Without garlic wrapping, modern floodfills may ignore LS lookups.
+            var excluded = info.FloodfillResponses.Keys.ToHashSet();
+            var queryCount = info.ParallelQueries ?? DatabaseLookupSelectFloodfillCountLs;
+            var allFf = NetDb.Inst.GetClosestFloodfill(
+                ident,
+                queryCount + 2 * info.Retries,
+                excluded,
+                true );
 
+            lock ( info.ToTry )
+            {
+                foreach ( var ff in allFf ) info.ToTry.Add( ff );
+            }
+
+            StartMoreQueries( info );
+        }
+
+        private void SendOneLsDatabaseLookup( IdentUpdateRequestInfo info, I2PIdentHash oneffid )
+        {
+            var ident = info.LookupIdent;
             try
             {
                 // Select tunnels: prefer client's own tunnels, fall back to exploratory tunnels.
                 OutboundTunnel outboundTunnel = null;
                 InboundTunnel inboundReplyTunnel = null;
 
-                if ( info.ClientContext != null )
+                bool useTunnels = !info.UseDirectQueries;
+
+                if ( useTunnels )
                 {
-                    // Use the client destination's own tunnel pool (most anonymous)
-                    outboundTunnel = info.ClientContext.SelectOutboundTunnel();
-                    inboundReplyTunnel = info.ClientContext.SelectInboundTunnel();
-                }
-
-                outboundTunnel ??= TunnelProvider.Inst.GetEstablishedOutboundTunnel( TunnelPoolSelection.RequireExploratory )
-                    ?? TunnelProvider.Inst.GetEstablishedOutboundTunnel( TunnelPoolSelection.AllowExploratory );
-
-                inboundReplyTunnel ??= TunnelProvider.Inst.GetEstablishedInboundTunnel( TunnelPoolSelection.RequireExploratory )
-                    ?? TunnelProvider.Inst.GetEstablishedInboundTunnel( TunnelPoolSelection.AllowExploratory );
-
-                if ( outboundTunnel == null || inboundReplyTunnel == null )
-                {
-                    var err = $"LS lookup {ident.Id32Short} deferred - no tunnels available yet";
-                    Logging.LogDebug( $"IdentResolver: {err}" );
-                    info.RecordError( err );
-                    return;
-                }
-
-                // For LS lookups, exclude only FFs we've already queried for THIS specific lookup.
-                // Using the global AlreadyQueried set contaminates LS lookups with RI/exploration
-                // queries and causes "no floodfills available" even when FFs exist.
-                var excluded = info.FloodfillResponses.Keys.ToHashSet();
-                var allFf = NetDb.Inst.GetClosestFloodfill(
-                    ident,
-                    DatabaseLookupSelectFloodfillCountLs + 2 * info.Retries,
-                    excluded );
-
-                if ( !allFf.Any() )
-                {
-                    // Fall back to no exclusions (shouldn't happen with 200+ routers)
-                    allFf = NetDb.Inst.GetClosestFloodfill( ident, DatabaseLookupSelectFloodfillCountLs, null );
-                    if ( !allFf.Any() )
+                    if ( info.ClientContext != null )
                     {
-                        var err = $"No floodfills available for LS lookup ({ident.Id32Short})";
-                        Logging.Log( $"IdentResolver: {err}" );
-                        info.RecordError( err );
+                        outboundTunnel = info.ClientContext.SelectOutboundTunnel();
+                        inboundReplyTunnel = info.ClientContext.SelectInboundTunnel();
+                    }
+
+                    outboundTunnel ??= TunnelProvider.Inst.GetEstablishedOutboundTunnel( TunnelPoolSelection.RequireExploratory )
+                        ?? TunnelProvider.Inst.GetEstablishedOutboundTunnel( TunnelPoolSelection.AllowExploratory );
+
+                    inboundReplyTunnel ??= TunnelProvider.Inst.GetEstablishedInboundTunnel( TunnelPoolSelection.RequireExploratory )
+                        ?? TunnelProvider.Inst.GetEstablishedInboundTunnel( TunnelPoolSelection.AllowExploratory );
+
+                    if ( outboundTunnel == null || inboundReplyTunnel == null )
+                    {
+                        Logging.LogDebug( $"IdentResolver: LS lookup {ident.Id32Short} -> ff {oneffid.Id32Short} deferred - no tunnels" );
+                        lock ( info.ToTry ) info.ToTry.Add( oneffid );
                         return;
                     }
                 }
 
-                var selectedFf = BufUtils.Shuffle( allFf )
-                    .Take( DatabaseLookupSelectFloodfillCountLs )
-                    .ToArray();
-
-                foreach ( var oneffid in selectedFf )
+                var ri = NetDb.Inst[oneffid];
+                if ( ri == null )
                 {
-                    try
+                    WaitingForRi.GetOrAdd( oneffid, _ => new() ).Add( info );
+                    info.PendingRi.TryAdd( oneffid, 0 );
+
+                    // Double check to avoid race condition
+                    if ( NetDb.Inst[oneffid] != null )
                     {
-                        var ri = NetDb.Inst[oneffid];
-                        if ( ri == null )
+                        if ( WaitingForRi.TryRemove( oneffid, out _ ) )
                         {
-                            Logging.LogDebug( $"IdentResolver: LS lookup {ident.Id32Short} -> ff {oneffid.Id32Short}: no RouterInfo, skipping" );
-                            continue;
+                            info.PendingRi.TryRemove( oneffid, out _ );
+                            lock ( info.ToTry ) info.ToTry.Add( oneffid );
                         }
-
-                        // Determine floodfill's encryption type
-                        var ffKeyType = ri.Identity.Certificate.PublicKeyType;
-                        var isEcies = ffKeyType == I2PKeyType.KeyTypes.X25519
-                            || ffKeyType == I2PKeyType.KeyTypes.MLKEM512_X25519
-                            || ffKeyType == I2PKeyType.KeyTypes.MLKEM768_X25519
-                            || ffKeyType == I2PKeyType.KeyTypes.MLKEM1024_X25519;
-
-                        I2NpMessage outMsg;
-
-                        // ECIES floodfill: garlic-wrap the DLM using Noise N
-                        // Java: MessageWrapper.wrap(ctx, dlm, ri) + dlm.setReplySession(key, rtag)
-                        outMsg = isEcies ? CreateEciesWrappedLookup( ident, inboundReplyTunnel, excluded, ri, oneffid ) :
-                            // ElGamal floodfill: garlic-wrap using ElGamal encryption
-                            CreateElGamalWrappedLookup( ident, inboundReplyTunnel, excluded, ri, oneffid );
-
-                        if ( outMsg == null )
-                        {
-                            // Fallback: send plain DLM (should not normally happen)
-                            Logging.LogWarning( $"IdentResolver: LS lookup {ident.Id32Short} -> ff {oneffid.Id32Short}: garlic wrap failed, sending plain DLM" );
-                            var plainMsg = new DatabaseLookupMessage(
-                                ident,
-                                inboundReplyTunnel.Destination,
-                                inboundReplyTunnel.GatewayTunnelId,
-                                DatabaseLookupMessage.LookupTypes.LeaseSet,
-                                excluded );
-                            outMsg = plainMsg;
-                        }
-
-                        outboundTunnel.Send( new TunnelMessageRouter( outMsg, oneffid ) );
-
-                        Logging.LogInformation( $"IdentResolver: LS lookup {ident.Id32Short} -> ff {oneffid.Id32Short} ({(isEcies ? "ECIES" : "ElG")} garlic-wrapped)" );
-                        IdentUpdateRequestInfo.AlreadyQueried[oneffid] = 1;
                     }
-                    catch ( Exception ex )
+
+                    Logging.LogDebug( $"IdentResolver: LS lookup {ident.Id32Short} -> ff {oneffid.Id32Short} waiting for RouterInfo" );
+                    return;
+                }
+
+                var excluded = info.FloodfillResponses.Keys.ToHashSet();
+
+                var ffKeyType = ri.Identity.Certificate.PublicKeyType;
+                var isEcies = ffKeyType == I2PKeyType.KeyTypes.X25519
+                    || ffKeyType == I2PKeyType.KeyTypes.MLKEM512_X25519
+                    || ffKeyType == I2PKeyType.KeyTypes.MLKEM768_X25519
+                    || ffKeyType == I2PKeyType.KeyTypes.MLKEM1024_X25519;
+
+                I2NpMessage outMsg;
+                outMsg = isEcies ? CreateEciesWrappedLookup( ident, inboundReplyTunnel, excluded, ri, oneffid ) :
+                                   CreateElGamalWrappedLookup( ident, inboundReplyTunnel, excluded, ri, oneffid );
+
+                if ( outMsg == null )
+                {
+                    if ( inboundReplyTunnel != null )
                     {
-                        Logging.Log( "SendLSDatabaseLookup", ex );
+                        outMsg = new DatabaseLookupMessage(
+                            ident,
+                            inboundReplyTunnel.Destination,
+                            inboundReplyTunnel.GatewayTunnelId,
+                            DatabaseLookupMessage.LookupTypes.LeaseSet,
+                            excluded );
+                    }
+                    else
+                    {
+                        outMsg = new DatabaseLookupMessage(
+                            ident,
+                            RouterContext.Inst.MyRouterIdentity.IdentHash,
+                            DatabaseLookupMessage.LookupTypes.LeaseSet,
+                            excluded );
                     }
                 }
 
-                info.StartLookup( selectedFf, outboundTunnel, inboundReplyTunnel );
+                info.UnheardFrom[oneffid] = TickCounter.Now;
+                var dist = oneffid ^ info.LookupIdent.RoutingKey;
+                var distStr = BufUtils.ToBase32String( dist ).Substring( 0, 8 );
+
+                var resp = new FloodfillResponse { Floodfill = oneffid, Details = $"Dist: {distStr}" };
+                info.FloodfillResponses[oneffid] = resp;
+
+                lock ( info.Attempts )
+                {
+                    var lastAttempt = info.Attempts.LastOrDefault();
+                    if ( lastAttempt == null || lastAttempt.Details != null ||
+                         lastAttempt.OutboundTunnelGateway != outboundTunnel?.Destination ||
+                         lastAttempt.InboundTunnelGateway != inboundReplyTunnel?.Destination )
+                    {
+                        lastAttempt = new LookupAttempt
+                        {
+                            OutboundTunnelGateway = outboundTunnel?.Destination,
+                            OutboundTunnelId = outboundTunnel?.SendTunnelId is not null ? (uint)outboundTunnel.SendTunnelId : (uint?)null,
+                            InboundTunnelGateway = inboundReplyTunnel?.Destination,
+                            InboundTunnelId = inboundReplyTunnel?.GatewayTunnelId is not null ? (uint)inboundReplyTunnel.GatewayTunnelId : (uint?)null,
+                        };
+                        info.Attempts.Add( lastAttempt );
+                    }
+                    lastAttempt.FloodfillResponses[oneffid] = resp;
+                }
+
+                if ( useTunnels )
+                {
+                    outboundTunnel.Send( new TunnelMessageRouter( outMsg, oneffid ) );
+                }
+                else
+                {
+                    if ( !TransportProvider.Send( oneffid, outMsg ) )
+                    {
+                        resp.Response = ReceivedFloodfillResponses.SendFailed;
+                        resp.Details = "TransportProvider.Send returned false (unresolvable or connection failed)";
+                        info.UnheardFrom.TryRemove( oneffid, out _ );
+                        info.FailedPeers.Add( oneffid );
+                    }
+                }
+
+                Logging.LogInformation( $"IdentResolver: LS lookup {ident.Id32Short} -> ff {oneffid.Id32Short} ({( isEcies ? "ECIES" : "ElG" )} garlic-wrapped, {( useTunnels ? "tunnel" : "direct" )})" );
+                IdentUpdateRequestInfo.AlreadyQueried[oneffid] = 1;
             }
             catch ( Exception ex )
             {
-                Logging.Log( "SendLSDatabaseLookup2", ex );
+                Logging.Log( "SendOneLsDatabaseLookup", ex );
             }
         }
 
@@ -665,13 +733,26 @@ namespace I2PCore
                     Tags = new I2PByteBlock[] { new I2PByteBlock( ratchetTag.ToByteArray() ) }
                 };
 
-                var dlm = new DatabaseLookupMessage(
-                    ident,
-                    replyTunnel.Destination,
-                    replyTunnel.GatewayTunnelId,
-                    DatabaseLookupMessage.LookupTypes.LeaseSet,
-                    excluded,
-                    replyKeyInfo );
+                DatabaseLookupMessage dlm;
+                if ( replyTunnel != null )
+                {
+                    dlm = new DatabaseLookupMessage(
+                        ident,
+                        replyTunnel.Destination,
+                        replyTunnel.GatewayTunnelId,
+                        DatabaseLookupMessage.LookupTypes.LeaseSet,
+                        excluded,
+                        replyKeyInfo );
+                }
+                else
+                {
+                    dlm = new DatabaseLookupMessage(
+                        ident,
+                        RouterContext.Inst.MyRouterIdentity.IdentHash,
+                        DatabaseLookupMessage.LookupTypes.LeaseSet,
+                        excluded,
+                        replyKeyInfo );
+                }
 
                 // Garlic-wrap the DLM to the floodfill's ECIES public key using Noise N.
                 // Java: outMsg = MessageWrapper.wrap(ctx, dlm, ri)
@@ -742,12 +823,24 @@ namespace I2PCore
                 // For ElGamal floodfills, create a plain DLM without reply encryption
                 // (ElGamal reply encryption uses AES session tags which is complex;
                 // send the DLM garlic-wrapped but with unencrypted reply for now).
-                var dlm = new DatabaseLookupMessage(
-                    ident,
-                    replyTunnel.Destination,
-                    replyTunnel.GatewayTunnelId,
-                    DatabaseLookupMessage.LookupTypes.LeaseSet,
-                    excluded );
+                DatabaseLookupMessage dlm;
+                if ( replyTunnel != null )
+                {
+                    dlm = new DatabaseLookupMessage(
+                        ident,
+                        replyTunnel.Destination,
+                        replyTunnel.GatewayTunnelId,
+                        DatabaseLookupMessage.LookupTypes.LeaseSet,
+                        excluded );
+                }
+                else
+                {
+                    dlm = new DatabaseLookupMessage(
+                        ident,
+                        RouterContext.Inst.MyRouterIdentity.IdentHash,
+                        DatabaseLookupMessage.LookupTypes.LeaseSet,
+                        excluded );
+                }
 
                 // Garlic-wrap using ElGamal to the floodfill's public key
                 var sessionkey = new I2PSessionKey();
@@ -949,84 +1042,172 @@ namespace I2PCore
 
         private void CheckTimeouts()
         {
-            var retry = OutstandingQueries.Where( i =>
-                    i.Value != null
-                    && i.Value.Start.DeltaToNow > i.Value.DatabaseLookupWaitTime )
-                .Select( i => i.Value )
-                .ToArray();
-
-            foreach( var info in retry )
+            foreach ( var info in OutstandingQueries.Values.ToArray() )
             {
-                // Collect router performance
-                var noresponse = info.FloodfillResponses
-                        .Where( r => r.Value.Response == ReceivedFloodfillResponses.NoResponse );
+                if ( info == null ) continue;
 
-                // Give all the credit
-                foreach( var one in noresponse )
+                // Overall timeout check (30 seconds for NetDbLookup page consistency)
+                if ( info.Start.DeltaToNow > TickSpan.Seconds( 30 ) )
                 {
-                    var from = one.Key;
+                    FailLookup( info, "overall timeout" );
+                    continue;
+                }
+
+                // Per-peer timeout check (Java uses 3s, we use 4s for safety)
+                var peersToFail = info.UnheardFrom
+                    .Where( kvp => kvp.Value.DeltaToNow > TickSpan.Seconds( 4 ) )
+                    .Select( kvp => kvp.Key )
+                    .ToArray();
+
+                foreach ( var peer in peersToFail )
+                {
+                    info.UnheardFrom.TryRemove( peer, out _ );
+                    info.FailedPeers.Add( peer );
                     
                     if ( info.LookupType == DatabaseLookupMessage.LookupTypes.LeaseSet )
                     {
-                        NetDb.Inst.Statistics.IdentResolveLsTimeout( from );
+                        NetDb.Inst.Statistics.IdentResolveLsTimeout( peer );
                     }
                     else
                     {
-                        NetDb.Inst.Statistics.IdentResolveRiTimeout( from );
+                        NetDb.Inst.Statistics.IdentResolveRiTimeout( peer );
                     }
+
+                    var dist = peer ^ info.LookupIdent.RoutingKey;
+                    var distStr = BufUtils.ToBase32String( dist ).Substring( 0, 8 );
 
                     var update = new FloodfillResponse()
                     {
-                        Floodfill = from,
-                        Response = ReceivedFloodfillResponses.Timeout
+                        Floodfill = peer,
+                        Response = ReceivedFloodfillResponses.Timeout,
+                        Details = $"Dist: {distStr}"
                     };
-                    info.FloodfillResponses[from] = update;
+                    info.FloodfillResponses[peer] = update;
                     lock ( info.Attempts )
                     {
-                        if ( info.Attempts.Any() ) info.Attempts.Last().FloodfillResponses[from] = update;
+                        if ( info.Attempts.Any() ) info.Attempts.Last().FloodfillResponses[peer] = update;
+                    }
+                }
+
+                // Start more queries if we have capacity and targets
+                StartMoreQueries( info );
+                
+                // If we have no active queries and nothing left to try, it's a failure
+                if ( info.UnheardFrom.IsEmpty && !info.ToTry.Any() && info.PendingRi.IsEmpty )
+                {
+                    FailLookup( info, "no more floodfills to try" );
+                }
+            }
+        }
+
+
+        private void StartMoreQueries( IdentUpdateRequestInfo info )
+        {
+            int parallelLimit = info.ParallelQueries ?? ( info.LookupType == DatabaseLookupMessage.LookupTypes.LeaseSet ? DatabaseLookupSelectFloodfillCountLs : DatabaseLookupSelectFloodfillCountRi );
+
+            // If we've exhausted our current candidate list, try getting more from NetDb
+            lock ( info.ToTry )
+            {
+                if ( !info.ToTry.Any() && info.UnheardFrom.Count < parallelLimit )
+                {
+                    var maxRetries = info.LookupType == DatabaseLookupMessage.LookupTypes.LeaseSet ? DatabaseLookupRetriesLs : DatabaseLookupRetriesRi;
+                    if ( info.Retries < maxRetries )
+                    {
+                        info.Retries++;
+                        var excluded = info.FloodfillResponses.Keys.Union( info.FailedPeers ).ToHashSet();
+                        var moreFf = NetDb.Inst.GetClosestFloodfill(
+                            info.LookupIdent,
+                            parallelLimit + 2 * info.Retries,
+                            excluded,
+                            true );
+
+                        foreach ( var ff in moreFf ) info.ToTry.Add( ff );
+
+                        if ( moreFf.Any() )
+                        {
+                            Logging.LogDebug( $"IdentResolver: {info.LookupIdent.Id32Short} iterative search expanded (retry {info.Retries}, found {moreFf.Count()} more candidates)" );
+                        }
                     }
                 }
             }
 
-            SendRetries( retry );
-        }
-
-        protected void SendRetries( IEnumerable<IdentUpdateRequestInfo> retry )
-        {
-            foreach ( var one in retry )
+            while ( info.UnheardFrom.Count < parallelLimit )
             {
-                var isLeaseSet = one.LookupType == DatabaseLookupMessage.LookupTypes.LeaseSet;
-
-                if ( one.Retries >= ( isLeaseSet ? DatabaseLookupRetriesLs : DatabaseLookupRetriesRi ) )
+                I2PIdentHash target = null;
+                lock ( info.ToTry )
                 {
-                    OutstandingQueries.TryRemove( one.LookupIdent, out _ );
-                    FinishedLookups[one.LookupIdent] = one;
-
-                    Logging.Log( string.Format( "IdentResolver: Lookup of {0} {1} failed with timeout.",
-                        ( isLeaseSet ? "LeaseSet" : "RouterInfo" ), 
-                        one.LookupIdent.Id32Short ) );
-
-                    if ( LookupFailure != null ) ThreadPool.QueueUserWorkItem( a => LookupFailure( one.LookupIdent ) );
-                    if ( LookupFailureEx != null ) ThreadPool.QueueUserWorkItem( a => LookupFailureEx( one.LookupIdent, one ) );
-
-                    continue;
+                    if ( info.ToTry.Any() )
+                    {
+                        target = info.ToTry.First();
+                        info.ToTry.Remove( target );
+                    }
                 }
 
-                ++one.Retries;
-                one.Start.SetNow();
+                if ( target == null ) break;
 
-#if LOG_ALL_IDENT_LOOKUPS
-                Logging.Log( string.Format( "IdentResolver: Lookup of {0} {1} failed with timeout Retry {2}.",
-                    ( isleaseset ? "LeaseSet" : "RouterInfo" ), one.LookupIdent.Id32Short, one.Retries ) );
-#endif
-                if ( isLeaseSet )
+                if ( info.FloodfillResponses.ContainsKey( target ) ||
+                     info.FailedPeers.Contains( target ) ||
+                     info.PendingRi.ContainsKey( target ) ) continue;
+
+                if ( info.LookupType == DatabaseLookupMessage.LookupTypes.LeaseSet )
                 {
-                    SendLsDatabaseLookup( one.LookupIdent, one );
+                    SendOneLsDatabaseLookup( info, target );
                 }
                 else
                 {
-                    SendRiDatabaseLookup( one.LookupIdent, one );
+                    SendOneRiDatabaseLookup( info, target );
                 }
+            }
+        }
+
+        private void FailLookup( IdentUpdateRequestInfo info, string reason )
+        {
+            var isLeaseSet = info.LookupType == DatabaseLookupMessage.LookupTypes.LeaseSet;
+
+            if ( OutstandingQueries.TryRemove( info.LookupIdent, out _ ) )
+            {
+                FinishedLookups[info.LookupIdent] = info;
+
+                if ( !isLeaseSet )
+                {
+                    var ident = info.LookupIdent;
+                    if ( WaitingForRi.TryRemove( ident, out var lookups ) )
+                    {
+                        foreach ( var lookup in lookups )
+                        {
+                            lookup.PendingRi.TryRemove( ident, out _ );
+                            lookup.FailedPeers.Add( ident );
+                            
+                            var dist = ident ^ lookup.LookupIdent.RoutingKey;
+                            var distStr = BufUtils.ToBase32String( dist ).Substring( 0, 8 );
+                            
+                            var ffResp = new FloodfillResponse()
+                            {
+                                Floodfill = ident,
+                                Response = ReceivedFloodfillResponses.SendFailed,
+                                Details = $"Dist: {distStr}, RouterInfo lookup failed"
+                            };
+                            lookup.FloodfillResponses[ident] = ffResp;
+                            lock ( lookup.Attempts )
+                            {
+                                if ( lookup.Attempts.Any() ) lookup.Attempts.Last().FloodfillResponses[ident] = ffResp;
+                            }
+                            
+                            // Check if this was the last thing it was waiting for
+                            if ( lookup.UnheardFrom.IsEmpty && !lookup.ToTry.Any() && lookup.PendingRi.IsEmpty )
+                            {
+                                FailLookup( lookup, "no more floodfills to try (after RI lookup failure)" );
+                            }
+                        }
+                    }
+                }
+
+                Logging.Log( string.Format( "IdentResolver: Lookup of {0} {1} failed: {2}",
+                    ( isLeaseSet ? "LeaseSet" : "RouterInfo" ),
+                    info.LookupIdent.Id32Short, reason ) );
+
+                if ( LookupFailure != null ) ThreadPool.QueueUserWorkItem( a => LookupFailure( info.LookupIdent ) );
+                if ( LookupFailureEx != null ) ThreadPool.QueueUserWorkItem( a => LookupFailureEx( info.LookupIdent, info ) );
             }
         }
     }

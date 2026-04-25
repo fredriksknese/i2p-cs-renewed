@@ -52,6 +52,7 @@
             <div class="card-header">NTCP2 (TCP)</div>
             <div class="card-body">
                 <p>Active sessions: @Model.Ntcp2Sessions</p>
+                <p>Connecting: @Model.Ntcp2Connecting</p>
                 <p>Blocked IPs: @Model.Ntcp2BlockedIPs</p>
                 <p>Post-quantum: @(Model.Ntcp2PQEnabled ? "Enabled (ML-KEM 1024)" : "Disabled")</p>
             </div>
@@ -62,6 +63,7 @@
             <div class="card-header">SSU2 (UDP)</div>
             <div class="card-body">
                 <p>Active sessions: @Model.Ssu2Sessions</p>
+                <p>Connecting: @Model.Ssu2Connecting</p>
                 <p>Blocked IPs: @Model.Ssu2BlockedIPs</p>
                 <p>Firewalled: @(Model.IsFirewalled ? "Yes" : "No")</p>
             </div>

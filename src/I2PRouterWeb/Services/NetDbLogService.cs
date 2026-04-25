@@ -9,7 +9,8 @@ public enum NetDbLogCategory
     RouterInfoDiscovered,
     RouterInfoExpired,
     LeaseSetAnnounced,
-    PeerHashesDiscovered
+    PeerHashesDiscovered,
+    DatabaseLookupReceived
 }
 
 public class NetDbLogEntry
@@ -34,8 +35,37 @@ public class NetDbLogService
         NetDb.Inst.RouterInfoRemovals += OnRouterInfoRemoved;
         NetDb.Inst.LeaseSetUpdates += OnLeaseSetUpdated;
         NetDb.Inst.DatabaseSearchReplies += OnDatabaseSearchReplyReceived;
+        NetDb.Inst.DatabaseLookupReceived += OnDatabaseLookupReceived;
         
         _isInitialized = true;
+    }
+
+    private void OnDatabaseLookupReceived(I2PCore.TunnelLayer.I2NP.Messages.DatabaseLookupMessage lookup, I2PIdentHash from, NetDb.DatabaseLookupResult result)
+    {
+        var isRouterInfoLookup = (lookup.LookupType & I2PCore.TunnelLayer.I2NP.Messages.DatabaseLookupMessage.LookupTypes.RouterInfo) != 0;
+        var keyStr = isRouterInfoLookup ? lookup.Key.Id32Short : $"{lookup.Key.Id32}.b32.i2p";
+
+        var isTunnel = (lookup.LookupType & I2PCore.TunnelLayer.I2NP.Messages.DatabaseLookupMessage.LookupTypes.Tunnel) != 0;
+        string viaStr;
+        if (isTunnel)
+        {
+            viaStr = $"Tunnel {lookup.TunnelId} at {lookup.From?.Id32Short ?? "Unknown"}";
+        }
+        else
+        {
+            viaStr = $"Direct to {lookup.From?.Id32Short ?? "Unknown"}";
+        }
+
+        var resultStr = result switch
+        {
+            NetDb.DatabaseLookupResult.RouterInfoFound => "Success (Found RouterInfo)",
+            NetDb.DatabaseLookupResult.LeaseSetFound => "Success (Found LeaseSet)",
+            NetDb.DatabaseLookupResult.ClosestFloodfillsSent => "Not Found (Sent Closest Peers)",
+            _ => "Unknown"
+        };
+
+        var message = $"Received {lookup.LookupType} lookup for {keyStr} ({lookup.Key.Id64}). Responding via {viaStr}. Result: {resultStr}";
+        AddLog(NetDbLogCategory.DatabaseLookupReceived, lookup.Key.Id32Short, message);
     }
 
     private void OnDatabaseSearchReplyReceived(I2PCore.TunnelLayer.I2NP.Messages.DatabaseSearchReplyMessage dsm)

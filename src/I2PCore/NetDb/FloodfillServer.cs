@@ -24,6 +24,8 @@ namespace I2PCore
         private bool _disposed;
         private bool _registered;
 
+        public event NetDb.NetworkDatabaseDatabaseLookupReceived DatabaseLookupReceived;
+
         /// <summary>
         /// Gets or sets whether floodfill server mode is active.
         /// When enabled, the server registers for incoming I2NP messages
@@ -101,7 +103,7 @@ namespace I2PCore
                             try
                             {
                                 var lookup = (DatabaseLookupMessage)msg.Message;
-                                HandleDatabaseLookup( lookup );
+                                HandleDatabaseLookup( lookup, fromHash );
                             }
                             catch ( Exception ex )
                             {
@@ -138,8 +140,9 @@ namespace I2PCore
         /// or a DatabaseSearchReply with closest floodfill routers if not found.
         /// </summary>
         /// <param name="lookup">The incoming DatabaseLookup message.</param>
+        /// <param name="fromHash">The ident hash of the router that sent this message, if known.</param>
         /// <returns>A DatabaseStoreMessage with the result, or null if nothing found.</returns>
-        public DatabaseStoreMessage HandleDatabaseLookup( DatabaseLookupMessage lookup )
+        public DatabaseStoreMessage HandleDatabaseLookup( DatabaseLookupMessage lookup, I2PIdentHash fromHash = null )
         {
             if ( lookup == null ) return null;
 
@@ -164,6 +167,7 @@ namespace I2PCore
 
                     var response = new DatabaseStoreMessage( routerInfo );
                     SendReply( lookup, response );
+                    DatabaseLookupReceived?.Invoke( lookup, fromHash, NetDb.DatabaseLookupResult.RouterInfoFound );
                     return response;
                 }
             }
@@ -178,6 +182,7 @@ namespace I2PCore
 
                     var response = new DatabaseStoreMessage( leaseSet );
                     SendReply( lookup, response );
+                    DatabaseLookupReceived?.Invoke( lookup, fromHash, NetDb.DatabaseLookupResult.LeaseSetFound );
                     return response;
                 }
             }
@@ -185,6 +190,7 @@ namespace I2PCore
             // Not found: send DatabaseSearchReply with closest floodfill routers
             Logging.LogDebug( $"FloodfillServer: Key {key.Id32Short} not found, sending closest floodfills" );
             SendSearchReply( lookup );
+            DatabaseLookupReceived?.Invoke( lookup, fromHash, NetDb.DatabaseLookupResult.ClosestFloodfillsSent );
 
             return null;
         }

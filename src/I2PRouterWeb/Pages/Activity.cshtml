@@ -44,7 +44,6 @@
                         <strong>Total Entries:</strong> @Model.TotalEntries
                     </div>
                     <div>
-                        <span class="badge bg-info">Auto-refresh: 5s</span>
                     </div>
                 </div>
             </div>
@@ -115,11 +114,3 @@
     }
 }
 
-@section Scripts {
-    <script>
-        // Auto-refresh every 5 seconds
-        setTimeout(function() {
-            location.reload();
-        }, 5000);
-    </script>
-}

@@ -15,6 +15,12 @@ public class NetDbLookupModel : PageModel
     [BindProperty]
     public string B32Address { get; set; } = string.Empty;
 
+    [BindProperty]
+    public int ParallelQueries { get; set; } = 6;
+
+    [BindProperty]
+    public bool DirectLookup { get; set; } = false;
+
     public bool IsLookupInProgress { get; set; }
     public string? ErrorMessage { get; set; }
     public LeaseSetResult? Result { get; set; }
@@ -96,7 +102,7 @@ public class NetDbLookupModel : PageModel
 
             NetDb.Inst.IdentHashLookup.LeaseSetReceivedEx += successHandler;
             NetDb.Inst.IdentHashLookup.LookupFailureEx += failHandler;
-            NetDb.Inst.IdentHashLookup.LookupLeaseSet(identHash);
+            NetDb.Inst.IdentHashLookup.LookupLeaseSet(identHash, null, ParallelQueries, DirectLookup);
 
             // Wait up to 30 seconds
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
@@ -214,7 +220,8 @@ public class NetDbLookupModel : PageModel
                     attInfo.Floodfills.Add(new FloodfillStatusInfo
                     {
                         Floodfill = ff.Key.Id32Short,
-                        Response = ff.Value.Response.ToString()
+                        Response = ff.Value.Response.ToString(),
+                        Details = ff.Value.Details
                     });
                 }
                 result.History.Add(attInfo);
@@ -249,6 +256,7 @@ public class FloodfillStatusInfo
 {
     public string Floodfill { get; set; } = string.Empty;
     public string Response { get; set; } = string.Empty;
+    public string? Details { get; set; }
 }
 
 public class EncryptionKeyInfo

@@ -16,7 +16,6 @@
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h5 class="mb-0">Recent NetDb Events</h5>
-                <span class="badge bg-info">Auto-refresh: 5s</span>
             </div>
             <div class="card-body p-0">
                 @if (Model.Logs.Any())
@@ -73,6 +72,7 @@
             NetDbLogCategory.RouterInfoExpired => "warning",
             NetDbLogCategory.LeaseSetAnnounced => "info",
             NetDbLogCategory.PeerHashesDiscovered => "secondary",
+            NetDbLogCategory.DatabaseLookupReceived => "primary",
             _ => "secondary"
         };
     }
@@ -83,11 +83,3 @@
     }
 }
 
-@section Scripts {
-    <script>
-        // Auto-refresh every 5 seconds
-        setTimeout(function() {
-            location.reload();
-        }, 5000);
-    </script>
-}

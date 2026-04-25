@@ -95,12 +95,28 @@ namespace I2PCore.TransportLayer
             }
         }
 
+        public int Ntcp2ConnectingCount
+        {
+            get
+            {
+                return EstablishedTransports.Count( t => t.Value.Transport?.Protocol == "NTCP2" && !t.Value.IsEstablished && !t.Value.Transport.IsTerminated );
+            }
+        }
+
         public int Ssu2SessionCount
         {
             get
             {
                 var counts = GetConnectionCountsByProtocol();
                 return counts.TryGetValue( "SSU2", out var c ) ? c : 0;
+            }
+        }
+
+        public int Ssu2ConnectingCount
+        {
+            get
+            {
+                return EstablishedTransports.Count( t => t.Value.Transport?.Protocol == "SSU2" && !t.Value.IsEstablished && !t.Value.Transport.IsTerminated );
             }
         }
 

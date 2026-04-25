@@ -9,7 +9,9 @@ public class TransportsModel : PageModel
     private readonly RouterService _routerService;
 
     public int Ntcp2Sessions { get; set; }
+    public int Ntcp2Connecting { get; set; }
     public int Ssu2Sessions { get; set; }
+    public int Ssu2Connecting { get; set; }
     public int Ntcp2BlockedIPs { get; set; }
     public int Ssu2BlockedIPs { get; set; }
     public bool Ntcp2PQEnabled { get; set; }
@@ -39,7 +41,9 @@ public class TransportsModel : PageModel
             if (tp != null)
             {
                 Ntcp2Sessions = tp.Ntcp2SessionCount;
+                Ntcp2Connecting = tp.Ntcp2ConnectingCount;
                 Ssu2Sessions = tp.Ssu2SessionCount;
+                Ssu2Connecting = tp.Ssu2ConnectingCount;
                 Ntcp2BlockedIPs = tp.Ntcp2BlockedCount;
                 Ssu2BlockedIPs = tp.Ssu2BlockedCount;
                 Ntcp2PQEnabled = true; // Version 5 advertised

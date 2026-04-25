@@ -156,12 +156,12 @@ namespace I2PCore.TransportLayer.NTCP2
                                 continue;
                             }
 
-                            // Connection limit check
-                            int currentCount;
-                            lock (SessionsLock) { currentCount = Sessions.Count; }
-                            if (currentCount >= MaxInboundConnections)
+                            // Inbound connection limit check
+                            int inboundCount;
+                            lock (SessionsLock) { inboundCount = Sessions.Count(s => !s.IsOutgoing); }
+                            if (inboundCount >= MaxInboundConnections)
                             {
-                                Logging.LogWarning($"NTCP2Host: TERMINATION REASON [C#-BOB]: Connection limit reached ({MaxInboundConnections}), rejecting {remoteEP}");
+                                Logging.LogWarning($"NTCP2Host: TERMINATION REASON [C#-BOB]: Inbound connection limit reached ({MaxInboundConnections}), rejecting {remoteEP}");
                                 client.Close();
                                 continue;
                             }
@@ -312,6 +312,15 @@ namespace I2PCore.TransportLayer.NTCP2
             if (router == null)
                 throw new ArgumentNullException(nameof(router));
 
+            // Outbound connection limit check
+            int outboundCount;
+            lock (SessionsLock) { outboundCount = Sessions.Count(s => s.IsOutgoing); }
+            if (outboundCount >= MaxOutboundConnections)
+            {
+                Logging.LogWarning($"NTCP2Host: TERMINATION REASON [C#-BOB]: Outbound connection limit reached ({MaxOutboundConnections}), rejecting outbound to {router.Identity?.IdentHash?.Id32Short}");
+                return null;
+            }
+
             // Create new outgoing session
             var session = new NTCP2Session(this, router, true);
 
@@ -330,7 +339,8 @@ namespace I2PCore.TransportLayer.NTCP2
         public int BlockedRemoteAddressesCount => _ipBlockFilter.Count;
 
         // Connection limits
-        public int MaxInboundConnections { get; set; } = 1500;
+        public int MaxInboundConnections { get; set; } = 2500;
+        public int MaxOutboundConnections { get; set; } = 2500;
 
         /// <summary>
         /// Report a problem with a remote address for potential blocking

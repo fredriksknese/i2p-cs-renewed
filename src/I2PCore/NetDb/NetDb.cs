@@ -79,11 +79,19 @@ namespace I2PCore
         public delegate void NetworkDatabaseRouterInfoRemoved( I2PIdentHash hash );
         public delegate void NetworkDatabaseLeaseSetUpdated( ILeaseSet ls );
         public delegate void NetworkDatabaseDatabaseSearchReplyReceived( DatabaseSearchReplyMessage dsm );
+        public enum DatabaseLookupResult { RouterInfoFound, LeaseSetFound, ClosestFloodfillsSent, NotFound }
+        public delegate void NetworkDatabaseDatabaseLookupReceived( DatabaseLookupMessage lookup, I2PIdentHash from, DatabaseLookupResult result );
 
         public event NetworkDatabaseRouterInfoUpdated RouterInfoUpdates;
         public event NetworkDatabaseRouterInfoRemoved RouterInfoRemovals;
         public event NetworkDatabaseLeaseSetUpdated LeaseSetUpdates;
         public event NetworkDatabaseDatabaseSearchReplyReceived DatabaseSearchReplies;
+        public event NetworkDatabaseDatabaseLookupReceived DatabaseLookupReceived;
+
+        internal void InvokeDatabaseLookupReceived( DatabaseLookupMessage lookup, I2PIdentHash from, DatabaseLookupResult result )
+        {
+            DatabaseLookupReceived?.Invoke( lookup, from, result );
+        }
 
         public readonly IdentResolver IdentHashLookup;
 
@@ -212,7 +220,9 @@ namespace I2PCore
                     RouletteElitismIncrement );
 
             RouletteFloodFill = new RouletteSelection<I2PRouterInfo, I2PIdentHash>(
-                    FloodfillInfos.Select( rp => rp.Value.Router ),
+                    FloodfillInfos.Values
+                        .Where( rp => !rp.Meta.Deleted )
+                        .Select( rp => rp.Router ),
                     ih => ih.Identity.IdentHash, 
                     i => Statistics[i].Score,
                     RouletteIncludeTop,
@@ -270,7 +280,16 @@ namespace I2PCore
                     meta.Updated = true;
                     var re = new RouterEntry( info, meta );
                     RouterInfos[info.Identity.IdentHash] = re;
-                    if ( re.IsFloodfill ) FloodfillInfos[info.Identity.IdentHash] = re;
+
+                    if ( re.IsFloodfill )
+                    {
+                        FloodfillInfos[info.Identity.IdentHash] = re;
+                    }
+                    else
+                    {
+                        FloodfillInfos.TryRemove( info.Identity.IdentHash, out _ );
+                    }
+
                     Logging.LogDebugData( $"NetDb: Updated RouterInfo for: {info.Identity.IdentHash}" );
                 }
                 else
@@ -292,7 +311,16 @@ namespace I2PCore
                 };
                 var re = new RouterEntry( info, meta );
                 RouterInfos[info.Identity.IdentHash] = re;
-                if ( re.IsFloodfill ) FloodfillInfos[info.Identity.IdentHash] = re;
+
+                if ( re.IsFloodfill )
+                {
+                    FloodfillInfos[info.Identity.IdentHash] = re;
+                }
+                else
+                {
+                    FloodfillInfos.TryRemove( info.Identity.IdentHash, out _ );
+                }
+
                 Logging.LogDebugData( $"NetDb: Added RouterInfo for: {info.Identity.IdentHash}" );
 
                 // Diagnostic: dump first few received RouterInfos for format comparison

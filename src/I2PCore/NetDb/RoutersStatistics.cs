@@ -310,6 +310,10 @@ namespace I2PCore
                         () => OffsetCompare( d.FailedConnects, 50, d.SuccessfulConnects, 1.5 ),
                         "FailedConnects" );
 
+            result |= TestInactive(
+                        () => ( DateTime.UtcNow - (DateTime)d.LastSeen ).TotalDays > 2,
+                        "TooOld" );
+
 #if DEBUG
             if ( result && UpdateInactiveStatistics )
             {
