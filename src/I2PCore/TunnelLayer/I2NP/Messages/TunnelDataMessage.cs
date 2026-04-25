@@ -129,7 +129,7 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
         {
             get
             {
-                if ( FirstDeliveryInstruction == null ) UpdateFirstDeliveryInstructionPosition();
+                if ( FirstDeliveryInstruction.IsEmpty ) UpdateFirstDeliveryInstructionPosition();
                 return FirstDeliveryInstruction;
             }
         }
@@ -164,7 +164,7 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
                 one.TunnelDataInstance.Checksum.CopyFrom(
                     new ReadOnlySpan<byte>( I2PHashSha256.GetHash(
                         one.TunnelDataInstance.FirstDeliveryInstruction,
-                        one.TunnelDataInstance.Iv ) ), 0 );
+                        one.TunnelDataInstance.Iv ), 0, 4 ), 0 );
 
                 if ( writer.Remaining != 0 )
                 {

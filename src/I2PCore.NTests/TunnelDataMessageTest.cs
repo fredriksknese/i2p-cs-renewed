@@ -34,10 +34,10 @@ namespace I2PTests
             var recovered = I2NpMessage.ReadHeader16( new I2PBufferCursor( serialized ) );
 
             var reassembler = new TunnelDataFragmentReassembly();
-            var reassembledmsgs = reassembler.Process( 
-                    new TunnelDataMessage[] 
-                    { 
-                        (TunnelDataMessage)recovered.Message 
+            var reassembledmsgs = reassembler.Process(
+                    new TunnelDataMessage[]
+                    {
+                        (TunnelDataMessage)recovered.Message
                     }, out var _ );
 
             Assert.IsTrue( reassembledmsgs.Count() == 1 );
@@ -66,7 +66,7 @@ namespace I2PTests
             var reassembler = new TunnelDataFragmentReassembly();
             var reader = new I2PBufferCursor( serbufarray );
             var readmsgs = new List<TunnelDataMessage>();
-            while ( reader.Length > 0 ) readmsgs.Add( (TunnelDataMessage)( I2NpMessage.ReadHeader16( reader ) ).Message );
+            while ( reader.Remaining > 0 ) readmsgs.Add( (TunnelDataMessage)( I2NpMessage.ReadHeader16( reader ) ).Message );
 
             var reassembledmsgs = reassembler.Process( readmsgs, out var _ );
 
