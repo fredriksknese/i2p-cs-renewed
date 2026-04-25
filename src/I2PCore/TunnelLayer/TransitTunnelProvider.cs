@@ -36,12 +36,67 @@ namespace I2PCore.TunnelLayer
 
         private readonly ItemFilterWindow<I2PIdentHash> NextHopFilter = new( TickSpan.Minutes( 5 ), 2 );
 
+        private class PendingRequest
+        {
+            public Ii2NpHeader Msg;
+            public TunnelBuildRequestDecrypt Decrypt;
+            public I2PIdentHash From;
+            public TickCounter Created = new();
+        }
+
+        private readonly ConcurrentDictionary<I2PIdentHash, ConcurrentQueue<PendingRequest>> PendingLookups = new();
+        private readonly TickSpan PendingLookupTimeout = TickSpan.Seconds( 20 );
+
         internal TransitTunnelProvider( TunnelProvider tp )
         {
             TunnelMgr = tp;
             ReadAppConfig();
 
             tp.TunnelBuildRequestEvents += HandleTunnelBuildRecords;
+            NetDb.Inst.RouterInfoUpdates += NetDb_RouterInfoUpdates;
+        }
+
+        private void NetDb_RouterInfoUpdates( I2PRouterInfo ri )
+        {
+            if ( PendingLookups.TryRemove( ri.Identity.IdentHash, out var queue ) )
+            {
+                Logging.LogInformation( $"TransitTunnelProvider: RouterInfo for {ri.Identity.IdentHash.Id32Short} found. Resuming {queue.Count} pending build requests." );
+                while ( queue.TryDequeue( out var request ) )
+                {
+                    if ( request.Created.DeltaToNow < PendingLookupTimeout )
+                    {
+                        HandleTunnelBuildRecords( request.Msg, request.Decrypt, request.From );
+                    }
+                    else
+                    {
+                        Logging.LogDebug( $"TransitTunnelProvider: Pending build request for {ri.Identity.IdentHash.Id32Short} expired." );
+                    }
+                }
+            }
+        }
+
+        private void CleanupPendingLookups()
+        {
+            foreach ( var key in PendingLookups.Keys.ToArray() )
+            {
+                if ( PendingLookups.TryGetValue( key, out var queue ) )
+                {
+                    var allExpired = true;
+                    foreach ( var req in queue )
+                    {
+                        if ( req.Created.DeltaToNow < PendingLookupTimeout )
+                        {
+                            allExpired = false;
+                            break;
+                        }
+                    }
+
+                    if ( allExpired )
+                    {
+                        PendingLookups.TryRemove( key, out _ );
+                    }
+                }
+            }
         }
 
         private readonly PeriodicAction Maintenance = new( TickSpan.Minutes( 15 ) );
@@ -54,6 +109,7 @@ namespace I2PCore.TunnelLayer
         public void Execute()
         {
             LogStatus.Do( LogStatusReport );
+            CleanupPendingLookups();
         }
 
         /// <summary>
@@ -160,7 +216,7 @@ namespace I2PCore.TunnelLayer
             if ( decrypt.Decrypted.ToAnyone )
             {
                 // Im outbound endpoint
-                Logging.LogDebug( $"HandleTunnelBuildRecords: Outbound endpoint request {decrypt}" );
+                Logging.LogInformation( $"HandleTunnelBuildRecords: Outbound endpoint request from {from?.Id32Short}" );
                 HandleEndpointTunnelRequest( msg, decrypt, from );
                 return;
             }
@@ -168,7 +224,7 @@ namespace I2PCore.TunnelLayer
             if ( decrypt.Decrypted.FromAnyone )
             {
                 // Im inbound gateway
-                Logging.LogDebug( $"HandleTunnelBuildRecords: Inbound gateway request {decrypt}" );
+                Logging.LogInformation( $"HandleTunnelBuildRecords: Inbound gateway request from {from?.Id32Short}" );
                 HandleGatewayTunnelRequest( msg, decrypt, from );
                 return;
             }
@@ -193,7 +249,10 @@ namespace I2PCore.TunnelLayer
             var nextHop = new I2PIdentHash( new I2PBufferCursor( decrypt.Decrypted.NextIdent.Hash.Clone() ) );
             if ( !NetDb.Inst.Contains( nextHop ) )
             {
-                Logging.LogDebug( $"HandleGatewayTunnelRequest: Dropping - NextHop {nextHop.Id32Short} not in NetDb" );
+                Logging.LogInformation( $"HandleGatewayTunnelRequest: NextHop {nextHop.Id32Short} not in NetDb. Initiating lookup." );
+                var queue = PendingLookups.GetOrAdd( nextHop, _ => new ConcurrentQueue<PendingRequest>() );
+                queue.Enqueue( new PendingRequest { Msg = msg, Decrypt = decrypt.Clone(), From = from } );
+                NetDb.Inst.IdentHashLookup.LookupRouterInfo( nextHop );
                 return;
             }
 
@@ -214,6 +273,11 @@ namespace I2PCore.TunnelLayer
 
             var doaccept = AcceptingTunnels( decrypt.Decrypted );
 
+            if ( !doaccept )
+            {
+                Logging.LogInformation( $"HandleGatewayTunnelRequest: Rejecting Inbound Gateway tunnel {tunnel.ReceiveTunnelId} from {from?.Id32Short}" );
+            }
+
             var response = doaccept
                     ? BuildResponseRecord.RequestResponse.Accept
                     : BuildResponseRecord.DefaultErrorReply;
@@ -226,6 +290,7 @@ namespace I2PCore.TunnelLayer
 
             if ( response == BuildResponseRecord.RequestResponse.Accept )
             {
+                Logging.LogInformation( $"HandleGatewayTunnelRequest: Accepting Inbound Gateway tunnel {tunnel.ReceiveTunnelId} from {from?.Id32Short}" );
                 RunningGatewayTunnels[tunnel] = 1;
                 TunnelMgr.AddTunnel( tunnel );
                 AcceptedTunnelBuildRequest( decrypt.Decrypted );
@@ -276,6 +341,7 @@ namespace I2PCore.TunnelLayer
 
             if ( response == BuildResponseRecord.RequestResponse.Accept )
             {
+                Logging.LogInformation( $"HandleEndpointTunnelRequest: Accepting Outbound Endpoint tunnel {tunnel.ReceiveTunnelId} from {from?.Id32Short}" );
                 RunningEndpointTunnels[tunnel] = 1;
                 TunnelMgr.AddTunnel( tunnel );
                 AcceptedTunnelBuildRequest( decrypt.Decrypted );
@@ -292,7 +358,10 @@ namespace I2PCore.TunnelLayer
             var nextHop = new I2PIdentHash( new I2PBufferCursor( decrypt.Decrypted.NextIdent.Hash.Clone() ) );
             if ( !NetDb.Inst.Contains( nextHop ) )
             {
-                Logging.LogDebug( $"HandleTransitTunnelRequest: Dropping - NextHop {nextHop.Id32Short} not in NetDb" );
+                Logging.LogInformation( $"HandleTransitTunnelRequest: NextHop {nextHop.Id32Short} not in NetDb. Initiating lookup." );
+                var queue = PendingLookups.GetOrAdd( nextHop, _ => new ConcurrentQueue<PendingRequest>() );
+                queue.Enqueue( new PendingRequest { Msg = msg, Decrypt = decrypt.Clone(), From = from } );
+                NetDb.Inst.IdentHashLookup.LookupRouterInfo( nextHop );
                 return;
             }
 

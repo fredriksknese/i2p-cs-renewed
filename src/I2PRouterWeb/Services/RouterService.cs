@@ -256,8 +256,8 @@ public class RouterService
 
         foreach (var tunnel in Router.TransitTunnelMgr.GetTunnels())
         {
-            var isGateway = tunnel is GatewayTunnel;
-            var isEndpoint = tunnel is EndpointTunnel;
+            var isInboundGateway = tunnel is GatewayTunnel;
+            var isOutboundEndpoint = tunnel is EndpointTunnel;
             var destHash = tunnel.Destination;
 
             // Extract ReceiveFrom (previous hop) from the specific tunnel type
@@ -268,9 +268,9 @@ public class RouterService
 
             string fromLabel;
             string? fromHash = null;
-            if (isGateway)
+            if (isInboundGateway)
             {
-                fromLabel = "Any peer (Gateway)";
+                fromLabel = "Any peer (Inbound Gateway)";
             }
             else if (receiveFrom != null)
             {
@@ -284,9 +284,9 @@ public class RouterService
 
             string toLabel;
             string? toHash = null;
-            if (isEndpoint)
+            if (isOutboundEndpoint)
             {
-                toLabel = destHash?.Id32Short ?? "Endpoint";
+                toLabel = destHash?.Id32Short ?? "Outbound Endpoint";
                 toHash = destHash?.Id64;
             }
             else
@@ -302,9 +302,11 @@ public class RouterService
                 FromRouterHash = fromHash,
                 ToRouter = toLabel,
                 ToRouterHash = toHash,
-                IsEndpoint = isEndpoint,
-                IsGateway = isGateway,
+                IsOutboundEndpoint = isOutboundEndpoint,
+                IsInboundGateway = isInboundGateway,
                 MessageCount = tunnel.MessageCount,
+                BytesSent = tunnel.Bandwidth.SendBandwidth.DataBytes,
+                BytesReceived = tunnel.Bandwidth.ReceiveBandwidth.DataBytes,
                 SendBitrateKBps = tunnel.Bandwidth.SendBandwidth.Bitrate / 8192f,
                 ReceiveBitrateKBps = tunnel.Bandwidth.ReceiveBandwidth.Bitrate / 8192f,
                 LastActivity = DateTime.UtcNow - TimeSpan.FromMilliseconds( tunnel.EstablishedTime.DeltaToNowMilliseconds )
@@ -322,9 +324,11 @@ public class TransitTunnelInfo
     public string? FromRouterHash { get; set; }
     public string ToRouter { get; set; } = string.Empty;
     public string? ToRouterHash { get; set; }
-    public bool IsEndpoint { get; set; }
-    public bool IsGateway { get; set; }
+    public bool IsOutboundEndpoint { get; set; }
+    public bool IsInboundGateway { get; set; }
     public int MessageCount { get; set; }
+    public long BytesSent { get; set; }
+    public long BytesReceived { get; set; }
     public float SendBitrateKBps { get; set; }
     public float ReceiveBitrateKBps { get; set; }
     public DateTime LastActivity { get; set; }

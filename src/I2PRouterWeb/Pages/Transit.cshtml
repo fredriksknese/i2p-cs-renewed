@@ -23,8 +23,8 @@
     <div class="col-md-3">
         <div class="card">
             <div class="card-body">
-                <h6 class="card-subtitle mb-2 text-muted">Gateway</h6>
-                <h3 class="mb-0 text-warning">@Model.GatewayCount</h3>
+                <h6 class="card-subtitle mb-2 text-muted">Inbound Gateway</h6>
+                <h3 class="mb-0 text-warning">@Model.InboundGatewayCount</h3>
             </div>
         </div>
     </div>
@@ -39,8 +39,8 @@
     <div class="col-md-3">
         <div class="card">
             <div class="card-body">
-                <h6 class="card-subtitle mb-2 text-muted">Endpoint</h6>
-                <h3 class="mb-0 text-success">@Model.EndpointCount</h3>
+                <h6 class="card-subtitle mb-2 text-muted">Outbound Endpoint</h6>
+                <h3 class="mb-0 text-success">@Model.OutboundEndpointCount</h3>
             </div>
         </div>
     </div>
@@ -64,6 +64,8 @@
                                     <th>To</th>
                                     <th>Role</th>
                                     <th>Messages</th>
+                                    <th>Data Sent</th>
+                                    <th>Data Recv</th>
                                     <th>Bandwidth</th>
                                     <th>Last Activity</th>
                                 </tr>
@@ -94,11 +96,13 @@
                                             }
                                         </td>
                                         <td>
-                                            <span class="badge bg-@(tunnel.IsGateway ? "warning" : tunnel.IsEndpoint ? "success" : "info")">
-                                                @(tunnel.IsGateway ? "Gateway" : tunnel.IsEndpoint ? "Endpoint" : "Transit")
+                                            <span class="badge bg-@(tunnel.IsInboundGateway ? "warning" : tunnel.IsOutboundEndpoint ? "success" : "info")">
+                                                @(tunnel.IsInboundGateway ? "Inbound Gateway" : tunnel.IsOutboundEndpoint ? "Outbound Endpoint" : "Transit")
                                             </span>
                                         </td>
                                         <td>@tunnel.MessageCount</td>
+                                        <td class="small">@TunnelsModel.FormatBytes(tunnel.BytesSent)</td>
+                                        <td class="small">@TunnelsModel.FormatBytes(tunnel.BytesReceived)</td>
                                         <td class="small">
                                             <span title="Send">&#x2191; @tunnel.SendBitrateKBps.ToString("F1") KB/s</span><br/>
                                             <span title="Receive">&#x2193; @tunnel.ReceiveBitrateKBps.ToString("F1") KB/s</span>
@@ -140,9 +144,13 @@ else
                     <strong>Transit Tunnels:</strong> Your router is used as an intermediate hop in someone else's tunnel.
                     Traffic passes through your router but you are neither the origin nor the destination.
                 </p>
+                <p class="mb-2">
+                    <strong>Inbound Gateway Tunnels:</strong> Your router is the first hop in an inbound tunnel for another router.
+                    You receive messages from any router and forward them into the tunnel.
+                </p>
                 <p class="mb-0">
-                    <strong>Endpoint Tunnels:</strong> Your router is the final hop in an inbound tunnel for another router.
-                    You forward the decrypted messages to their final destination router.
+                    <strong>Outbound Endpoint Tunnels:</strong> Your router is the final hop in an outbound tunnel for another router.
+                    You forward the decrypted messages to their final destination or the next inbound gateway.
                 </p>
             </div>
         </div>

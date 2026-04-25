@@ -9,9 +9,9 @@ public class TransitModel : PageModel
 
     public List<TransitTunnelInfo> TransitTunnels { get; set; } = new();
     public int TotalTransitTunnels => TransitTunnels.Count;
-    public int GatewayCount => TransitTunnels.Count(t => t.IsGateway);
-    public int EndpointCount => TransitTunnels.Count(t => t.IsEndpoint);
-    public int TransitCount => TransitTunnels.Count(t => !t.IsEndpoint && !t.IsGateway);
+    public int InboundGatewayCount => TransitTunnels.Count(t => t.IsInboundGateway);
+    public int OutboundEndpointCount => TransitTunnels.Count(t => t.IsOutboundEndpoint);
+    public int TransitCount => TransitTunnels.Count(t => !t.IsOutboundEndpoint && !t.IsInboundGateway);
 
     public TransitModel(RouterService routerService)
     {
@@ -22,7 +22,9 @@ public class TransitModel : PageModel
     {
         try
         {
-            TransitTunnels = _routerService.GetTransitTunnels().ToList();
+            TransitTunnels = _routerService.GetTransitTunnels()
+                .OrderByDescending(t => t.MessageCount)
+                .ToList();
             _routerService.LogActivity("Transit", $"Viewed {TransitTunnels.Count} transit tunnels");
         }
         catch (Exception ex)

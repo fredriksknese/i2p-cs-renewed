@@ -35,25 +35,37 @@ public class TunnelsModel : PageModel
             var outbound = tunnelProvider.GetOutboundTunnels();
             if (outbound != null)
             {
-                OutboundTunnels = outbound.Select(t => BuildInfo(t, "Outbound")).ToList();
+                OutboundTunnels = outbound
+                    .Where(t => t.Config.Pool != TunnelConfig.TunnelPool.External)
+                    .Select(t => BuildInfo(t, "Outbound"))
+                    .ToList();
             }
 
             var inbound = tunnelProvider.GetInboundTunnels();
             if (inbound != null)
             {
-                InboundTunnels = inbound.Select(t => BuildInfo(t, "Inbound")).ToList();
+                InboundTunnels = inbound
+                    .Where(t => t.Config.Pool != TunnelConfig.TunnelPool.External)
+                    .Select(t => BuildInfo(t, "Inbound"))
+                    .ToList();
             }
 
             var pendingOut = tunnelProvider.GetPendingOutboundTunnels();
             if (pendingOut != null)
             {
-                PendingOutboundTunnels = pendingOut.Select(t => BuildInfo(t, "Outbound (Pending)")).ToList();
+                PendingOutboundTunnels = pendingOut
+                    .Where(t => t.Config.Pool != TunnelConfig.TunnelPool.External)
+                    .Select(t => BuildInfo(t, "Outbound (Pending)"))
+                    .ToList();
             }
 
             var pendingIn = tunnelProvider.GetPendingInboundTunnels();
             if (pendingIn != null)
             {
-                PendingInboundTunnels = pendingIn.Select(t => BuildInfo(t, "Inbound (Pending)")).ToList();
+                PendingInboundTunnels = pendingIn
+                    .Where(t => t.Config.Pool != TunnelConfig.TunnelPool.External)
+                    .Select(t => BuildInfo(t, "Inbound (Pending)"))
+                    .ToList();
             }
 
             _routerService.LogActivity("Tunnels", $"Viewed tunnels: {TotalTunnels} total");

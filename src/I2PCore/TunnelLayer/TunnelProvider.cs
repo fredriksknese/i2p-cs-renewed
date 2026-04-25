@@ -53,6 +53,17 @@ namespace I2PCore.TunnelLayer
         /// </summary>
         private ConcurrentDictionary<ulong, (byte[] Key, Tunnel Tunnel)> PendingGarlicTags = new();
 
+        private class PendingShortRequest
+        {
+            public Ii2NpHeader Msg;
+            public ShortTunnelBuildMessage Stbm;
+            public I2PIdentHash From;
+            public TickCounter Created = new();
+        }
+
+        private readonly ConcurrentDictionary<I2PIdentHash, ConcurrentQueue<PendingShortRequest>> PendingShortLookups = new();
+        private readonly TickSpan PendingLookupTimeout = TickSpan.Seconds( 20 );
+
         /// <summary>
         /// Register a garlic tag for an outbound tunnel build.
         /// When a Garlic message arrives with this tag, it will be decrypted and processed as a build reply.
@@ -297,6 +308,50 @@ namespace I2PCore.TunnelLayer
             IncomingMessagePump.Start();
 
             TransportProvider.Inst.IncomingMessage += new Action<ITransport,Ii2NpHeader>( DistributeIncomingMessage );
+            NetDb.Inst.RouterInfoUpdates += NetDb_RouterInfoUpdates;
+        }
+
+        private void NetDb_RouterInfoUpdates( I2PRouterInfo ri )
+        {
+            if ( PendingShortLookups.TryRemove( ri.Identity.IdentHash, out var queue ) )
+            {
+                Logging.LogInformation( $"TunnelProvider: RouterInfo for {ri.Identity.IdentHash.Id32Short} found. Resuming {queue.Count} pending ECIES build requests." );
+                while ( queue.TryDequeue( out var request ) )
+                {
+                    if ( request.Created.DeltaToNow < PendingLookupTimeout )
+                    {
+                        HandleShortTunnelBuildRecords( request.Msg, request.Stbm, request.From );
+                    }
+                    else
+                    {
+                        Logging.LogDebug( $"TunnelProvider: Pending ECIES build request for {ri.Identity.IdentHash.Id32Short} expired." );
+                    }
+                }
+            }
+        }
+
+        private void CleanupPendingShortLookups()
+        {
+            foreach ( var key in PendingShortLookups.Keys.ToArray() )
+            {
+                if ( PendingShortLookups.TryGetValue( key, out var queue ) )
+                {
+                    var allExpired = true;
+                    foreach ( var req in queue )
+                    {
+                        if ( req.Created.DeltaToNow < PendingLookupTimeout )
+                        {
+                            allExpired = false;
+                            break;
+                        }
+                    }
+
+                    if ( allExpired )
+                    {
+                        PendingShortLookups.TryRemove( key, out _ );
+                    }
+                }
+            }
         }
 
         public static void Start()
@@ -571,6 +626,7 @@ namespace I2PCore.TunnelLayer
                         } );
 
                         CheckTunnelTimeouts.Do( CheckForTunnelBuildTimeout );
+                        CleanupPendingShortLookups();
 
                         ExecuteQueue(
                             PendingOutbound.Select( d => d.Key ),
@@ -1348,7 +1404,10 @@ namespace I2PCore.TunnelLayer
             // Without it we can't establish a transport connection to forward tunnel data
             if ( !isEndpoint && request.NextRouterHash != null && !NetDb.Inst.Contains( request.NextRouterHash ) )
             {
-                Logging.LogDebug( $"HandleShortTunnelBuildRecords: Dropping - NextHop {request.NextRouterHash.Id32Short} not in NetDb" );
+                Logging.LogInformation( $"HandleShortTunnelBuildRecords: NextHop {request.NextRouterHash.Id32Short} not in NetDb. Initiating lookup." );
+                var queue = PendingShortLookups.GetOrAdd( request.NextRouterHash, _ => new ConcurrentQueue<PendingShortRequest>() );
+                queue.Enqueue( new PendingShortRequest { Msg = msg, Stbm = stbm, From = from } );
+                NetDb.Inst.IdentHashLookup.LookupRouterInfo( request.NextRouterHash );
                 return;
             }
 
