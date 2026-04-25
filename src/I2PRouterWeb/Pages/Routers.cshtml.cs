@@ -17,17 +17,19 @@ public class RoutersModel : PageModel
     public int Ssu2Count { get; set; }
     public int FloodfillCount { get; set; }
     public string SearchQuery { get; set; } = string.Empty;
+    public bool ShowAll { get; set; }
 
     public RoutersModel(RouterService routerService)
     {
         _routerService = routerService;
     }
 
-    public void OnGet(string? search)
+    public void OnGet(string? search, bool? all)
     {
         try
         {
             SearchQuery = search ?? string.Empty;
+            ShowAll = all ?? false;
 
             var netDb = NetDb.Inst;
             var transportProvider = TransportProvider.Inst;
@@ -45,18 +47,29 @@ public class RoutersModel : PageModel
                 ConnectedCount = protocolCounts.Values.Sum();
             }
 
-            // Get ALL routers - no filtering, no random selection
-            var allRouters = netDb.FindRouterInfo((hash, info) => true);
+            IEnumerable<I2PRouterInfo> filteredRouters;
 
-            // Apply search filter if provided
-            if (!string.IsNullOrEmpty(SearchQuery))
+            if (ShowAll || !string.IsNullOrEmpty(SearchQuery))
             {
-                allRouters = allRouters.Where(r =>
-                    r.Identity.IdentHash.Id32Short.Contains(SearchQuery, StringComparison.OrdinalIgnoreCase) ||
-                    r.Addresses.Any(a => a.Host?.ToString()?.Contains(SearchQuery) == true));
+                // Get ALL routers
+                filteredRouters = netDb.FindRouterInfo((hash, info) => true);
+
+                // Apply search filter if provided
+                if (!string.IsNullOrEmpty(SearchQuery))
+                {
+                    filteredRouters = filteredRouters.Where(r =>
+                        r.Identity.IdentHash.Id32Short.Contains(SearchQuery, StringComparison.OrdinalIgnoreCase) ||
+                        r.Addresses.Any(a => a.Host?.ToString()?.Contains(SearchQuery) == true));
+                }
+            }
+            else
+            {
+                // Default: show only connected
+                var connectedHashes = transportProvider?.GetConnectedRouterHashes() ?? Enumerable.Empty<I2PIdentHash>();
+                filteredRouters = connectedHashes.Select(h => netDb[h]).Where(ri => ri != null)!;
             }
 
-            Routers = allRouters.Select(ri =>
+            Routers = filteredRouters.Select(ri =>
             {
                 var hash = ri.Identity.IdentHash;
                 var stats = netDb.Statistics[hash];
