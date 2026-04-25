@@ -1,5 +1,6 @@
 
 using System;
+using System.Buffers;
 using I2PCore.Utils;
 using static I2PCore.Data.I2PSigningKey;
 
@@ -11,10 +12,10 @@ namespace I2PCore.Data
         public SigningKeyTypes SignatureType { get; set; }
         public I2PSigningPublicKey TransientPublicKey { get; set; }
         public I2PSignature Signature { get; set; }
-        public I2POfflineSignature( BufRef reader, I2PCertificate cert )
+        public I2POfflineSignature( I2PBufferCursor reader, I2PCertificate cert )
         {
-            Expires = new I2PDateShort( reader.ReadFlip32() );
-            SignatureType = (SigningKeyTypes)reader.ReadFlip16();
+            Expires = new I2PDateShort( reader.ReadUInt32BigEndian() );
+            SignatureType = (SigningKeyTypes)reader.ReadUInt16BigEndian();
 
             TransientPublicKey = new I2PSigningPublicKey( 
                 reader, 
@@ -22,10 +23,10 @@ namespace I2PCore.Data
 
             Signature = new I2PSignature( reader, cert );
         }
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
             Expires.Write( dest );
-            dest.Write( BufUtils.Flip16B( (ushort)SignatureType ) );
+            dest.WriteUInt16BigEndian( (ushort)SignatureType );
             TransientPublicKey.Write( dest );
             Signature.Write( dest );
         }

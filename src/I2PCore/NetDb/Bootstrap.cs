@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using I2PCore.Utils;
 using System.Net.Http;
 using System.Net;
@@ -100,7 +101,7 @@ namespace I2PCore
                         continue;
                     }
 
-                    var importcount = ImportReseedFile( new BufLen( su3 ) );
+                    var importcount = ImportReseedFile( new I2PByteBlock( su3 ) );
                     if ( importcount > 0 )
                     {
                         totalImported += importcount;
@@ -161,7 +162,7 @@ namespace I2PCore
         {
             try
             {
-                var data = new BufLen( File.ReadAllBytes( filename ) );
+                var data = new I2PByteBlock( File.ReadAllBytes( filename ) );
                 var importcount = ImportReseedFile( data );
 
                 Logging.LogInformation( $"Bootstrap: {importcount} files imported from '{filename}'." );
@@ -174,7 +175,7 @@ namespace I2PCore
             }
         }
 
-        public static int ImportReseedFile( BufLen data )
+        public static int ImportReseedFile( I2PByteBlock data )
         {
             if ( data.Length < 6 ) return 0;
             if ( data[0] == 'I' && data[1] == '2' && data[2] == 'P' && data[3] == 's' && data[4] == 'u' && data[5] == '3' )
@@ -189,7 +190,7 @@ namespace I2PCore
             return 0;
         }
 
-        private static int ImportZipFile( BufLen data )
+        private static int ImportZipFile( I2PByteBlock data )
         {
             var importcount = 0;
             using ( var ms = new MemoryStream( data.ToByteArray() ) )
@@ -206,7 +207,7 @@ namespace I2PCore
             return importcount;
         }
 
-        private static int ImportSu3File( BufLen data )
+        private static int ImportSu3File( I2PByteBlock data )
         {
             var importcount = 0;
             using ( var arch = GetRouterInfoFiles( data ) )
@@ -234,11 +235,11 @@ namespace I2PCore
         /// </summary>
         public static string CertificatesDirectory { get; set; } = "certificates/reseed";
 
-        private static ZipArchive GetRouterInfoFiles( BufLen data )
+        private static ZipArchive GetRouterInfoFiles( I2PByteBlock data )
         {
             try
             {
-                var reader = new BufRefLen( data );
+                var reader = new I2PBufferCursor( data );
                 var header = new I2Psu3Header( reader );
 
                 if ( header.FileType != I2Psu3Header.Su3FileTypes.Zip )
@@ -252,8 +253,8 @@ namespace I2PCore
                 }
 
                 // Read content and signature
-                var contentData = reader.ReadBufLen( (int)header.ContentLength );
-                var signatureData = reader.ReadBufLen( header.SignatureLength );
+                var contentData = reader.ReadBlock( (int)header.ContentLength );
+                var signatureData = reader.ReadBlock( header.SignatureLength );
 
                 if ( header.SignatureLength > 0 )
                 {
@@ -282,10 +283,7 @@ namespace I2PCore
                     Logging.LogWarning( "Bootstrap: SU3 file has no signature. Accepting with caution." );
                 }
 
-                var s = new BufRefStream();
-                s.Write( (BufLen)contentData );
-
-                return new ZipArchive( s );
+                return new ZipArchive( new MemoryStream( contentData.ToByteArray() ) );
             }
             catch ( Exception ex )
             {
@@ -300,10 +298,10 @@ namespace I2PCore
         /// The signed data is everything from the start of the SU3 file up to (but not including) the signature.
         /// </summary>
         private static bool VerifySu3Signature(
-            BufLen fullData,
+            I2PByteBlock fullData,
             I2Psu3Header header,
-            BufLen contentData,
-            BufLen signatureData )
+            I2PByteBlock contentData,
+            I2PByteBlock signatureData )
         {
             try
             {

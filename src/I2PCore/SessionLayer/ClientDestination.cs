@@ -24,7 +24,7 @@ namespace I2PCore.SessionLayer
         public int LowWatermarkForNewTags { get; set; } = 7;
         public int NewTagsWhenGenerating { get; set; } = 15;
 
-        public delegate void DestinationDataReceived( ClientDestination dest, BufLen data, I2PDestination sender );
+        public delegate void DestinationDataReceived( ClientDestination dest, I2PByteBlock data, I2PDestination sender );
 
         /// <summary>
         /// Data was received by this Destination.
@@ -304,7 +304,7 @@ namespace I2PCore.SessionLayer
         /// <param name="buf">Buffer.</param>
         public ClientStates Send( I2PDestination dest, byte[] buf )
         {
-            return Send( dest, new BufLen( buf ) );
+            return Send( dest, new I2PByteBlock( buf ) );
         }
 
         /// <summary>
@@ -313,7 +313,7 @@ namespace I2PCore.SessionLayer
         /// <returns>The send.</returns>
         /// <param name="dest">Destination.</param>
         /// <param name="buf">Buffer.</param>
-        public ClientStates Send( I2PDestination dest, BufLen buf )
+        public ClientStates Send( I2PDestination dest, I2PByteBlock buf )
         {
             if ( Terminated ) throw new InvalidOperationException( $"Destination {this} is terminated." );
 

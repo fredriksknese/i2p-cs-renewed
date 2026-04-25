@@ -251,7 +251,7 @@ namespace I2PCore.Data
             var hash = new byte[32];
             sha.DoFinal( hash, 0 );
 
-            return new I2PIdentHash( new BufRef( hash ) );
+            return new I2PIdentHash( new I2PBufferCursor( hash ) );
         }
 
         // --- Ed25519 blinding using BigInteger arithmetic on twisted Edwards curve ---

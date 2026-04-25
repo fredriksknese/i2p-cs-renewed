@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using I2PCore.Data;
 using System.Net.Sockets;
 using System.IO;
@@ -121,13 +122,12 @@ namespace I2PEchoServer
 
         private static uint _sendId = BufUtils.RandomUintNz();
 
-        private static void MyDestination_DataReceived( ClientDestination dest, BufLen data, I2PDestination sender )
+        private static void MyDestination_DataReceived( ClientDestination dest, I2PByteBlock data, I2PDestination sender )
         {
             Logging.LogInformation( $"Program {_publishedDestination}: data received {data:15}" );
 
-            var reader = new BufRefLen( data );
-            var unzip = LzUtils.BcgZipDecompressNew( (BufLen)reader );
-            var packet = new StreamingPacket( (BufRefLen)unzip );
+            var unzip = LzUtils.BcgZipDecompressNew( data );
+            var packet = new StreamingPacket( new I2PBufferCursor( unzip ) );
 
             Logging.LogInformation( $"Program {_publishedDestination}: {packet} {packet.Payload}" );
 
@@ -139,7 +139,7 @@ namespace I2PEchoServer
                     return;
                 }
 
-                var s = new BufRefStream();
+                var s = new ArrayBufferWriter<byte>();
                 var sh = new StreamingPacket(
                         PacketFlags.Synchronize
                         | PacketFlags.FromIncluded
@@ -152,14 +152,14 @@ namespace I2PEchoServer
                     ReceiveStreamId = packet.ReceiveStreamId,
                     SendStreamId = _sendId,
                     NacKs = new List<uint>(),
-                    Payload = new BufLen( BufUtils.RandomBytes( 30 ) ),
+                    Payload = new I2PByteBlock( BufUtils.RandomBytes( 30 ) ),
                 };
 
                 sh.Write( s );
-                var buf = s.ToByteArray();
-                var zipped = LzUtils.BcgZipCompressNew( new BufLen( buf ) );
-                zipped.PokeFlip16( 4353, 4 ); // source port
-                zipped.PokeFlip16( 25, 6 ); // dest port
+                var buf = s.WrittenSpan.ToArray();
+                var zipped = LzUtils.BcgZipCompressNew( new I2PByteBlock( buf ) );
+                zipped.WriteUInt16BigEndian( 4353, 4 ); // source port
+                zipped.WriteUInt16BigEndian( 25, 6 ); // dest port
                 zipped[9] = (byte)PayloadFormat.Streaming; // streaming
 
                 Logging.LogInformation( $"Program {_publishedDestination}: Sending {zipped:20}." );

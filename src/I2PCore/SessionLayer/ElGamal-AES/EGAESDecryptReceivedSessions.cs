@@ -60,7 +60,7 @@ namespace I2PCore.SessionLayer
                 {
                     if ( currenttagcount >= TagLimit ) break;
 
-                    SessionTags[new I2PSessionTag( new BufRef( onetag ) )] = 
+                    SessionTags[new I2PSessionTag( new I2PBufferCursor( onetag ) )] = 
                             aesblock?.NewSessionKey is null 
                                 ? sessionkey
                                 : aesblock?.NewSessionKey;
@@ -69,7 +69,7 @@ namespace I2PCore.SessionLayer
                 }
             }
 
-            return new Garlic( (BufRefLen)aesblock.Payload );
+            return new Garlic( new I2PBufferCursor( aesblock.Payload ) );
         }
 
         public DatabaseLookupKeyInfo KeyGenerator( I2PIdentHash ffrouterid )
@@ -83,7 +83,7 @@ namespace I2PCore.SessionLayer
                 EncryptionFlag = true,
                 EciesFlag = false,
                 ReplyKey = newkey.Key,
-                Tags = new BufLen[] { newtag.Value }
+                Tags = new I2PByteBlock[] { newtag.Value }
             };
         }
     }

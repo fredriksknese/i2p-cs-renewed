@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -13,37 +13,37 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
     {
         public override MessageTypes MessageType { get { return MessageTypes.Data; } }
 
-        public DataMessage( BufRef reader )
+        public DataMessage( I2PBufferCursor reader )
         {
-            var start = new BufRef( reader );
-            reader.Seek( (int)reader.ReadFlip32() );
+            var start = new I2PBufferCursor( reader.BaseArray, reader.BaseArrayOffset );
+            reader.Seek( (int)reader.ReadUInt32BigEndian() );
             SetBuffer( start, reader );
         }
 
-        public DataMessage( BufLen data )
+        public DataMessage( I2PByteBlock data )
         {
             AllocateBuffer( 4 + data.Length );
-            Payload.PokeFlip32( (uint)data.Length, 0 );
-            Payload.Poke( data, 4 );
+            Payload.WriteUInt32BigEndian( (uint)data.Length, 0 );
+            Payload.CopyFrom( data, 4 );
         }
 
         public uint DataMessagePayloadLength
         {
             get
             {
-                return Payload.PeekFlip32( 0 );
+                return Payload.ReadUInt32BigEndian( 0 );
             }
             set
             {
-                Payload.PokeFlip32( value, 0 );
+                Payload.WriteUInt32BigEndian( value, 0 );
             }
         }
 
-        public BufLen DataMessagePayload
+        public I2PByteBlock DataMessagePayload
         {
             get
             {
-                return new BufLen( Payload, 4, (int)DataMessagePayloadLength );
+                return Payload.Slice( 4, (int)DataMessagePayloadLength );
             }
         }
 

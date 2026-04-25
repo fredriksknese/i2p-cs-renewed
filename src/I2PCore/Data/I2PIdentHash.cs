@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using Org.BouncyCastle.Utilities.Encoders;
 using I2PCore.Utils;
 
@@ -6,22 +7,22 @@ namespace I2PCore.Data
 {
     public class I2PIdentHash: I2PType, IEquatable<I2PIdentHash>
     {
-        public static readonly I2PIdentHash Zero = new(new BufLen(new byte[32]));
+        public static readonly I2PIdentHash Zero = new(new I2PByteBlock(new byte[32]));
 
-        public readonly BufLen Hash;
+        public readonly I2PByteBlock Hash;
         private readonly int CachedHash;
         private readonly string Id32ShortField;
 
-        private I2PIdentHash( BufLen hash )
+        private I2PIdentHash( I2PByteBlock hash )
         {
             Hash = hash;
             CachedHash = Hash.GetHashCode();
             Id32ShortField = $"[{BufUtils.ToBase32String( Hash ).Substring( 0, 5 )}]";
         }
 
-        private static BufLen CreateRandomBuf( bool random )
+        private static I2PByteBlock CreateRandomBuf( bool random )
         {
-            var buf = new BufLen( new byte[32] );
+            var buf = new I2PByteBlock( new byte[32] );
             if ( random ) buf.Randomize();
             return buf;
         }
@@ -30,12 +31,12 @@ namespace I2PCore.Data
         {
         }
 
-        private static BufLen CreateBase32ParsedBuf( string base32Addr )
+        private static I2PByteBlock CreateBase32ParsedBuf( string base32Addr )
         {
             var st = base32Addr;
             if ( st.EndsWith( ".i2p", StringComparison.Ordinal ) ) st = st.Substring( 0, st.Length - 4 );
             if ( st.EndsWith( ".b32", StringComparison.Ordinal ) ) st = st.Substring( 0, st.Length - 4 );
-            var buf = new BufLen( BufUtils.Base32ToByteArray( st ) );
+            var buf = new I2PByteBlock( BufUtils.Base32ToByteArray( st ) );
             return buf;
         }
 
@@ -43,14 +44,14 @@ namespace I2PCore.Data
         {
         }
 
-        public I2PIdentHash( BufRef buf ) : this( buf.ReadBufLen( 32 ) )
+        public I2PIdentHash( I2PBufferCursor buf ) : this( buf.ReadBlock( 32 ) )
         {
         }
 
-        private static BufLen CreateKnCBuf( I2PKeysAndCert kns )
+        private static I2PByteBlock CreateKnCBuf( I2PKeysAndCert kns )
         {
             var ar = kns.ToByteArray();
-            var buf = new BufLen( I2PHashSha256.GetHash( ar, 0, ar.Length ) );
+            var buf = new I2PByteBlock( I2PHashSha256.GetHash( ar, 0, ar.Length ) );
             return buf;
         }
 
@@ -92,17 +93,17 @@ namespace I2PCore.Data
             return new I2PRoutingKey( this, targetDate );
         }
 
-        public BufLen Hash16
+        public I2PByteBlock Hash16
         {
             get
             {
-                return new BufLen( Hash, 0, 16 );
+                return new I2PByteBlock( Hash.BaseArray, Hash.BaseArrayOffset, 16 );
             }
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
-            dest.Write( (BufRefLen)Hash );
+            dest.WriteBlock( Hash );
         }
 
         public override string ToString()

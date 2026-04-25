@@ -46,7 +46,7 @@ namespace I2PCore.TransportLayer.SSU2
     {
         public abstract SSU2BlockType BlockType { get; }
         public abstract byte[] Serialize();
-        public abstract void Parse(BufRef data);
+        public abstract void Parse(I2PBufferCursor data);
     }
 
     /// <summary>
@@ -79,12 +79,12 @@ namespace I2PCore.TransportLayer.SSU2
             return result;
         }
 
-        public override void Parse(BufRef data)
+        public override void Parse(I2PBufferCursor data)
         {
-            var size = data.ReadFlip16();
+            var size = data.ReadUInt16BigEndian();
             if (size != 4)
                 throw new Exception($"Invalid DateTime block size: {size}");
-            Timestamp = data.ReadFlip32();
+            Timestamp = data.ReadUInt32BigEndian();
         }
     }
 
@@ -126,20 +126,20 @@ namespace I2PCore.TransportLayer.SSU2
             return result;
         }
 
-        public override void Parse(BufRef data)
+        public override void Parse(I2PBufferCursor data)
         {
-            var size = data.ReadFlip16();
+            var size = data.ReadUInt16BigEndian();
             if (size < 12)
                 throw new Exception($"Invalid Options block size: {size}");
 
-            TMin = data.Read8();
-            TMax = data.Read8();
-            RMin = data.Read8();
-            RMax = data.Read8();
-            TDummy = data.ReadFlip16();
-            RDummy = data.ReadFlip16();
-            TDelay = data.ReadFlip16();
-            RDelay = data.ReadFlip16();
+            TMin = data.ReadByte();
+            TMax = data.ReadByte();
+            RMin = data.ReadByte();
+            RMax = data.ReadByte();
+            TDummy = data.ReadUInt16BigEndian();
+            RDummy = data.ReadUInt16BigEndian();
+            TDelay = data.ReadUInt16BigEndian();
+            RDelay = data.ReadUInt16BigEndian();
 
             // Skip any additional options
             if (size > 12)
@@ -174,15 +174,15 @@ namespace I2PCore.TransportLayer.SSU2
             return result;
         }
 
-        public override void Parse(BufRef data)
+        public override void Parse(I2PBufferCursor data)
         {
-            var size = data.ReadFlip16();
+            var size = data.ReadUInt16BigEndian();
             if (size != 6 && size != 18)
                 throw new Exception($"Invalid Address block size: {size}");
 
             var ipLen = size - 2;
-            IPAddress = data.ReadBufLen(ipLen).ToByteArray();
-            Port = data.ReadFlip16();
+            IPAddress = data.ReadBlock(ipLen).ToByteArray();
+            Port = data.ReadUInt16BigEndian();
         }
     }
 
@@ -230,19 +230,19 @@ namespace I2PCore.TransportLayer.SSU2
             return result;
         }
 
-        public override void Parse(BufRef data)
+        public override void Parse(I2PBufferCursor data)
         {
-            var size = data.ReadFlip16();
+            var size = data.ReadUInt16BigEndian();
             if (size < 1)
                 return;
 
-            var ackCount = data.Read8();
+            var ackCount = data.ReadByte();
             Ranges = new List<AckRange>();
 
             for (int i = 0; i < ackCount; i++)
             {
-                var through = data.ReadFlip32();
-                var acks = data.Read8();
+                var through = data.ReadUInt32BigEndian();
+                var acks = data.ReadByte();
 
                 // "through" is the end, "acks" is count-1
                 var end = through;
@@ -289,9 +289,9 @@ namespace I2PCore.TransportLayer.SSU2
             return result;
         }
 
-        public override void Parse(BufRef data)
+        public override void Parse(I2PBufferCursor data)
         {
-            var size = data.ReadFlip16();
+            var size = data.ReadUInt16BigEndian();
             if (size < 9)
                 throw new Exception($"Invalid Termination block size: {size}");
 
@@ -299,14 +299,14 @@ namespace I2PCore.TransportLayer.SSU2
             ValidPacketsReceived = 0;
             for (int i = 0; i < 8; i++)
             {
-                ValidPacketsReceived = (ValidPacketsReceived << 8) | data.Read8();
+                ValidPacketsReceived = (ValidPacketsReceived << 8) | data.ReadByte();
             }
 
-            Reason = (TerminationReason)data.Read8();
+            Reason = (TerminationReason)data.ReadByte();
 
             if (size > 9)
             {
-                AdditionalData = data.ReadBufLen(size - 9).ToByteArray();
+                AdditionalData = data.ReadBlock(size - 9).ToByteArray();
             }
         }
     }
@@ -364,9 +364,9 @@ namespace I2PCore.TransportLayer.SSU2
             return result;
         }
 
-        public override void Parse(BufRef data)
+        public override void Parse(I2PBufferCursor data)
         {
-            Length = data.ReadFlip16();
+            Length = data.ReadUInt16BigEndian();
             data.Seek(Length);  // Skip padding data
         }
     }
@@ -401,16 +401,16 @@ namespace I2PCore.TransportLayer.SSU2
             return result;
         }
 
-        public override void Parse(BufRef data)
+        public override void Parse(I2PBufferCursor data)
         {
-            var size = data.ReadFlip16();
+            var size = data.ReadUInt16BigEndian();
             if (size < 9)
                 throw new Exception($"Invalid I2NP block size: {size}");
 
-            MessageType = data.Read8();
-            MessageId = data.ReadFlip32();
-            Expiration = data.ReadFlip32();
-            Message = data.ReadBufLen(size - 9).ToByteArray();
+            MessageType = data.ReadByte();
+            MessageId = data.ReadUInt32BigEndian();
+            Expiration = data.ReadUInt32BigEndian();
+            Message = data.ReadBlock(size - 9).ToByteArray();
         }
     }
 
@@ -444,16 +444,16 @@ namespace I2PCore.TransportLayer.SSU2
             return result;
         }
 
-        public override void Parse(BufRef data)
+        public override void Parse(I2PBufferCursor data)
         {
-            var size = data.ReadFlip16();
+            var size = data.ReadUInt16BigEndian();
             if (size < 9)
                 throw new Exception($"Invalid FirstFragment block size: {size}");
 
-            MessageType = data.Read8();
-            MessageId = data.ReadFlip32();
-            Expiration = data.ReadFlip32();
-            PartialMessage = data.ReadBufLen(size - 9).ToByteArray();
+            MessageType = data.ReadByte();
+            MessageId = data.ReadUInt32BigEndian();
+            Expiration = data.ReadUInt32BigEndian();
+            PartialMessage = data.ReadBlock(size - 9).ToByteArray();
         }
     }
 
@@ -487,15 +487,15 @@ namespace I2PCore.TransportLayer.SSU2
             return result;
         }
 
-        public override void Parse(BufRef data)
+        public override void Parse(I2PBufferCursor data)
         {
-            var size = data.ReadFlip16();
+            var size = data.ReadUInt16BigEndian();
             if (size < 5)
                 throw new Exception($"Invalid FollowOnFragment block size: {size}");
 
-            FragmentInfo = data.Read8();
-            MessageId = data.ReadFlip32();
-            PartialMessage = data.ReadBufLen(size - 5).ToByteArray();
+            FragmentInfo = data.ReadByte();
+            MessageId = data.ReadUInt32BigEndian();
+            PartialMessage = data.ReadBlock(size - 5).ToByteArray();
         }
     }
 }

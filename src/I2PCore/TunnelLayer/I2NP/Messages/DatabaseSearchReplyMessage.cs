@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -28,22 +28,22 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
 
             // Build binary form
             AllocateBuffer( 32 + 1 + Peers.Count * 32 + 32 );
-            var writer = new BufRefLen( Payload );
+            var writer = new I2PBufferCursor( Payload );
 
-            writer.Write( Key.Hash );
-            writer.Write8( (byte)Peers.Count );
+            writer.WriteBlock( Key.Hash );
+            writer.WriteByte( (byte)Peers.Count );
             foreach ( var peer in Peers )
-                writer.Write( peer.Hash );
-            writer.Write( From.Hash );
+                writer.WriteBlock( peer.Hash );
+            writer.WriteBlock( From.Hash );
         }
 
-        public DatabaseSearchReplyMessage( BufRef reader )
+        public DatabaseSearchReplyMessage( I2PBufferCursor reader )
         {
-            var start = new BufRef( reader );
+            var start = new I2PBufferCursor( reader.BaseArray, reader.BaseArrayOffset );
 
             Key = new I2PIdentHash( reader );
 
-            var peercount = reader.Read8();
+            var peercount = reader.ReadByte();
             for ( int i = 0; i < peercount; ++i )
             {
                 Peers.Add( new I2PIdentHash( reader ) );

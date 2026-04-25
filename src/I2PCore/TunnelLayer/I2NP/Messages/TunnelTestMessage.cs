@@ -17,13 +17,13 @@ namespace I2PCore.TunnelLayer.I2NP.Data
 
         public uint TestMessageId
         {
-            get => Payload.PeekFlip32( 0 );
-            set => Payload.PokeFlip32( value, 0 );
+            get => Payload.ReadUInt32BigEndian( 0 );
+            set => Payload.WriteUInt32BigEndian( value, 0 );
         }
 
         public I2PDate Timestamp
         {
-            get => new I2PDate( new BufRefLen( Payload, 4 ) );
+            get => new I2PDate( new I2PBufferCursor( Payload.BaseArray, Payload.BaseArrayOffset + 4 ) );
             set => value.Poke( Payload, 4 );
         }
 
@@ -41,9 +41,9 @@ namespace I2PCore.TunnelLayer.I2NP.Data
             TestMessageId = msgid;
         }
 
-        public TunnelTestMessage( BufRef reader )
+        public TunnelTestMessage( I2PBufferCursor reader )
         {
-            var start = new BufRef( reader );
+            var start = new I2PBufferCursor( reader.BaseArray, reader.BaseArrayOffset );
             reader.Seek( 12 );
             SetBuffer( start, reader );
         }

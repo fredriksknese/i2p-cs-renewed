@@ -76,8 +76,8 @@ namespace I2PCore.SessionLayer
                         Array.Copy( mlkemPub, 0, combinedPub, 0, mlkemPub.Length );
                         Array.Copy( eciespubkey.ToByteArray(), 0, combinedPub, mlkemPub.Length, 32 );
 
-                        var mlkem768privkey = new I2PPrivateKey( new BufRef( combinedPriv ), new I2PCertificate( I2PKeyType.KeyTypes.MLKEM768_X25519 ) );
-                        var mlkem768pubkey = new I2PPublicKey( new BufRef( combinedPub ), new I2PCertificate( I2PKeyType.KeyTypes.MLKEM768_X25519 ) );
+                        var mlkem768privkey = new I2PPrivateKey( new I2PBufferCursor( combinedPriv ), new I2PCertificate( I2PKeyType.KeyTypes.MLKEM768_X25519 ) );
+                        var mlkem768pubkey = new I2PPublicKey( new I2PBufferCursor( combinedPub ), new I2PCertificate( I2PKeyType.KeyTypes.MLKEM768_X25519 ) );
                         PrivateKeys.Add( mlkem768privkey );
                         PublicKeys.Add( mlkem768pubkey );
                     }
@@ -96,8 +96,8 @@ namespace I2PCore.SessionLayer
                         Array.Copy( mlkemPub, 0, combinedPub, 0, mlkemPub.Length );
                         Array.Copy( eciespubkey.ToByteArray(), 0, combinedPub, mlkemPub.Length, 32 );
 
-                        var hmlkem768privkey = new I2PPrivateKey( new BufRef( combinedPriv ), new I2PCertificate( I2PKeyType.KeyTypes.MLKEM768_X25519 ) );
-                        var hmlkem768pubkey = new I2PPublicKey( new BufRef( combinedPub ), new I2PCertificate( I2PKeyType.KeyTypes.MLKEM768_X25519 ) );
+                        var hmlkem768privkey = new I2PPrivateKey( new I2PBufferCursor( combinedPriv ), new I2PCertificate( I2PKeyType.KeyTypes.MLKEM768_X25519 ) );
+                        var hmlkem768pubkey = new I2PPublicKey( new I2PBufferCursor( combinedPub ), new I2PCertificate( I2PKeyType.KeyTypes.MLKEM768_X25519 ) );
                         PrivateKeys.Add( hmlkem768privkey );
                         PublicKeys.Add( hmlkem768pubkey );
                     }
@@ -148,7 +148,7 @@ namespace I2PCore.SessionLayer
 
         private GarlicCloveDelivery TranslateEciesDelivery( I2PCore.SessionLayer.ECIES.CloveResult eciesClove )
         {
-            var msg = I2NpMessage.ReadHeader16( new BufRefLen( eciesClove.Payload ) ).Message;
+            var msg = I2NpMessage.ReadHeader16( new I2PBufferCursor( eciesClove.Payload ) ).Message;
 
             switch ( eciesClove.DeliveryType )
             {

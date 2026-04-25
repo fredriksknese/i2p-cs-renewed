@@ -18,7 +18,7 @@ namespace I2PCore.Data
             switch( Certificate.PublicKeyType )
             {
                 case KeyTypes.ElGamal2048:
-                    Key = new BufLen( I2PConstants
+                    Key = new I2PByteBlock( I2PConstants
                             .ElGamalG.ModPow(
                                 priv.ToBigInteger(),
                                 I2PConstants.ElGamalP )
@@ -26,7 +26,7 @@ namespace I2PCore.Data
                     break;
 
                 case KeyTypes.X25519:
-                    Key = new BufLen( X25519.GetPublicKey( priv.ToByteArray() ) );
+                    Key = new I2PByteBlock( X25519.GetPublicKey( priv.ToByteArray() ) );
                     break;
 
                 case KeyTypes.MLKEM512_X25519:
@@ -41,7 +41,7 @@ namespace I2PCore.Data
                         var combined = new byte[mlkemPub.Length + x25519Pub.Length];
                         Array.Copy( mlkemPub, 0, combined, 0, mlkemPub.Length );
                         Array.Copy( x25519Pub, 0, combined, mlkemPub.Length, x25519Pub.Length );
-                        Key = new BufLen( combined );
+                        Key = new I2PByteBlock( combined );
                     }
                     break;
 
@@ -57,7 +57,7 @@ namespace I2PCore.Data
                         var combined = new byte[mlkemPub.Length + x25519Pub.Length];
                         Array.Copy( mlkemPub, 0, combined, 0, mlkemPub.Length );
                         Array.Copy( x25519Pub, 0, combined, mlkemPub.Length, x25519Pub.Length );
-                        Key = new BufLen( combined );
+                        Key = new I2PByteBlock( combined );
                     }
                     break;
 
@@ -73,7 +73,7 @@ namespace I2PCore.Data
                         var combined = new byte[mlkemPub.Length + x25519Pub.Length];
                         Array.Copy( mlkemPub, 0, combined, 0, mlkemPub.Length );
                         Array.Copy( x25519Pub, 0, combined, mlkemPub.Length, x25519Pub.Length );
-                        Key = new BufLen( combined );
+                        Key = new I2PByteBlock( combined );
                     }
                     break;
 
@@ -88,7 +88,7 @@ namespace I2PCore.Data
                         var pubBytes = new byte[64];
                         Array.Copy( xBytes, 0, pubBytes, 32 - xBytes.Length, xBytes.Length );
                         Array.Copy( yBytes, 0, pubBytes, 64 - yBytes.Length, yBytes.Length );
-                        Key = new BufLen( pubBytes );
+                        Key = new I2PByteBlock( pubBytes );
                     }
                     break;
 
@@ -103,7 +103,7 @@ namespace I2PCore.Data
                         var pubBytes = new byte[96];
                         Array.Copy( xBytes, 0, pubBytes, 48 - xBytes.Length, xBytes.Length );
                         Array.Copy( yBytes, 0, pubBytes, 96 - yBytes.Length, yBytes.Length );
-                        Key = new BufLen( pubBytes );
+                        Key = new I2PByteBlock( pubBytes );
                     }
                     break;
 
@@ -118,22 +118,22 @@ namespace I2PCore.Data
                         var pubBytes = new byte[132];
                         Array.Copy( xBytes, 0, pubBytes, 66 - xBytes.Length, xBytes.Length );
                         Array.Copy( yBytes, 0, pubBytes, 132 - yBytes.Length, yBytes.Length );
-                        Key = new BufLen( pubBytes );
+                        Key = new I2PByteBlock( pubBytes );
                     }
                     break;
 
                 default:
                     Logging.LogWarning( $"I2PPublicKey: Public key derivation not implemented for key type {Certificate.PublicKeyType}" );
-                    Key = new BufLen( new byte[KeySizeBytes] );
+                    Key = new I2PByteBlock( new byte[KeySizeBytes] );
                     break;
             }
         }
 
-        public I2PPublicKey( BufRef buf, I2PCertificate cert ) : base( buf, cert ) { }
+        public I2PPublicKey( I2PBufferCursor buf, I2PCertificate cert ) : base( buf, cert ) { }
 
         public I2PPublicKey( BigInteger pubkey, I2PCertificate cert ): base( cert )
         {
-            Key = new BufLen( pubkey.ToByteArrayUnsigned() );
+            Key = new I2PByteBlock( pubkey.ToByteArrayUnsigned() );
         }
 
         public override int KeySizeBytes { get { return Certificate.PublicKeyLength; } }

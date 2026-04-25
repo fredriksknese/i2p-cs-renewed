@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -11,31 +12,31 @@ namespace I2PCore.Data
     /// </summary>
     public class I2PSessionKey : I2PType, IComparable<I2PSessionKey>, IEqualityComparer<I2PSessionKey>
     {
-        public readonly BufLen Key;
+        public readonly I2PByteBlock Key;
 
         public I2PSessionKey()
         {
-            Key = new BufLen( BufUtils.RandomBytes( 32 ) );
+            Key = new I2PByteBlock( BufUtils.RandomBytes( 32 ) );
         }
 
         public I2PSessionKey( byte[] buf )
         {
-            Key = new BufLen( buf, 0, 32 );
+            Key = new I2PByteBlock( buf, 0, 32 );
         }
 
         public I2PSessionKey( I2PSessionKey src )
         {
-            Key = new BufLen( src.Key );
+            Key = src.Key;
         }
 
-        public I2PSessionKey( BufRef buf )
+        public I2PSessionKey( I2PBufferCursor buf )
         {
             if ( buf is null )
             {
                 throw new ArgumentException( "SessionKey must be 32 bytes" );
             }
 
-            Key = buf.ReadBufLen( 32 );
+            Key = buf.ReadBlock( 32 );
 
             if ( Key.Length != 32 )
             {
@@ -43,18 +44,18 @@ namespace I2PCore.Data
             }
         }
 
-        public I2PSessionKey( BufLen buf )
+        public I2PSessionKey( I2PByteBlock buf )
         {
-            if ( buf is null || buf.Length != 32 )
+            if ( buf.Length != 32 )
             {
                 throw new ArgumentException( "SessionKey must be 32 bytes" );
             }
             Key = buf;
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
-            Key.WriteTo( dest );
+            dest.WriteBlock( Key );
         }
 
         public override bool Equals( object obj )
@@ -71,7 +72,7 @@ namespace I2PCore.Data
 
         int IComparable<I2PSessionKey>.CompareTo( I2PSessionKey other )
         {
-            return BufLen.Compare( Key, other.Key );
+            return I2PByteBlock.Compare( Key, other.Key );
         }
 
         int IEqualityComparer<I2PSessionKey>.GetHashCode( I2PSessionKey obj )
@@ -91,12 +92,12 @@ namespace I2PCore.Data
 
         public static bool operator >( I2PSessionKey left, I2PSessionKey right )
         {
-            return BufLen.Compare( left.Key, right.Key ) > 0;
+            return I2PByteBlock.Compare( left.Key, right.Key ) > 0;
         }
 
         public static bool operator <( I2PSessionKey left, I2PSessionKey right )
         {
-            return BufLen.Compare( left.Key, right.Key ) < 0;
+            return I2PByteBlock.Compare( left.Key, right.Key ) < 0;
         }
 
         public override int GetHashCode()

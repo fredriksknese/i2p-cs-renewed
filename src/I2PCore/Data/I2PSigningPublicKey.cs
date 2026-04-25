@@ -18,7 +18,7 @@ namespace I2PCore.Data
             switch ( Certificate.SignatureType )
             {
                 case SigningKeyTypes.DsaSha1:
-                    Key = new BufLen( I2PConstants.DsaG.ModPow( privkey.ToBigInteger(), I2PConstants.DsaP ).ToByteArrayUnsigned() );
+                    Key = new I2PByteBlock( I2PConstants.DsaG.ModPow( privkey.ToBigInteger(), I2PConstants.DsaP ).ToByteArrayUnsigned() );
                     break;
 
                 case I2PSigningKey.SigningKeyTypes.EcdsaSha256P256:
@@ -28,7 +28,7 @@ namespace I2PCore.Data
 
                         var q = domain.G.Multiply( privkey.ToBigInteger() );
                         var publicparam = new ECPublicKeyParameters( q, domain );
-                        Key = new BufLen( publicparam.Q.GetEncoded() );
+                        Key = new I2PByteBlock( publicparam.Q.GetEncoded() );
                     }
                     break;
 
@@ -39,7 +39,7 @@ namespace I2PCore.Data
 
                         var q = domain.G.Multiply( privkey.ToBigInteger() );
                         var publicparam = new ECPublicKeyParameters( q, domain );
-                        Key = new BufLen( publicparam.Q.GetEncoded() );
+                        Key = new I2PByteBlock( publicparam.Q.GetEncoded() );
                     }
                     break;
 
@@ -50,24 +50,24 @@ namespace I2PCore.Data
 
                         var q = domain.G.Multiply( privkey.ToBigInteger() );
                         var publicparam = new ECPublicKeyParameters( q, domain );
-                        Key = new BufLen( publicparam.Q.GetEncoded() );
+                        Key = new I2PByteBlock( publicparam.Q.GetEncoded() );
                     }
                     break;
 
                 case SigningKeyTypes.EdDsaSha512Ed25519:
-                    Key = new BufLen( new Ed25519PrivateKeyParameters( privkey.Key.BaseArray, privkey.Key.BaseArrayOffset ).GeneratePublicKey().GetEncoded() );
+                    Key = new I2PByteBlock( new Ed25519PrivateKeyParameters( privkey.Key.BaseArray, privkey.Key.BaseArrayOffset ).GeneratePublicKey().GetEncoded() );
                     break;
 
                 default:
                     Logging.LogWarning( $"I2PSigningPublicKey: Public key derivation not implemented for {Certificate.SignatureType}" );
-                    Key = new BufLen( new byte[KeySizeBytes] );
+                    Key = new I2PByteBlock( new byte[KeySizeBytes] );
                     break;
             }
         }
 
-        public I2PSigningPublicKey( BufRef buf, I2PCertificate cert ): base( cert )
+        public I2PSigningPublicKey( I2PBufferCursor buf, I2PCertificate cert ): base( cert )
         {
-            Key = buf.ReadBufLen( KeySizeBytes );
+            Key = buf.ReadBlock( KeySizeBytes );
         }
     }
 }

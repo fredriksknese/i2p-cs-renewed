@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -42,13 +43,13 @@ namespace I2P.I2CP.Messages
             Destination = dest;
         }
 
-        public override void Write( BufRefStream dest )
+        public override void Write( ArrayBufferWriter<byte> dest )
         {
             var header = new byte[7];
-            var writer = new BufRefLen( header );
-            writer.WriteFlip16( SessionId );
-            writer.WriteFlip32( RequestId );
-            writer.Write8( (byte)ResultCode );
+            var writer = new I2PBufferCursor( header );
+            writer.WriteUInt16BigEndian( SessionId );
+            writer.WriteUInt32BigEndian( RequestId );
+            writer.WriteByte( (byte)ResultCode );
             dest.Write( header );
 
             if ( ResultCode == HostLookupResults.Success )

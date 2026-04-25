@@ -84,18 +84,18 @@ namespace I2PCore.TransportLayer.SSU2
 
         public byte[] ToByteArray()
         {
-            var result = new BufLen(new byte[8192]);
-            var writer = new BufRefLen(result);
+            var result = new I2PByteBlock(new byte[8192]);
+            var writer = new I2PBufferCursor(result);
 
             // Write blocks
             foreach (var block in Blocks)
             {
-                writer.Write8((byte)block.BlockType);
-                writer.WriteFlip16((ushort)block.Data.Length);
-                writer.Write(block.Data);
+                writer.WriteByte((byte)block.BlockType);
+                writer.WriteUInt16BigEndian((ushort)block.Data.Length);
+                writer.WriteBytes(block.Data);
             }
 
-            return result.BaseArray.Copy(0, writer.BaseArrayOffset);
+            return result.ToByteArray().Copy(0, writer.Position);
         }
 
         public byte[] BuildEncryptedPacket(byte[] dataKey, byte[] headerKey1, byte[] headerKey2)
@@ -140,11 +140,11 @@ namespace I2PCore.TransportLayer.SSU2
             SSU2HeaderEncryption.DecryptShortHeaderInPacket(packetCopy, 0, headerKey1, headerKey2);
 
             // Parse short header (now decrypted)
-            var reader = new BufRef(packetCopy);
-            var connIdHigh = reader.Read8();
-            var connIdLow = reader.Read8();
+            var reader = new I2PBufferCursor(packetCopy);
+            var connIdHigh = reader.ReadByte();
+            var connIdLow = reader.ReadByte();
             reader.Seek(2); // Skip type/version
-            var packetNum = reader.ReadFlip32();
+            var packetNum = reader.ReadUInt32BigEndian();
             reader.Seek(8); // Skip rest of header (total 16 bytes)
 
             packet.Header = new SSU2Header
@@ -170,12 +170,12 @@ namespace I2PCore.TransportLayer.SSU2
                 throw new Exception("Data packet AEAD verification failed");
 
             // Parse blocks
-            var blockReader = new BufRef(decrypted);
-            while (blockReader.BaseArrayOffset < decrypted.Length)
+            var blockReader = new I2PBufferCursor(decrypted);
+            while (blockReader.Remaining > 0)
             {
-                var blockType = (SSU2BlockType)blockReader.Read8();
-                var blockLen = blockReader.ReadFlip16();
-                var blockData = blockReader.Read(blockLen);
+                var blockType = (SSU2BlockType)blockReader.ReadByte();
+                var blockLen = blockReader.ReadUInt16BigEndian();
+                var blockData = blockReader.ReadBytes(blockLen);
 
                 packet.Blocks.Add(new SSU2BlockWrapper
                 {

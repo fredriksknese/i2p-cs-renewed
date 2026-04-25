@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -12,25 +12,25 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
     {
         public override MessageTypes MessageType { get { return MessageTypes.Garlic; } }
 
-        public BufLen Data
+        public I2PByteBlock Data
         {
             get
             {
                 // Garlic messages ALWAYS have a 4-byte big-endian length prefix in their body.
                 // This applies to both legacy ElGamal and modern ECIES (Proposal 144) messages.
                 if ( Payload.Length < 4 ) return Payload;
-                return new BufLen( Payload, 4 );
+                return Payload.Slice( 4 );
             }
         }
 
-        public BufLen EgData => Data;
+        public I2PByteBlock EgData => Data;
 
-        public GarlicMessage( BufRef reader )
+        public GarlicMessage( I2PBufferCursor reader )
         {
-            var start = new BufRef( reader );
-            
+            var start = new I2PBufferCursor( reader.BaseArray, reader.BaseArrayOffset );
+
             // Standard I2NP Garlic message always has a 4-byte big-endian length prefix
-            var len = (int)reader.ReadFlip32();
+            var len = (int)reader.ReadUInt32BigEndian();
             reader.Seek( len );
 
             SetBuffer( start, reader );
@@ -43,9 +43,9 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
         public GarlicMessage( byte[] data )
         {
             AllocateBuffer( 4 + data.Length );
-            var writer = new BufRefLen( Payload );
-            writer.WriteFlip32( (uint)data.Length );
-            writer.Write( data );
+            var writer = new I2PBufferCursor( Payload );
+            writer.WriteUInt32BigEndian( (uint)data.Length );
+            writer.WriteBytes( data );
         }
     }
 }

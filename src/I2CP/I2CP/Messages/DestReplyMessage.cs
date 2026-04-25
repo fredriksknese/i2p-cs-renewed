@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -27,14 +28,14 @@ namespace I2P.I2CP.Messages
             Ident = hash;
         }
 
-        public DestReplyMessage( BufRefLen reader )
+        public DestReplyMessage( I2PBufferCursor reader )
             : base( ProtocolMessageType.DestReply )
         {
             Destination = null;
             Ident = null;
 
-            if ( reader.Length == 0 ) return;
-            if ( reader.Length == 32 )
+            if ( reader.Remaining == 0 ) return;
+            if ( reader.Remaining == 32 )
             {
                 Ident = new I2PIdentHash( reader );
             }
@@ -44,7 +45,7 @@ namespace I2P.I2CP.Messages
             }
         }
 
-        public override void Write( BufRefStream dest )
+        public override void Write( ArrayBufferWriter<byte> dest )
         {
             if ( Destination != null )
             {

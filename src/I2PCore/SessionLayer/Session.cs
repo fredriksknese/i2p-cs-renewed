@@ -206,17 +206,17 @@ namespace I2PCore.SessionLayer
 
             // Wrap ECIES message in GarlicMessage format (I2NP type 11)
             // Format: 4-byte length + ECIES data
-            var dest = new BufLen(new byte[eciesMessage.Length + I2NpMessage.I2NpMaxHeaderSize + 4]);
-            var writer = new BufRefLen(dest, I2NpMessage.I2NpMaxHeaderSize);
+            var destbuf = new byte[eciesMessage.Length + I2NpMessage.I2NpMaxHeaderSize + 4];
+            var writer = new I2PBufferCursor(destbuf, I2NpMessage.I2NpMaxHeaderSize);
 
             // Write length (big-endian)
-            writer.WriteFlip32((uint)eciesMessage.Length);
+            writer.WriteUInt32BigEndian((uint)eciesMessage.Length);
 
             // Write ECIES message
-            writer.Write(eciesMessage);
+            writer.WriteBytes(eciesMessage);
 
             var totalLength = 4 + eciesMessage.Length;
-            return new GarlicMessage(new BufRefLen(dest, I2NpMessage.I2NpMaxHeaderSize, totalLength));
+            return new GarlicMessage(new I2PBufferCursor(destbuf, I2NpMessage.I2NpMaxHeaderSize, totalLength));
         }
 
         internal void MySignedLeasesUpdated( I2PIdentHash dest )

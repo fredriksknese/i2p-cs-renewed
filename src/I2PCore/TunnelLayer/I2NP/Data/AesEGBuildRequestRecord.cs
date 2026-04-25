@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -12,17 +12,17 @@ namespace I2PCore.TunnelLayer.I2NP.Data
     {
         public const int Length = 528;
 
-        public BufLen Data;
+        public I2PByteBlock Data;
 
         // Might be readable, or encrypted
-        public BufLen ToPeer16 { get { return new BufLen( Data, 0, 16 ); } }
+        public I2PByteBlock ToPeer16 { get { return Data.Slice( 0, 16 ); } }
 
-        public AesEgBuildRequestRecord( BufRef buf )
+        public AesEgBuildRequestRecord( I2PBufferCursor buf )
         {
-            Data = buf.ReadBufLen( Length );
+            Data = buf.ReadBlock( Length );
         }
 
-        public AesEgBuildRequestRecord( BufLen dest, EgBuildRequestRecord src, BufferedBlockCipher cipher )
+        public AesEgBuildRequestRecord( I2PByteBlock dest, EgBuildRequestRecord src, BufferedBlockCipher cipher )
         {
             Data = dest;
             cipher.ProcessBytes( src.Data.BaseArray, src.Data.BaseArrayOffset, src.Data.Length, Data.BaseArray, Data.BaseArrayOffset );
@@ -30,12 +30,12 @@ namespace I2PCore.TunnelLayer.I2NP.Data
 
         public AesEgBuildRequestRecord( EgBuildRequestRecord src, BufferedBlockCipher cipher )
         {
-            Data = new BufLen( cipher.ProcessBytes( src.Data.BaseArray, src.Data.BaseArrayOffset, src.Data.Length ) );
+            Data = new I2PByteBlock( cipher.ProcessBytes( src.Data.BaseArray, src.Data.BaseArrayOffset, src.Data.Length ) );
         }
 
         public AesEgBuildRequestRecord Clone()
         {
-            return new AesEgBuildRequestRecord( (BufRefLen)Data.Clone() );
+            return new AesEgBuildRequestRecord( new I2PBufferCursor( Data.Clone() ) );
         }
 
         public void Process( BufferedBlockCipher cipher )

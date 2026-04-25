@@ -54,7 +54,7 @@ namespace I2PTests
 
             var data = dbsm.CreateHeader16.HeaderAndPayload;
 
-            var recreated = I2NpMessage.ReadHeader16( new BufRefLen( data ) );
+            var recreated = I2NpMessage.ReadHeader16( new I2PBufferCursor( data ) );
 
             Assert.IsTrue( recreated.MessageType == I2NpMessage.MessageTypes.DatabaseStore );
             var rdsm = (DatabaseStoreMessage)recreated.Message;
@@ -81,7 +81,7 @@ namespace I2PTests
 
             var data = dbsm.CreateHeader16.HeaderAndPayload;
 
-            var recreated = I2NpMessage.ReadHeader16( new BufRefLen( data ) );
+            var recreated = I2NpMessage.ReadHeader16( new I2PBufferCursor( data ) );
 
             Assert.IsTrue( recreated.MessageType == I2NpMessage.MessageTypes.DatabaseStore );
             var rdsm = (DatabaseStoreMessage)recreated.Message;
@@ -108,7 +108,7 @@ namespace I2PTests
 
             var data = dbsm.CreateHeader16.HeaderAndPayload.Clone();
 
-            var recreated = I2NpMessage.ReadHeader16( new BufRefLen( data ) );
+            var recreated = I2NpMessage.ReadHeader16( new I2PBufferCursor( data ) );
 
             Assert.IsTrue( recreated.MessageType == I2NpMessage.MessageTypes.DatabaseStore );
             var rdsm = (DatabaseStoreMessage)recreated.Message;
@@ -161,7 +161,7 @@ namespace I2PTests
 
             var data = dbsm.CreateHeader16.HeaderAndPayload.Clone();
 
-            var recreated = I2NpMessage.ReadHeader16( new BufRefLen( data ) );
+            var recreated = I2NpMessage.ReadHeader16( new I2PBufferCursor( data ) );
 
             Assert.IsTrue( recreated.MessageType == I2NpMessage.MessageTypes.DatabaseStore );
             var rdsm = (DatabaseStoreMessage)recreated.Message;
@@ -210,7 +210,7 @@ namespace I2PTests
 
             var data = dbsm.CreateHeader16.HeaderAndPayload;
 
-            var recreated = I2NpMessage.ReadHeader16( new BufRefLen( data ) );
+            var recreated = I2NpMessage.ReadHeader16( new I2PBufferCursor( data ) );
 
             Assert.IsTrue( recreated.MessageType == I2NpMessage.MessageTypes.DatabaseStore );
             var rdsm = (DatabaseStoreMessage)recreated.Message;
@@ -252,7 +252,7 @@ namespace I2PTests
 
             var msgdata = msg.CreateHeader16.HeaderAndPayload;
 
-            var msg2 = new VariableTunnelBuildMessage( new BufRefLen( msg.Payload ) );
+            var msg2 = new VariableTunnelBuildMessage( new I2PBufferCursor( msg.Payload ) );
             var msg2data = msg2.CreateHeader16.HeaderAndPayload;
 
             Assert.IsTrue( msgdata == msg2data );

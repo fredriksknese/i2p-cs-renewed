@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -11,9 +12,9 @@ namespace I2P.I2CP.Messages
     {
         public ushort SessionId;
         public uint MessageId;
-        public BufLen Payload;
+        public I2PByteBlock Payload;
 
-        public MessagePayloadMessage( ushort sessionid, uint msgid, BufLen data )
+        public MessagePayloadMessage( ushort sessionid, uint msgid, I2PByteBlock data )
             : base( ProtocolMessageType.MessagePayload )
         {
             SessionId = sessionid;
@@ -21,16 +22,16 @@ namespace I2P.I2CP.Messages
             Payload = data;
         }
 
-        public override void Write( BufRefStream dest )
+        public override void Write( ArrayBufferWriter<byte> dest )
         {
             var header = new byte[10];
-            var writer = new BufRefLen( header );
-            writer.WriteFlip16( SessionId );
-            writer.WriteFlip32( MessageId );
-            writer.WriteFlip32( (uint)Payload.Length );
+            var writer = new I2PBufferCursor( header );
+            writer.WriteUInt16BigEndian( SessionId );
+            writer.WriteUInt32BigEndian( MessageId );
+            writer.WriteUInt32BigEndian( (uint)Payload.Length );
 
             dest.Write( header );
-            dest.Write( (BufRefLen)Payload );
+            dest.WriteBlock( Payload );
         }
 
         public override string ToString()

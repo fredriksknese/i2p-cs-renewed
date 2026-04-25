@@ -81,11 +81,11 @@ namespace I2PCore.SessionLayer
             {
                 if ( ls is I2PLeaseSet )
                 {
-                    var test1 = new I2PLeaseSet( new BufRefLen( ls.ToByteArray() ) );
+                    var test1 = new I2PLeaseSet( new I2PBufferCursor( ls.ToByteArray() ) );
                 }
                 else
                 {
-                    var test2 = new I2PLeaseSet2( new BufRefLen( ls.ToByteArray() ) );
+                    var test2 = new I2PLeaseSet2( new I2PBufferCursor( ls.ToByteArray() ) );
                 }
             } 
             catch( Exception ex )

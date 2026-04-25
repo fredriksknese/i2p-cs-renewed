@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using I2PCore.Data;
 using I2PCore.Utils;
 using Org.BouncyCastle.Crypto.Engines;
@@ -51,7 +52,7 @@ namespace I2PCore.TunnelLayer.ECIES
         /// <summary>
         /// Parse an unencrypted long build reply record
         /// </summary>
-        public LongBuildReplyRecord(BufRef reader)
+        public LongBuildReplyRecord(I2PBufferCursor reader)
         {
             // Parse options mapping
             Options = new I2PMapping(reader);
@@ -67,7 +68,7 @@ namespace I2PCore.TunnelLayer.ECIES
             }
 
             // Read reply status
-            Status = (TunnelBuildReplyStatus)reader.Read8();
+            Status = (TunnelBuildReplyStatus)reader.ReadByte();
         }
 
         /// <summary>
@@ -78,31 +79,31 @@ namespace I2PCore.TunnelLayer.ECIES
             if (data == null || data.Length < UnencryptedRecordSize)
                 throw new ArgumentException($"Data too short for long build reply record");
 
-            return new LongBuildReplyRecord(new BufRef(data));
+            return new LongBuildReplyRecord(new I2PBufferCursor(data));
         }
 
         /// <summary>
         /// Write the unencrypted record to a buffer
         /// </summary>
-        public void Write(BufRefStream dest)
+        public void Write(IBufferWriter<byte> dest)
         {
-            var start = dest.Length;
+            var startCount = (dest as ArrayBufferWriter<byte>)?.WrittenCount ?? 0;
 
             // Write options
             Options.Write(dest);
 
             // Pad to 527 bytes with random data
-            var written = (int)(dest.Length - start);
+            var written = (int)((dest as ArrayBufferWriter<byte>)?.WrittenCount ?? 0) - (int)startCount;
             var paddingSize = (UnencryptedRecordSize - 1) - written; // -1 for reply byte
 
             if (paddingSize > 0)
             {
                 var padding = BufUtils.RandomBytes(paddingSize);
-                dest.Write(padding);
+                dest.WriteBytes(padding);
             }
 
             // Write reply status at byte 527
-            dest.Write((byte)Status);
+            dest.WriteByte((byte)Status);
         }
 
         /// <summary>
@@ -110,9 +111,9 @@ namespace I2PCore.TunnelLayer.ECIES
         /// </summary>
         public byte[] ToByteArray()
         {
-            var stream = new BufRefStream();
+            var stream = new ArrayBufferWriter<byte>();
             Write(stream);
-            return stream.ToByteArray();
+            return stream.WrittenSpan.ToArray();
         }
 
         /// <summary>

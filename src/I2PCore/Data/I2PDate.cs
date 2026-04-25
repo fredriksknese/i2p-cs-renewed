@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -25,9 +26,9 @@ namespace I2PCore.Data
         {
             DateMilliseconds = val;
         }
-        public I2PDate( BufRef reader )
+        public I2PDate( I2PBufferCursor reader )
         {
-            DateMilliseconds = reader.ReadFlip64();
+            DateMilliseconds = reader.ReadUInt64BigEndian();
         }
         public I2PDate( I2PDate date )
         {
@@ -41,19 +42,19 @@ namespace I2PCore.Data
             DateMilliseconds = (UInt64)( dt - RefDate ).TotalMilliseconds;
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
-            dest.Write( BufUtils.Flip64B( DateMilliseconds ) );
+            dest.WriteUInt64BigEndian( DateMilliseconds );
         }
 
-        public void Write( BufRef dest )
+        public void Write( I2PBufferCursor dest )
         {
-            dest.WriteFlip64( DateMilliseconds );
+            dest.WriteUInt64BigEndian( DateMilliseconds );
         }
 
-        public void Poke( BufBase dest, int offset )
+        public void Poke( I2PByteBlock dest, int offset )
         {
-            dest.PokeFlip64( DateMilliseconds, offset );
+            dest.WriteUInt64BigEndian( DateMilliseconds, offset );
         }
 
         public ulong Nudge()

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -16,12 +17,12 @@ namespace I2P.I2CP.Messages
         public I2PLeaseSet Leases;
         public I2PLeaseSet2 Leases2;
 
-        public CreateLeaseSet2Message( BufRef reader, I2CpSession session ) 
+        public CreateLeaseSet2Message( I2PBufferCursor reader, I2CpSession session ) 
                 : base( ProtocolMessageType.CreateLeaseSet2Message )
         {
-            SessionId = reader.ReadFlip16();
+            SessionId = reader.ReadUInt16BigEndian();
 
-            var lstype = reader.Read8();
+            var lstype = reader.ReadByte();
             switch( lstype )
             {
                 case 1: // LS
@@ -42,37 +43,37 @@ namespace I2P.I2CP.Messages
             }
 
             PrivateKeys = new List<I2PPrivateKey>();
-            var privkeycount = reader.Read8();
+            var privkeycount = reader.ReadByte();
             for( int i = 0; i < privkeycount; ++i )
             {
-                var etype = (I2PPublicKey.KeyTypes)reader.ReadFlip16();
-                var keylen = reader.ReadFlip16();
+                var etype = (I2PPublicKey.KeyTypes)reader.ReadUInt16BigEndian();
+                var keylen = reader.ReadUInt16BigEndian();
                 PrivateKeys.Add( new I2PPrivateKey( reader, new I2PCertificate( etype, keylen ) ) );
             }
         }
 
-        public override void Write( BufRefStream dest )
+        public override void Write( ArrayBufferWriter<byte> dest )
         {
-            dest.Write( BufUtils.Flip16B( SessionId ) );
+            dest.WriteUInt16BigEndian( SessionId );
 
             if ( Leases2 != null )
             {
-                dest.Write( (byte)3 ); // LS2 type
+                dest.WriteByte( (byte)3 ); // LS2 type
                 Leases2.Write( dest );
             }
             else if ( Leases != null )
             {
-                dest.Write( (byte)1 ); // LS type
+                dest.WriteByte( (byte)1 ); // LS type
                 Leases.Write( dest );
             }
 
-            dest.Write( (byte)(PrivateKeys?.Count ?? 0) );
+            dest.WriteByte( (byte)(PrivateKeys?.Count ?? 0) );
             if ( PrivateKeys != null )
             {
                 foreach ( var pk in PrivateKeys )
                 {
-                    dest.Write( BufUtils.Flip16B( (ushort)pk.Certificate.PublicKeyType ) );
-                    dest.Write( BufUtils.Flip16B( (ushort)pk.KeySizeBytes ) );
+                    dest.WriteUInt16BigEndian( (ushort)pk.Certificate.PublicKeyType );
+                    dest.WriteUInt16BigEndian( (ushort)pk.KeySizeBytes );
                     pk.Write( dest );
                 }
             }

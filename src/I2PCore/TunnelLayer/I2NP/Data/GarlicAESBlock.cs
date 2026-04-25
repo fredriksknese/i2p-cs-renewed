@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -9,86 +10,86 @@ namespace I2PCore.TunnelLayer.I2NP.Data
 {
     public class GarlicAesBlock: I2PType
     {
-        public BufLen TagCount;
-        public List<BufLen> Tags = new();
-        public BufLen PayloadSize;
-        public BufLen PayloadHash;
-        public BufLen Flag;
+        public I2PByteBlock TagCount;
+        public List<I2PByteBlock> Tags = new();
+        public I2PByteBlock PayloadSize;
+        public I2PByteBlock PayloadHash;
+        public I2PByteBlock Flag;
         public I2PSessionKey NewSessionKey;
-        public BufLen Payload;
-        public BufLen Padding;
+        public I2PByteBlock Payload;
+        public I2PByteBlock Padding;
 
-        public BufLen DataBuf;
+        public I2PByteBlock DataBuf;
 
-        public GarlicAesBlock( BufRefLen reader )
+        public GarlicAesBlock( I2PBufferCursor reader )
         {
-            var start = new BufLen( reader );
+            var startPos = reader.Position;
 
-            TagCount = reader.ReadBufLen( 2 );
-            var tags = TagCount.PeekFlip16( 0 );
+            TagCount = reader.ReadBlock( 2 );
+            var tags = TagCount.ReadUInt16BigEndian( 0 );
             if ( tags > 0 )
             {
-                if ( tags * I2PSessionTag.TagLength > start.Length )
+                if ( tags * I2PSessionTag.TagLength > reader.Remaining + 2 )
                 {
                     throw new ArgumentException( "GarlicAESBlock: Not enough data for the tags supplied." );
                 }
-                for ( int i = 0; i < tags; ++i ) Tags.Add( reader.ReadBufLen( I2PSessionTag.TagLength ) );
+                for ( int i = 0; i < tags; ++i ) Tags.Add( reader.ReadBlock( I2PSessionTag.TagLength ) );
             }
-            PayloadSize = reader.ReadBufLen( 4 );
-            PayloadHash = reader.ReadBufLen( 32 );
-            Flag = reader.ReadBufLen( 1 );
-            if ( Flag[0] != 0 ) NewSessionKey = new I2PSessionKey( reader.ReadBufLen( 32 ) );
-            var pllen = PayloadSize.PeekFlip32( 0 );
-            if ( pllen > reader.Length ) throw new ArgumentException( "GarlicAESBlock: Not enough data payload supplied." );
-            Payload = reader.ReadBufLen( (int)pllen );
-            Padding = reader.ReadBufLen( BufUtils.Get16BytePadding( reader - start ) );
+            PayloadSize = reader.ReadBlock( 4 );
+            PayloadHash = reader.ReadBlock( 32 );
+            Flag = reader.ReadBlock( 1 );
+            if ( Flag[0] != 0 ) NewSessionKey = new I2PSessionKey( reader.ReadBlock( 32 ) );
+            var pllen = PayloadSize.ReadUInt32BigEndian( 0 );
+            if ( pllen > reader.Remaining ) throw new ArgumentException( "GarlicAESBlock: Not enough data payload supplied." );
+            Payload = reader.ReadBlock( (int)pllen );
+            Padding = reader.ReadBlock( BufUtils.Get16BytePadding( reader.DistanceFrom( startPos ) ) );
 
-            DataBuf = new BufLen( start, 0, reader - start );
+            DataBuf = new I2PByteBlock( reader.BaseArray, startPos, reader.DistanceFrom( startPos ) );
         }
 
-        public GarlicAesBlock( 
-            BufRefLen reader,
-            IList<I2PSessionTag> tags, 
+        public GarlicAesBlock(
+            I2PBufferCursor reader,
+            IList<I2PSessionTag> tags,
             I2PSessionKey newsessionkey,
-            BufRefLen payload )
+            I2PBufferCursor payload )
         {
-            var start = new BufLen( reader );
+            var startPos = reader.Position;
 
             // Allocate
-            TagCount = reader.ReadBufLen( 2 );
-            if ( tags != null ) for( int i = 0; i < tags.Count; ++i ) Tags.Add( reader.ReadBufLen( I2PSessionTag.TagLength ) );
-            PayloadSize = reader.ReadBufLen( 4 );
-            PayloadHash = reader.ReadBufLen( 32 );
-            Flag = reader.ReadBufLen( 1 );
-            if ( newsessionkey != null ) NewSessionKey = new I2PSessionKey( reader.ReadBufLen( 32 ) );
-            var pllen = Math.Min( reader.Length, payload.Length );
-            Payload = reader.ReadBufLen( pllen );
-            Padding = reader.ReadBufLen( BufUtils.Get16BytePadding( reader - start ) );
+            TagCount = reader.ReadBlock( 2 );
+            if ( tags != null ) for( int i = 0; i < tags.Count; ++i ) Tags.Add( reader.ReadBlock( I2PSessionTag.TagLength ) );
+            PayloadSize = reader.ReadBlock( 4 );
+            PayloadHash = reader.ReadBlock( 32 );
+            Flag = reader.ReadBlock( 1 );
+            if ( newsessionkey != null ) NewSessionKey = new I2PSessionKey( reader.ReadBlock( 32 ) );
+            var pllen = Math.Min( reader.Remaining, payload.Remaining );
+            Payload = reader.ReadBlock( pllen );
+            Padding = reader.ReadBlock( BufUtils.Get16BytePadding( reader.DistanceFrom( startPos ) ) );
 
             // Write
-            TagCount.PokeFlip16( (ushort)( tags == null ? 0 : tags.Count ), 0 );
-            if ( tags != null ) for ( int i = 0; i < tags.Count; ++i ) Tags[i].Poke( tags[i].Value, 0 );
+            TagCount.WriteUInt16BigEndian( (ushort)( tags == null ? 0 : tags.Count ), 0 );
+            if ( tags != null ) for ( int i = 0; i < tags.Count; ++i ) Tags[i].CopyFrom( tags[i].Value, 0 );
             Flag[0] = (byte)( newsessionkey != null ? 0x01 : 0 );
-            if ( newsessionkey != null ) NewSessionKey.Key.Poke( newsessionkey.Key, 0 );
-            Payload.Poke( new BufLen( payload, 0, pllen ), 0 );
+            if ( newsessionkey != null ) NewSessionKey.Key.CopyFrom( newsessionkey.Key, 0 );
+            Payload.CopyFrom( new I2PByteBlock( payload.BaseArray, payload.BaseArrayOffset, pllen ), 0 );
             payload.Seek( pllen );
-            PayloadSize.PokeFlip32( (uint)pllen, 0 );
-            PayloadHash.Poke( I2PHashSha256.GetHash( Payload ), 0 );
+            PayloadSize.WriteUInt32BigEndian( (uint)pllen, 0 );
+            PayloadHash.CopyFrom( new ReadOnlySpan<byte>( I2PHashSha256.GetHash( Payload ) ), 0 );
             Padding.Randomize();
 
-            DataBuf = new BufLen( start, 0, reader - start );
+            DataBuf = new I2PByteBlock( reader.BaseArray, startPos, reader.DistanceFrom( startPos ) );
         }
 
         public bool VerifyPayloadHash()
         {
-            return PayloadHash == new BufLen( I2PHashSha256.GetHash( Payload ) );
+            return PayloadHash == new I2PByteBlock( I2PHashSha256.GetHash( Payload ) );
         }
 
         public int Length { get { return DataBuf.Length; } }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
-            DataBuf.WriteTo( dest );
+            dest.WriteBlock( DataBuf );
         }
     }
 }

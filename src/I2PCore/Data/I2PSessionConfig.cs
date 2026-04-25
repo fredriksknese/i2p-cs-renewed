@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -19,7 +20,7 @@ namespace I2PCore.Data
 
         /// Not trasmitted
         public I2PSigningPrivateKey PrivateSigningKey;
-        public BufLen SignedBuf;
+        public I2PByteBlock SignedBuf;
 
         public I2PSessionConfig( 
                 I2PDestination dest, 
@@ -36,32 +37,32 @@ namespace I2PCore.Data
             PrivateSigningKey = privsignkey;
         }
 
-        public I2PSessionConfig( BufRef reader )
+        public I2PSessionConfig( I2PBufferCursor reader )
         {
-            var start = new BufRefLen( reader );
+            var startPos = reader.Position;
             Destination = new I2PDestination( reader );
             Options = new I2PMapping( reader );
             Date = new I2PDate( reader );
 
-            SignedBuf = new BufLen( start, 0, reader - start );
+            SignedBuf = reader.BlockSince( startPos );
 
             Signature = new I2PSignature( reader, Destination.Certificate );
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
-            var dest2 = new BufRefStream();
+            var dest2 = new ArrayBufferWriter<byte>();
             Destination.Write( dest2 );
             Options.Write( dest2 );
             Date.Write( dest2 );
-            var dest2data = dest2.ToArray();
+            var dest2data = dest2.WrittenSpan.ToArray();
 
             var sig = new I2PSignature( 
-                    new BufRefLen( 
-                        I2PSignature.DoSign( PrivateSigningKey, new BufLen( dest2data ) ) ), 
+                    new I2PBufferCursor( 
+                        I2PSignature.DoSign( PrivateSigningKey, new I2PByteBlock( dest2data ) ) ), 
                     Signature.Certificate );
 
-            dest.Write( dest2data );
+            dest.WriteBytes( dest2data );
             sig.Write( dest );
         }
 

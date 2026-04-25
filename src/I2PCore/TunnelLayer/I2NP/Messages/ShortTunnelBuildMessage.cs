@@ -6,41 +6,26 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
 {
     /// <summary>
     /// Short Tunnel Build Message (STBM) - I2NP message type 25
-    /// Contains Short Build Request Records for ECIES-only tunnels
-    /// 
-    /// Format:
-    /// - 1 byte: number of records (1-8)
-    /// - N records: each 218 bytes (encrypted)
-    /// 
-    /// Total size: 1 + (N * 218) bytes
-    /// Supported as of 0.9.51
     /// </summary>
     public class ShortTunnelBuildMessage : I2NpMessage
     {
         public override MessageTypes MessageType => MessageTypes.ShortTunnelBuild;
 
         public const int MaxRecords = 8;
-        public const int RecordSize = 218; // Encrypted short record size
+        public const int RecordSize = 218;
 
-        public List<BufLen> Records { get; set; }
+        public List<I2PByteBlock> Records { get; set; }
 
-        /// <summary>
-        /// Create an empty STBM
-        /// </summary>
         public ShortTunnelBuildMessage()
         {
-            Records = new List<BufLen>();
+            Records = new List<I2PByteBlock>();
         }
 
-        /// <summary>
-        /// Create STBM with encrypted records
-        /// </summary>
-        /// <param name="encryptedRecords">List of encrypted reply records (each 218 bytes)</param>
         public ShortTunnelBuildMessage(List<byte[]> encryptedRecords)
         {
             if (encryptedRecords == null)
                 throw new ArgumentNullException(nameof(encryptedRecords));
-            
+
             if (encryptedRecords.Count < 1 || encryptedRecords.Count > MaxRecords)
                 throw new ArgumentException($"Record count must be 1-{MaxRecords}");
 
@@ -50,47 +35,43 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
                     throw new ArgumentException($"Each record must be exactly {RecordSize} bytes");
             }
 
-            // Allocate buffer for the message
             var totalSize = 1 + (encryptedRecords.Count * RecordSize);
             AllocateBuffer(totalSize);
-            
-            var writer = new BufRefLen(Payload);
-            writer.Write8((byte)encryptedRecords.Count);
-            
-            Records = new List<BufLen>(encryptedRecords.Count);
+
+            var writer = new I2PBufferCursor(Payload);
+            writer.WriteByte((byte)encryptedRecords.Count);
+
+            Records = new List<I2PByteBlock>(encryptedRecords.Count);
             for (int i = 0; i < encryptedRecords.Count; i++)
             {
-                var start = new BufRefLen(writer);
-                writer.Write(encryptedRecords[i]);
-                Records.Add(new BufLen(start, 0, RecordSize));
+                var startBlock = new I2PByteBlock(writer.BaseArray, writer.BaseArrayOffset, RecordSize);
+                writer.WriteBytes(encryptedRecords[i]);
+                Records.Add(startBlock);
             }
         }
 
-        /// <summary>
-        /// Parse STBM from buffer
-        /// </summary>
-        public ShortTunnelBuildMessage(BufRef reader)
+        public ShortTunnelBuildMessage(I2PBufferCursor reader)
         {
-            var start = new BufRef(reader);
-            
-            var recordCount = reader.Read8();
-            
+            var start = new I2PBufferCursor(reader.BaseArray, reader.BaseArrayOffset);
+
+            var recordCount = reader.ReadByte();
+
             if (recordCount < 1 || recordCount > MaxRecords)
                 throw new InvalidOperationException($"Invalid record count: {recordCount}");
 
-            Records = new List<BufLen>(recordCount);
-            
+            Records = new List<I2PByteBlock>(recordCount);
+
             for (int i = 0; i < recordCount; i++)
             {
-                var record = new BufLen(reader, 0, RecordSize);
-                reader.Read(RecordSize);
+                var record = new I2PByteBlock(reader.BaseArray, reader.BaseArrayOffset, RecordSize);
+                reader.Seek(RecordSize);
                 Records.Add(record);
             }
 
             SetBuffer(start, reader);
         }
 
-        public ShortTunnelBuildMessage(List<BufLen> records)
+        public ShortTunnelBuildMessage(List<I2PByteBlock> records)
         {
             if (records == null)
                 throw new ArgumentNullException(nameof(records));
@@ -98,47 +79,40 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
             if (records.Count < 1 || records.Count > MaxRecords)
                 throw new ArgumentException($"Record count must be 1-{MaxRecords}");
 
-            // Allocate buffer for the message
             var totalSize = 1 + (records.Count * RecordSize);
             AllocateBuffer(totalSize);
 
-            var writer = new BufRefLen(Payload);
-            writer.Write8((byte)records.Count);
+            var writer = new I2PBufferCursor(Payload);
+            writer.WriteByte((byte)records.Count);
 
-            Records = new List<BufLen>(records.Count);
+            Records = new List<I2PByteBlock>(records.Count);
             for (int i = 0; i < records.Count; i++)
             {
-                var start = new BufRefLen(writer);
-                writer.Write(records[i]);
-                Records.Add(new BufLen(start, 0, RecordSize));
+                var startBlock = new I2PByteBlock(writer.BaseArray, writer.BaseArrayOffset, RecordSize);
+                writer.WriteBlock(records[i]);
+                Records.Add(startBlock);
             }
         }
-        public BufLen GetRecord(int index)
+
+        public I2PByteBlock GetRecord(int index)
         {
             if (index < 0 || index >= Records.Count)
                 throw new ArgumentOutOfRangeException(nameof(index));
-            
+
             return Records[index];
         }
 
-        /// <summary>
-        /// Replace a record at a specific index (for reply processing)
-        /// </summary>
         public void SetRecord(int index, byte[] record)
         {
             if (index < 0 || index >= Records.Count)
                 throw new ArgumentOutOfRangeException(nameof(index));
-            
+
             if (record == null || record.Length != RecordSize)
                 throw new ArgumentException($"Record must be exactly {RecordSize} bytes");
 
-            var dest = (BufRefLen)Records[index];
-            dest.Write(record);
+            Records[index].CopyFrom(new ReadOnlySpan<byte>(record), 0);
         }
 
-        /// <summary>
-        /// Get the number of records
-        /// </summary>
         public int RecordCount => Records.Count;
 
         public override string ToString()

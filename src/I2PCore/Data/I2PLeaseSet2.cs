@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using I2PCore.TunnelLayer.I2NP.Messages;
@@ -47,33 +48,33 @@ namespace I2PCore.Data
             PrivateSigningKey = sprivkey;
         }
 
-        private static readonly BufLen ThreeBl = BufUtils.To8Bl( 3 );
+        private static readonly I2PByteBlock ThreeBl = BufUtils.To8Bl( 3 );
         
-        public I2PLeaseSet2( BufRef reader )
+        public I2PLeaseSet2( I2PBufferCursor reader )
         {
-            var start = new BufRef( reader );
+            var startPos = reader.Position;
 
             Header = new I2PLeaseSet2Header( reader );
             Options = new I2PMapping( reader );
-            
-            var keycount = reader.Read8();
+
+            var keycount = reader.ReadByte();
             PublicKeysField = new List<I2PPublicKey>();
             for ( int i = 0; i < keycount; ++i )
             {
-                var keytype = reader.ReadFlip16();
-                var keylen = reader.ReadFlip16();
+                var keytype = reader.ReadUInt16BigEndian();
+                var keylen = reader.ReadUInt16BigEndian();
                 var cert = new I2PCertificate( (I2PKeyType.KeyTypes)keytype, keylen );
                 PublicKeysField.Add( new I2PPublicKey( reader, cert ) );
             }
 
-            var leasecount = reader.Read8();
+            var leasecount = reader.ReadByte();
             LeasesField = new List<I2PLease2>();
             for ( int i = 0; i < leasecount; ++i )
             {
                 LeasesField.Add( new I2PLease2( reader ) );
             }
 
-            var body = new BufLen( start, 0, reader - start );
+            var body = reader.BlockSince( startPos );
             Signature = new I2PSignature( reader, Header.Destination.Certificate );
 
             var spkey = Header.Destination.SigningPublicKey;
@@ -86,39 +87,39 @@ namespace I2PCore.Data
             }
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
-            var ar = WriteBody().ToByteArray();
+            var ar = WriteBody().WrittenSpan.ToArray();
 
             if ( Signature is null )
             {
                 Signature = new I2PSignature(
-                    new BufRefLen(
-                        I2PSignature.DoSign( PrivateSigningKey, ThreeBl, new BufLen( ar ) ) ),
+                    new I2PBufferCursor(
+                        I2PSignature.DoSign( PrivateSigningKey, ThreeBl, new I2PByteBlock( ar ) ) ),
                     PrivateSigningKey.Certificate );
             }
 
-            dest.Write( ar );
+            dest.WriteBytes( ar );
             Signature.Write( dest );
         }
 
-        private BufRefStream WriteBody()
+        private ArrayBufferWriter<byte> WriteBody()
         {
-            var lbuf = new BufRefStream();
+            var lbuf = new ArrayBufferWriter<byte>();
             
             Header.Write( lbuf );
             Options.Write( lbuf );
 
             var keycount = (byte)PublicKeysField.Count;
-            lbuf.Write( keycount );
+            lbuf.WriteByte( keycount );
             foreach ( var key in PublicKeysField )
             {
-                lbuf.Write( BufUtils.Flip16Bl( (ushort)key.Certificate.PublicKeyType ) );
-                lbuf.Write( BufUtils.Flip16Bl( (ushort)key.Certificate.PublicKeyLength ) );
+                lbuf.WriteUInt16BigEndian( (ushort)key.Certificate.PublicKeyType );
+                lbuf.WriteUInt16BigEndian( (ushort)key.Certificate.PublicKeyLength );
                 key.Write( lbuf );
             }
 
-            lbuf.Write( (byte)LeasesField.Count );
+            lbuf.WriteByte( (byte)LeasesField.Count );
             foreach ( var lease in LeasesField )
             {
                 lease.Write( lbuf );

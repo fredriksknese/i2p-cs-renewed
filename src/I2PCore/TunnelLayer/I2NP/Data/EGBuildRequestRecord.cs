@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -14,14 +15,14 @@ namespace I2PCore.TunnelLayer.I2NP.Data
     {
         public const int Length = 528;
 
-        public BufLen Data;
+        public I2PByteBlock Data;
 
-        public BufLen ToPeer16 { get { return new BufLen( Data, 0, 16 ); } }
-        public BufLen EncryptedData { get { return new BufLen( Data, 16, Length - 16 ); } }
+        public I2PByteBlock ToPeer16 { get { return Data.Slice( 0, 16 ); } }
+        public I2PByteBlock EncryptedData { get { return Data.Slice( 16, Length - 16 ); } }
 
-        public EgBuildRequestRecord( BufRef buf )
+        public EgBuildRequestRecord( I2PBufferCursor buf )
         {
-            Data = buf.ReadBufLen( Length );
+            Data = buf.ReadBlock( Length );
         }
 
         // The AesEGBuildRequestRecord has been decrypted to the degree ToPeer16 is readable.
@@ -30,25 +31,25 @@ namespace I2PCore.TunnelLayer.I2NP.Data
             Data = src.Data;
         }
 
-        public EgBuildRequestRecord( BufLen dest, BuildRequestRecord src, I2PIdentHash topeer, I2PPublicKey key )
+        public EgBuildRequestRecord( I2PByteBlock dest, BuildRequestRecord src, I2PIdentHash topeer, I2PPublicKey key )
         {
             Data = dest;
-            var writer = new BufRefLen( Data );
+            var writer = new I2PBufferCursor( Data );
 
-            writer.Write( topeer.Hash16 );
+            writer.WriteBlock( topeer.Hash16 );
 
-            var datastart = new BufLen( writer );
+            var datastart = writer.CurrentBlock;
             ElGamalCrypto.Encrypt( writer, src.Data, key, false );
         }
 
         public EgBuildRequestRecord( BuildRequestRecord src, I2PIdentHash topeer, I2PPublicKey key ):
-            this( new BufLen( new byte[Length] ), src, topeer, key )
+            this( new I2PByteBlock( new byte[Length] ), src, topeer, key )
         {
         }
 
         public BuildRequestRecord Decrypt( I2PPrivateKey pkey )
         {
-            return new BuildRequestRecord( new BufRef( ElGamalCrypto.Decrypt( EncryptedData, pkey, false ) ) );
+            return new BuildRequestRecord( new I2PBufferCursor( ElGamalCrypto.Decrypt( EncryptedData, pkey, false ) ) );
         }
 
         public override string ToString()
@@ -61,9 +62,9 @@ namespace I2PCore.TunnelLayer.I2NP.Data
             return result.ToString();
         }
 
-        void I2PType.Write( BufRefStream dest )
+        void I2PType.Write( IBufferWriter<byte> dest )
         {
-            Data.WriteTo( dest );
+            dest.WriteBlock( Data );
         }
     }
 

@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using I2PCore.Crypto;
 using I2PCore.Crypto.Noise;
 using I2PCore.Data;
@@ -104,9 +105,9 @@ namespace I2PCore.TunnelLayer.ECIES
         /// Parse an unencrypted short build request record (154 bytes).
         /// Field order must match Write() and the spec cleartext layout.
         /// </summary>
-        public ShortBuildRequestRecord(BufRef reader)
+        public ShortBuildRequestRecord(I2PBufferCursor reader)
         {
-            var start = new BufRef(reader);
+            var startPos = reader.Position;
             // offset 0: receive tunnel ID (4 bytes)
             ReceiveTunnelId = new I2PTunnelId(reader);
             // offset 4: next tunnel ID (4 bytes)
@@ -116,22 +117,22 @@ namespace I2PCore.TunnelLayer.ECIES
             NextRouterHash = new I2PIdentHash(reader);
 
             // offset 40: flags (1 byte)
-            Flags = reader.Read8();
+            Flags = reader.ReadByte();
             // offset 41: more flags (2 bytes)
-            reader.Read(2);
+            reader.Seek(2);
             // offset 43: layer encryption type (1 byte)
-            reader.Read8();
+            reader.ReadByte();
             // offset 44: request time (4 bytes)
-            RequestTime = reader.ReadFlip32();
+            RequestTime = reader.ReadUInt32BigEndian();
             // offset 48: request expiration (4 bytes)
-            RequestExpiration = reader.ReadFlip32();
+            RequestExpiration = reader.ReadUInt32BigEndian();
             // offset 52: send message ID (4 bytes)
-            NextMessageId = reader.ReadFlip32();
+            NextMessageId = reader.ReadUInt32BigEndian();
 
             // Skip padding to 154 bytes
-            var read = reader - start;
+            var read = reader.DistanceFrom(startPos);
             if (read < ClearTextSize)
-                reader.Read(ClearTextSize - (int)read);
+                reader.Seek(ClearTextSize - read);
 
             // Short records derive all keys via HKDF; no key index fields
             LayerKeyIndex = 0;
@@ -144,9 +145,9 @@ namespace I2PCore.TunnelLayer.ECIES
         /// Write the cleartext record (154 bytes) matching i2pd layout.
         /// This is what gets Noise N encrypted.
         /// </summary>
-        public void Write(BufRefStream dest)
+        public void Write(IBufferWriter<byte> dest)
         {
-            var start = dest.Length;
+            var startCount = (dest as ArrayBufferWriter<byte>)?.WrittenCount ?? 0;
 
             // Per i2pd TunnelConfig.cpp ShortECIESTunnelHopConfig::CreateBuildRequestRecord:
             // offset 0:  receiveTunnelID (4 bytes)
@@ -156,33 +157,33 @@ namespace I2PCore.TunnelLayer.ECIES
             // offset 8:  nextIdent (32 bytes)
             NextRouterHash.Write(dest);
             // offset 40: flag (1 byte)
-            dest.Write(Flags);
+            dest.WriteByte(Flags);
             // offset 41: more flags (2 bytes, reserved = 0)
-            dest.Write((byte)0);
-            dest.Write((byte)0);
+            dest.WriteByte((byte)0);
+            dest.WriteByte((byte)0);
             // offset 43: layer encryption type (1 byte, 0 = AES)
-            dest.Write((byte)0);
+            dest.WriteByte((byte)0);
             // offset 44: request time (4 bytes, minutes since epoch)
-            dest.Write(BufUtils.Flip32Bl(RequestTime));
+            dest.WriteUInt32BigEndian(RequestTime);
             // offset 48: request expiration (4 bytes, seconds)
-            dest.Write(BufUtils.Flip32Bl(RequestExpiration));
+            dest.WriteUInt32BigEndian(RequestExpiration);
             // offset 52: send message ID (4 bytes)
-            dest.Write(BufUtils.Flip32Bl(NextMessageId));
+            dest.WriteUInt32BigEndian(NextMessageId);
             // offset 56: options mapping
-            var written = (int)(dest.Length - start);
+            var written = (int)((dest as ArrayBufferWriter<byte>)?.WrittenCount ?? 56) - (int)startCount;
             if (written < ClearTextSize)
             {
-                var optionsStream = new BufRefStream();
+                var optionsStream = new ArrayBufferWriter<byte>();
                 Options.Write(optionsStream);
-                var optionsBytes = optionsStream.ToByteArray();
+                var optionsBytes = optionsStream.WrittenSpan.ToArray();
                 
                 var remaining = ClearTextSize - written;
                 var toCopy = Math.Min(optionsBytes.Length, remaining);
-                dest.Write(optionsBytes, 0, toCopy);
+                dest.WriteBytes(optionsBytes.AsSpan(0, toCopy));
                 
                 if (toCopy < remaining)
                 {
-                    dest.Write(new byte[remaining - toCopy]);
+                    dest.WriteBytes(new byte[remaining - toCopy]);
                 }
             }
         }
@@ -192,9 +193,9 @@ namespace I2PCore.TunnelLayer.ECIES
         /// </summary>
         public byte[] ToByteArray()
         {
-            var stream = new BufRefStream();
+            var stream = new ArrayBufferWriter<byte>();
             Write(stream);
-            return stream.ToByteArray();
+            return stream.WrittenSpan.ToArray();
         }
 
         /// <summary>

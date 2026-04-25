@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -20,19 +21,19 @@ namespace I2P.I2CP.Messages
             SessionState = state;
         }
 
-        public SessionStatusMessage( BufRef reader )
+        public SessionStatusMessage( I2PBufferCursor reader )
             : base( ProtocolMessageType.SessionStatus )
         {
-            SessionId = reader.ReadFlip16();
-            SessionState = (SessionStates)reader.Read8();
+            SessionId = reader.ReadUInt16BigEndian();
+            SessionState = (SessionStates)reader.ReadByte();
         }
 
-        public override void Write( BufRefStream dest )
+        public override void Write( ArrayBufferWriter<byte> dest )
         {
             var header = new byte[3];
-            var writer = new BufRefLen( header );
-            writer.WriteFlip16( SessionId );
-            writer.Write8( (byte)SessionState );
+            var writer = new I2PBufferCursor( header );
+            writer.WriteUInt16BigEndian( SessionId );
+            writer.WriteByte( (byte)SessionState );
             dest.Write( header );
         }
     }

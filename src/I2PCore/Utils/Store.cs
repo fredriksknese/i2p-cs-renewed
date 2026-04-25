@@ -627,16 +627,16 @@ namespace I2PCore.Utils
         public void Write( byte[] data, int ix )
         {
             if ( ix < ReservedSectors ) throw new Exception( "Writing of non-data sectors." );
-            WriteInternal( new BufLen[] { new( data ) }, ix );
+            WriteInternal( new I2PByteBlock[] { new( data ) }, ix );
         }
 
-        public void Write( IEnumerable<BufLen> datasectors, int ix )
+        public void Write( IEnumerable<I2PByteBlock> datasectors, int ix )
         {
             if ( ix < ReservedSectors ) throw new Exception( "Writing of non-data sectors." );
             WriteInternal( datasectors, ix );
         }
 
-        private void WriteInternal( IEnumerable<BufLen> datablocks, int ix )
+        private void WriteInternal( IEnumerable<I2PByteBlock> datablocks, int ix )
         {
             var thissector = ix;
 
@@ -651,17 +651,17 @@ namespace I2PCore.Utils
 
             foreach ( var datab in datablocks )
             {
-                var data = (BufRefLen)datab;
+                var data = new I2PBufferCursor( datab );
 
-                while ( data.Length > 0 )
+                while ( data.Remaining > 0 )
                 {
-                    var len = (int)Math.Min( data.Length, sectorspaceleft );
+                    var len = (int)Math.Min( data.Remaining, sectorspaceleft );
                     TheFile.Write( data.BaseArray, data.BaseArrayOffset, len );
 
                     data.Seek( len );
                     sectorspaceleft -= len;
 
-                    if ( data.Length == 0 ) break;
+                    if ( data.Remaining == 0 ) break;
 
                     if ( sectorspaceleft == 0 )
                     {
@@ -670,7 +670,7 @@ namespace I2PCore.Utils
                             if ( !Bits[nextsector] ) throw new Exception( "Cannot update an unallocated sector!" );
                             TheFile.Position = BitmapToPos( nextsector );
 
-                            if ( (Store.SectorTypes)StreamUtils.ReadInt8( TheFile ) != Store.SectorTypes.Continuation ) 
+                            if ( (Store.SectorTypes)StreamUtils.ReadInt8( TheFile ) != Store.SectorTypes.Continuation )
                                 throw new Exception( "Trying to update a sector outside of the allocated sector chain!" );
 
                             thissector = nextsector;
@@ -690,15 +690,15 @@ namespace I2PCore.Utils
 
         public int Write( byte[] data )
         {
-            return WriteInternal( new BufLen[] { new( data ) } );
+            return WriteInternal( new I2PByteBlock[] { new( data ) } );
         }
 
-        public int Write( IEnumerable<BufLen> datasectors )
+        public int Write( IEnumerable<I2PByteBlock> datasectors )
         {
             return WriteInternal( datasectors );
         }
 
-        private int WriteInternal( IEnumerable<BufLen> datablocks )
+        private int WriteInternal( IEnumerable<I2PByteBlock> datablocks )
         {
             int result = 0;
 
@@ -715,17 +715,17 @@ namespace I2PCore.Utils
 
             foreach ( var datab in datablocks )
             {
-                var data = (BufRefLen)datab;
+                var data = new I2PBufferCursor( datab );
 
-                while ( data.Length > 0 )
+                while ( data.Remaining > 0 )
                 {
-                    var len = (int)Math.Min( data.Length, sectorspaceleft );
+                    var len = (int)Math.Min( data.Remaining, sectorspaceleft );
                     TheFile.Write( data.BaseArray, data.BaseArrayOffset, len );
 
                     data.Seek( len );
                     sectorspaceleft -= len;
 
-                    if ( data.Length == 0 ) break;
+                    if ( data.Remaining == 0 ) break;
 
                     if ( sectorspaceleft == 0 )
                     {

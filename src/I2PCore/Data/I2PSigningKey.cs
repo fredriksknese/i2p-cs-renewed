@@ -31,7 +31,7 @@ namespace I2PCore.Data
         {
         }
 
-        public I2PSigningKey( BufRef reader, I2PCertificate cert ) : base( reader, cert ) 
+        public I2PSigningKey( I2PBufferCursor reader, I2PCertificate cert ) : base( reader, cert ) 
         {
         }
 
@@ -40,16 +40,16 @@ namespace I2PCore.Data
             var buf = key.ToByteArrayUnsigned();
             if ( buf.Length == KeySizeBytes )
             {
-                Key = new BufLen( buf );
+                Key = new I2PByteBlock( buf );
             }
             else
             {
-                Key = new BufLen( new byte[KeySizeBytes] );
-                Key.Poke( buf, KeySizeBytes - buf.Length );
+                Key = new I2PByteBlock( new byte[KeySizeBytes] );
+                Key.CopyFrom( buf, KeySizeBytes - buf.Length );
             }
         }
 
-        public I2PSigningKey( BufLen key, I2PCertificate cert )
+        public I2PSigningKey( I2PByteBlock key, I2PCertificate cert )
             : base( cert )
         {
             if ( key.Length == KeySizeBytes )
@@ -58,12 +58,12 @@ namespace I2PCore.Data
             }
             else if ( key.Length < KeySizeBytes )
             {
-                Key = new BufLen( new byte[KeySizeBytes] );
-                Key.Poke( key, KeySizeBytes - key.Length );
+                Key = new I2PByteBlock( new byte[KeySizeBytes] );
+                Key.CopyFrom( key, KeySizeBytes - key.Length );
             }
             else
             {
-                Key = new BufLen( key, 0, KeySizeBytes );
+                Key = new I2PByteBlock( key.BaseArray, key.BaseArrayOffset, KeySizeBytes );
             }
         }
         public static int SigningPublicKeyLength( I2PSigningKey.SigningKeyTypes skt )

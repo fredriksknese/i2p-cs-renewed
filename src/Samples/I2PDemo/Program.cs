@@ -210,7 +210,7 @@ namespace I2PDemo
                                     }
 
                                     // Send some data to the MyDestination
-                                    _dataSent = new BufLen(
+                                    _dataSent = new I2PByteBlock(
                                                     BufUtils.RandomBytes(
                                                         (int)( 1 + BufUtils.RandomDouble( 25 ) * 1024 ) ) );
 
@@ -252,22 +252,22 @@ namespace I2PDemo
         }
 
         private static ILeaseSet _lookedUpLeaseSet;
-        private static BufLen _dataSent;
+        private static I2PByteBlock _dataSent;
 
         private static void MyDestination_ClientStateChanged( ClientDestination dest, ClientDestination.ClientStates state )
         {
             Logging.LogInformation( $"Program {dest}: Client state {state}" );
         }
 
-        private static void MyDestination_DataReceived( ClientDestination dest, BufLen data, I2PDestination sender )
+        private static void MyDestination_DataReceived( ClientDestination dest, I2PByteBlock data, I2PDestination sender )
         {
-            var compareok = _dataSent is null ? false : _dataSent == data;
+            var compareok = _dataSent.IsEmpty ? false : _dataSent == data;
             Logging.LogInformation( $"Program {dest}: MyDestination data received. Matches send: {compareok} {data}" );
             var ok = _publishedDestination.Send( _myOrigin.Destination, data );
             Logging.LogInformation( $"Program {dest}: Send to {_myOrigin.Destination.IdentHash.Id32Short} {ok}" );
         }
 
-        private static void MyOrigin_DataReceived( ClientDestination dest, BufLen data, I2PDestination sender )
+        private static void MyOrigin_DataReceived( ClientDestination dest, I2PByteBlock data, I2PDestination sender )
         {
             Logging.LogInformation( $"Program {dest}: data received. {data}" );
         }

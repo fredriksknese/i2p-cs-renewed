@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -9,129 +9,129 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
 {
     public class TunnelDataFragment
     {
-        private BufRef Data;
+        private I2PBufferCursor Data;
 
         public byte Flag { get { return Data[0]; } set { Data[0] = value; } }
 
-        public bool InitialFragment 
-        { 
-            get 
-            { 
-                return ( Flag & 0x80 ) == 0; 
-            } 
-            set 
-            { 
-                Flag = (byte)( ( Flag & 0x7F ) | ( value ? 0 : 0x80 ) ); 
-            } 
+        public bool InitialFragment
+        {
+            get
+            {
+                return ( Flag & 0x80 ) == 0;
+            }
+            set
+            {
+                Flag = (byte)( ( Flag & 0x7F ) | ( value ? 0 : 0x80 ) );
+            }
         }
 
         public bool FollowOnFragment { get { return !InitialFragment; } set { InitialFragment = !value; } }
-        
-        public bool Fragmented 
-        { 
-            get 
+
+        public bool Fragmented
+        {
+            get
             {
                 if ( FollowOnFragment ) throw new ArgumentException( "TunnelDataFragment is Follow On Fragment" );
-                return ( Flag & 0x08 ) != 0; 
-            } 
-            set 
+                return ( Flag & 0x08 ) != 0;
+            }
+            set
             {
                 if ( FollowOnFragment ) throw new ArgumentException( "TunnelDataFragment is Follow On Fragment" );
-                Flag = (byte)( ( Flag & 0xF7 ) | ( value ? 0x08 : 0 ) ); 
-            } 
+                Flag = (byte)( ( Flag & 0xF7 ) | ( value ? 0x08 : 0 ) );
+            }
         }
 
-        public TunnelMessage.DeliveryTypes Delivery 
-        { 
-            get 
+        public TunnelMessage.DeliveryTypes Delivery
+        {
+            get
             {
                 if ( FollowOnFragment ) throw new ArgumentException( "TunnelDataFragment is Follow On Fragment" );
-                return (TunnelMessage.DeliveryTypes)( Flag & (byte)TunnelMessage.DeliveryTypes.Unused ); 
-            } 
-            set 
+                return (TunnelMessage.DeliveryTypes)( Flag & (byte)TunnelMessage.DeliveryTypes.Unused );
+            }
+            set
             {
                 if ( FollowOnFragment ) throw new ArgumentException( "TunnelDataFragment is Follow On Fragment" );
-                Flag = (byte)( ( Flag & ~(byte)TunnelMessage.DeliveryTypes.Unused ) | (byte)value ); 
-            } 
+                Flag = (byte)( ( Flag & ~(byte)TunnelMessage.DeliveryTypes.Unused ) | (byte)value );
+            }
         }
 
-        public bool ExtendedOptions 
-        { 
-            get 
+        public bool ExtendedOptions
+        {
+            get
             {
                 if ( FollowOnFragment ) throw new ArgumentException( "TunnelDataFragment is Follow On Fragment" );
-                return ( Flag & 0x04 ) != 0; 
-            } 
-            set 
+                return ( Flag & 0x04 ) != 0;
+            }
+            set
             {
                 if ( FollowOnFragment ) throw new ArgumentException( "TunnelDataFragment is Follow On Fragment" );
-                Flag = (byte)( ( Flag & 0xFB ) | ( value ? 0x04 : 0 ) ); 
-            } 
+                Flag = (byte)( ( Flag & 0xFB ) | ( value ? 0x04 : 0 ) );
+            }
         }
 
-        public bool Delayed 
-        { 
-            get 
+        public bool Delayed
+        {
+            get
             {
                 if ( FollowOnFragment ) throw new ArgumentException( "TunnelDataFragment is Follow On Fragment" );
-                return ( Flag & 0x10 ) != 0; 
-            } 
-            set 
+                return ( Flag & 0x10 ) != 0;
+            }
+            set
             {
                 if ( FollowOnFragment ) throw new ArgumentException( "TunnelDataFragment is Follow On Fragment" );
-                Flag = (byte)( ( Flag & 0xEF ) | ( value ? 0x10 : 0 ) ); 
-            } 
+                Flag = (byte)( ( Flag & 0xEF ) | ( value ? 0x10 : 0 ) );
+            }
         }
 
-        private BufLen TunnelRef;
-        public I2PTunnelId Tunnel { get { return new I2PTunnelId( new BufRef( TunnelRef ) ); } set { value.Write( new BufRef( TunnelRef ) ); } }
+        private I2PByteBlock TunnelRef;
+        public I2PTunnelId Tunnel { get { return new I2PTunnelId( new I2PBufferCursor( TunnelRef ) ); } set { value.Write( new I2PBufferCursor( TunnelRef ) ); } }
 
-        private BufLen ToHashRef;
-        public BufLen ToHash { get { return new BufLen( ToHashRef ); } }
+        private I2PByteBlock ToHashRef;
+        public I2PByteBlock ToHash { get { return ToHashRef; } }
 
-        private BufRef DelayRef;
+        private I2PBufferCursor DelayRef;
         public byte Delay { get { return DelayRef[0]; } set { DelayRef[0] = value; } }
 
         // Follow on properties
         public byte FragmentNumber
         {
-            get 
+            get
             {
                 if ( !FollowOnFragment ) throw new ArgumentException( "TunnelDataFragment is not Follow On Fragment" );
-                return (byte)( ( Flag & 0x7E ) >> 1 ); 
+                return (byte)( ( Flag & 0x7E ) >> 1 );
             }
-            set 
+            set
             {
                 if ( !FollowOnFragment ) throw new ArgumentException( "TunnelDataFragment is not Follow On Fragment" );
-                Flag = (byte)( ( Flag & 0x7E ) | ( value << 1 ) ); 
+                Flag = (byte)( ( Flag & 0x7E ) | ( value << 1 ) );
             }
         }
 
-        public bool LastFragment 
-        { 
-            get 
-            {
-                if ( !FollowOnFragment ) throw new ArgumentException( "TunnelDataFragment is not Follow On Fragment" );
-                return ( Flag & 0x01 ) != 0; 
-            } 
-            set 
-            {
-                if ( !FollowOnFragment ) throw new ArgumentException( "TunnelDataFragment is not Follow On Fragment" );
-                Flag = (byte)( ( Flag & 0xFE ) | ( value ? 0x01 : 0 ) ); 
-            } 
-        }
-
-        // Shared properties 
-
-        private BufRef MessageIdRef;
-        public uint MessageId { get { return MessageIdRef.PeekFlip32( 0 ); } set { MessageIdRef.PokeFlip32( value, 0 ); } }
-
-        private BufLen PayloadRef;
-        public BufRefLen Payload { get { return new BufRefLen( PayloadRef ); } }
-
-        public TunnelDataFragment( BufRef buf )
+        public bool LastFragment
         {
-            Data = new BufRef( buf );
+            get
+            {
+                if ( !FollowOnFragment ) throw new ArgumentException( "TunnelDataFragment is not Follow On Fragment" );
+                return ( Flag & 0x01 ) != 0;
+            }
+            set
+            {
+                if ( !FollowOnFragment ) throw new ArgumentException( "TunnelDataFragment is not Follow On Fragment" );
+                Flag = (byte)( ( Flag & 0xFE ) | ( value ? 0x01 : 0 ) );
+            }
+        }
+
+        // Shared properties
+
+        private I2PBufferCursor MessageIdRef;
+        public uint MessageId { get { return MessageIdRef.PeekUInt32BigEndian( 0 ); } set { MessageIdRef.PokeUInt32BigEndian( value, 0 ); } }
+
+        private I2PByteBlock PayloadRef;
+        public I2PBufferCursor Payload { get { return new I2PBufferCursor( PayloadRef ); } }
+
+        public TunnelDataFragment( I2PBufferCursor buf )
+        {
+            Data = new I2PBufferCursor( buf.BaseArray, buf.BaseArrayOffset );
 
             var reader = buf;
             reader.Seek( 1 ); // Flag
@@ -143,52 +143,58 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
                     case TunnelMessage.DeliveryTypes.Local:
                         if ( Delayed )
                         {
-                            DelayRef = reader.ReadBufRef( 1 );
+                            DelayRef = new I2PBufferCursor( reader.BaseArray, reader.BaseArrayOffset, 1 );
+                            reader.Seek( 1 );
                         }
                         if ( Fragmented )
                         {
-                            MessageIdRef = reader.ReadBufRef( 4 );
+                            MessageIdRef = new I2PBufferCursor( reader.BaseArray, reader.BaseArrayOffset, 4 );
+                            reader.Seek( 4 );
                         }
                         if ( ExtendedOptions )
                         {
-                            var len = reader.Read8();
+                            var len = reader.ReadByte();
                             reader.Seek( len );
                         }
                         break;
 
                     case TunnelMessage.DeliveryTypes.Router:
-                        ToHashRef = reader.ReadBufLen( 32 );
+                        ToHashRef = reader.ReadBlock( 32 );
 
                         if ( Delayed )
                         {
-                            DelayRef = reader.ReadBufRef( 1 );
+                            DelayRef = new I2PBufferCursor( reader.BaseArray, reader.BaseArrayOffset, 1 );
+                            reader.Seek( 1 );
                         }
                         if ( Fragmented )
                         {
-                            MessageIdRef = reader.ReadBufRef( 4 );
+                            MessageIdRef = new I2PBufferCursor( reader.BaseArray, reader.BaseArrayOffset, 4 );
+                            reader.Seek( 4 );
                         }
                         if ( ExtendedOptions )
                         {
-                            var len = reader.Read8();
+                            var len = reader.ReadByte();
                             reader.Seek( len );
                         }
                         break;
 
                     case TunnelMessage.DeliveryTypes.Tunnel:
-                        TunnelRef = reader.ReadBufLen( 4 );
-                        ToHashRef = reader.ReadBufLen( 32 );
+                        TunnelRef = reader.ReadBlock( 4 );
+                        ToHashRef = reader.ReadBlock( 32 );
 
                         if ( Delayed )
                         {
-                            DelayRef = reader.ReadBufRef( 1 );
+                            DelayRef = new I2PBufferCursor( reader.BaseArray, reader.BaseArrayOffset, 1 );
+                            reader.Seek( 1 );
                         }
                         if ( Fragmented )
                         {
-                            MessageIdRef = reader.ReadBufRef( 4 );
+                            MessageIdRef = new I2PBufferCursor( reader.BaseArray, reader.BaseArrayOffset, 4 );
+                            reader.Seek( 4 );
                         }
                         if ( ExtendedOptions )
                         {
-                            var len = reader.Read8();
+                            var len = reader.ReadByte();
                             reader.Seek( len );
                         }
                         break;
@@ -196,7 +202,7 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
                     default:
                         Logging.LogWarning( $"TunnelDataFragment: Unknown delivery type {Delivery}" );
                         // Skip the payload to avoid corruption
-                        var payloadlen2 = reader.ReadFlip16();
+                        var payloadlen2 = reader.ReadUInt16BigEndian();
                         reader.Seek( payloadlen2 );
                         return;
                 }
@@ -204,11 +210,12 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
             else
             {
                 // Follow on
-                MessageIdRef = reader.ReadBufRef( 4 );
+                MessageIdRef = new I2PBufferCursor( reader.BaseArray, reader.BaseArrayOffset, 4 );
+                reader.Seek( 4 );
             }
 
-            var payloadlen = reader.ReadFlip16();
-            PayloadRef = reader.ReadBufLen( payloadlen );
+            var payloadlen = reader.ReadUInt16BigEndian();
+            PayloadRef = reader.ReadBlock( payloadlen );
         }
     }
 }

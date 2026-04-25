@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -20,14 +21,14 @@ namespace I2P.I2CP.Messages
             Version = ver;
         }
 
-        public SetDateMessage( BufRef data )
+        public SetDateMessage( I2PBufferCursor data )
             : base( ProtocolMessageType.SetDate )
         {
             Date = new I2PDate( data );
             Version = new I2PString( data );
         }
 
-        public override void Write( BufRefStream dest )
+        public override void Write( ArrayBufferWriter<byte> dest )
         {
             Date.Write( dest );
             Version.Write( dest );

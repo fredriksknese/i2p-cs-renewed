@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using I2PCore.Crypto;
 using I2PCore.Data;
 using I2PCore.Utils;
@@ -94,19 +95,19 @@ namespace I2PCore.TunnelLayer.ECIES
         /// <summary>
         /// Parse an unencrypted long build request record
         /// </summary>
-        public LongBuildRequestRecord(BufRef reader)
+        public LongBuildRequestRecord(I2PBufferCursor reader)
         {
             ReceiveTunnelId = new I2PTunnelId(reader);
             NextRouterHash = new I2PIdentHash(reader);
             NextTunnelId = new I2PTunnelId(reader);
-            LayerKeyIndex = reader.ReadFlip32();
-            IVKeyIndex = reader.ReadFlip32();
-            ReplyKeyIndex = reader.ReadFlip32();
-            ReplyIVIndex = reader.ReadFlip32();
-            Flags = reader.Read8();
-            RequestTime = reader.ReadFlip32();
-            RequestExpiration = reader.ReadFlip32();
-            NextMessageId = reader.ReadFlip32();
+            LayerKeyIndex = reader.ReadUInt32BigEndian();
+            IVKeyIndex = reader.ReadUInt32BigEndian();
+            ReplyKeyIndex = reader.ReadUInt32BigEndian();
+            ReplyIVIndex = reader.ReadUInt32BigEndian();
+            Flags = reader.ReadByte();
+            RequestTime = reader.ReadUInt32BigEndian();
+            RequestExpiration = reader.ReadUInt32BigEndian();
+            NextMessageId = reader.ReadUInt32BigEndian();
 
             // Parse options mapping
             Options = new I2PMapping(reader);
@@ -117,30 +118,30 @@ namespace I2PCore.TunnelLayer.ECIES
         /// <summary>
         /// Write the unencrypted record to a buffer
         /// </summary>
-        public void Write(BufRefStream dest)
+        public void Write(IBufferWriter<byte> dest)
         {
-            var start = dest.Length;
+            var startCount = (dest as ArrayBufferWriter<byte>)?.WrittenCount ?? 0;
 
             ReceiveTunnelId.Write(dest);
             NextRouterHash.Write(dest);
             NextTunnelId.Write(dest);
-            dest.Write(BufUtils.Flip32Bl(LayerKeyIndex));
-            dest.Write(BufUtils.Flip32Bl(IVKeyIndex));
-            dest.Write(BufUtils.Flip32Bl(ReplyKeyIndex));
-            dest.Write(BufUtils.Flip32Bl(ReplyIVIndex));
-            dest.Write(Flags);
-            dest.Write(BufUtils.Flip32Bl(RequestTime));
-            dest.Write(BufUtils.Flip32Bl(RequestExpiration));
-            dest.Write(BufUtils.Flip32Bl(NextMessageId));
+            dest.WriteUInt32BigEndian(LayerKeyIndex);
+            dest.WriteUInt32BigEndian(IVKeyIndex);
+            dest.WriteUInt32BigEndian(ReplyKeyIndex);
+            dest.WriteUInt32BigEndian(ReplyIVIndex);
+            dest.WriteByte(Flags);
+            dest.WriteUInt32BigEndian(RequestTime);
+            dest.WriteUInt32BigEndian(RequestExpiration);
+            dest.WriteUInt32BigEndian(NextMessageId);
             Options.Write(dest);
 
             // Pad to 528 bytes with random data
-            var written = (int)(dest.Length - start);
+            var written = (int)((dest as ArrayBufferWriter<byte>)?.WrittenCount ?? 0) - (int)startCount;
             if (written < UnencryptedRecordSize)
             {
                 var paddingSize = UnencryptedRecordSize - written;
                 var padding = BufUtils.RandomBytes(paddingSize);
-                dest.Write(padding);
+                dest.WriteBytes(padding);
             }
         }
 
@@ -149,9 +150,9 @@ namespace I2PCore.TunnelLayer.ECIES
         /// </summary>
         public byte[] ToByteArray()
         {
-            var stream = new BufRefStream();
+            var stream = new ArrayBufferWriter<byte>();
             Write(stream);
-            return stream.ToByteArray();
+            return stream.WrittenSpan.ToArray();
         }
 
         /// <summary>

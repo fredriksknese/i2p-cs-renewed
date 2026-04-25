@@ -47,7 +47,7 @@ public class RouterService
     public async Task<int> ReseedFromFileAsync(byte[] data)
     {
         LogActivity("Network", $"Manual reseed from uploaded file ({data.Length} bytes)...");
-        var count = I2PCore.Bootstrap.ImportReseedFile(new BufLen(data));
+        var count = I2PCore.Bootstrap.ImportReseedFile(new I2PByteBlock(data));
         LogActivity("Network", $"Manual reseed imported {count} routers.");
         return count;
     }

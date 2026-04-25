@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -10,7 +10,7 @@ namespace I2PCore.Utils
     public static class LzUtils
     {
 
-        public static UInt32 Adler32Slow( byte[] data, long len ) /* where data is the location of the data in physical memory and 
+        public static UInt32 Adler32Slow( byte[] data, long len ) /* where data is the location of the data in physical memory and
                                                           len is the length of the data in bytes */
         {
             const UInt32 modAdler = 65521;
@@ -27,7 +27,7 @@ namespace I2PCore.Utils
             return ( b << 16 ) | a;
         }
 
-        public static UInt32 Adler32( UInt32 adler, BufLen data )
+        public static UInt32 Adler32( UInt32 adler, I2PByteBlock data )
         {
             const Int32 @base = 65521;      /* largest prime smaller than 65536 */
             const Int32 nmax = 5552;
@@ -54,7 +54,7 @@ namespace I2PCore.Utils
             }
 
             /* initial Adler-32 value (deferred check for len == 1 speed) */
-            if ( data == null )
+            if ( data.IsEmpty )
                 return 1;
 
             /* in case short lengths are provided, keep it somewhat fast */
@@ -178,7 +178,7 @@ namespace I2PCore.Utils
             return c ^ 0xffffffff;
         }
 
-        public static uint Crc32( BufLen buf )
+        public static uint Crc32( I2PByteBlock buf )
         {
             uint c = 0xffffffff;
 
@@ -234,7 +234,7 @@ namespace I2PCore.Utils
             }
         }
 
-        public static BufLen BcgZipCompressNew( BufLen buf )
+        public static I2PByteBlock BcgZipCompressNew( I2PByteBlock buf )
         {
             var crc = LzUtils.Crc32( buf );
 
@@ -285,10 +285,10 @@ namespace I2PCore.Utils
                 goto bigger_dest;
             }
 
-            var result = new BufLen( dest, 0, dest.Length - z.avail_out + 8 );
+            var result = new I2PByteBlock( dest, 0, dest.Length - z.avail_out + 8 );
 
-            result.Poke32( crc, result.Length - 8 );
-            result.Poke32( (uint)buf.Length, result.Length - 4 );
+            result.WriteUInt32LittleEndian( crc, result.Length - 8 );
+            result.WriteUInt32LittleEndian( (uint)buf.Length, result.Length - 4 );
 
             z.deflateEnd();
 
@@ -301,21 +301,21 @@ namespace I2PCore.Utils
             return result;
         }
 
-        public static byte[] BcgZipDecompress( BufLen buf )
+        public static byte[] BcgZipDecompress( I2PByteBlock buf )
         {
-            var reader = new BufRefLen( buf );
+            var reader = new I2PBufferCursor( buf );
 
             using ( var ms = new MemoryStream() )
             {
                 // Skip gzip header
-                var gzheader = reader.ReadBufLen( 10 );
-                var flag = gzheader.Peek8( 3 );
-                if ( ( flag & 0x04 ) != 0 ) reader.Seek( reader.Read16() ); // "Extra"
-                if ( ( flag & 0x08 ) != 0 ) while ( reader.Read8() != 0 ) ; // "Name"
-                if ( ( flag & 0x10 ) != 0 ) while ( reader.Read8() != 0 ) ; // "Comment"
-                if ( ( flag & 0x02 ) != 0 ) reader.Read16(); // "CRC16"
+                var gzheader = reader.ReadBlock( 10 );
+                var flag = gzheader.ReadByte( 3 );
+                if ( ( flag & 0x04 ) != 0 ) reader.Seek( reader.ReadUInt16LittleEndian() ); // "Extra"
+                if ( ( flag & 0x08 ) != 0 ) while ( reader.ReadByte() != 0 ) ; // "Name"
+                if ( ( flag & 0x10 ) != 0 ) while ( reader.ReadByte() != 0 ) ; // "Comment"
+                if ( ( flag & 0x02 ) != 0 ) reader.ReadUInt16LittleEndian(); // "CRC16"
 
-                ms.Write( reader.BaseArray, reader.BaseArrayOffset, reader.Length );
+                ms.Write( reader.BaseArray, reader.BaseArrayOffset, reader.Remaining );
                 ms.Position = 0;
 
                 using ( var gzs = new ZInputStream( ms, true ) )
@@ -326,17 +326,17 @@ namespace I2PCore.Utils
             }
         }
 
-        public static BufLen BcgZipDecompressNew( BufLen buf )
+        public static I2PByteBlock BcgZipDecompressNew( I2PByteBlock buf )
         {
-            var reader = new BufRefLen( buf );
+            var reader = new I2PBufferCursor( buf );
 
             // Skip gzip header
-            var gzheader = reader.ReadBufLen( 10 );
-            var flag = gzheader.Peek8( 3 );
-            if ( ( flag & 0x04 ) != 0 ) reader.Seek( reader.Read16() ); // "Extra"
-            if ( ( flag & 0x08 ) != 0 ) while ( reader.Read8() != 0 ) ; // "Name"
-            if ( ( flag & 0x10 ) != 0 ) while ( reader.Read8() != 0 ) ; // "Comment"
-            if ( ( flag & 0x02 ) != 0 ) reader.Read16(); // "CRC16"
+            var gzheader = reader.ReadBlock( 10 );
+            var flag = gzheader.ReadByte( 3 );
+            if ( ( flag & 0x04 ) != 0 ) reader.Seek( reader.ReadUInt16LittleEndian() ); // "Extra"
+            if ( ( flag & 0x08 ) != 0 ) while ( reader.ReadByte() != 0 ) ; // "Name"
+            if ( ( flag & 0x10 ) != 0 ) while ( reader.ReadByte() != 0 ) ; // "Comment"
+            if ( ( flag & 0x02 ) != 0 ) reader.ReadUInt16LittleEndian(); // "CRC16"
 
             var z = new ZStream();
             z.inflateInit( true );
@@ -346,7 +346,7 @@ namespace I2PCore.Utils
 
             z.next_in_index = reader.BaseArrayOffset;
             z.next_in = reader.BaseArray;
-            z.avail_in = reader.Length - 8;
+            z.avail_in = reader.Remaining - 8;
 
         bigger_dest:
 
@@ -365,7 +365,7 @@ namespace I2PCore.Utils
                 goto bigger_dest;
             }
 
-            var result = new BufLen( dest, 0, dest.Length - z.avail_out );
+            var result = new I2PByteBlock( dest, 0, dest.Length - z.avail_out );
             z.inflateEnd();
 
             return result;

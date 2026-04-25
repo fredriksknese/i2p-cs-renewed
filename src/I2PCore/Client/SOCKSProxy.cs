@@ -409,7 +409,7 @@ namespace I2PCore.Client
                 try
                 {
                     var destBytes = FreenetBase64.Decode(b64);
-                    return new I2PDestination(new BufRef(destBytes));
+                    return new I2PDestination(new I2PBufferCursor(destBytes));
                 }
                 catch (Exception)
                 {
@@ -704,7 +704,7 @@ namespace I2PCore.Client
                         var sourceHashBuf = args.Sender?.IdentHash?.Hash;
                         if (sourceHashBuf == null) return;
 
-                        var b32 = FreenetBase64.Encode(sourceHashBuf) + ".b32.i2p";
+                        var b32 = FreenetBase64.Encode(new I2PByteBlock(sourceHashBuf.Value.ToByteArray())) + ".b32.i2p";
                         var bBytes = Encoding.ASCII.GetBytes(b32);
 
                         var udpReplyBuf = new byte[4 + 1 + bBytes.Length + 2 + args.Payload.Length];

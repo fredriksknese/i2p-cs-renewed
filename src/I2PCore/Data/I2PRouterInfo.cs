@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -15,7 +16,7 @@ namespace I2PCore.Data
         public I2PMapping Options;
         public I2PSignature Signature;
 
-        private BufLen Data;
+        private I2PByteBlock Data;
 
         public I2PRouterInfo(
             I2PRouterIdentity identity,
@@ -29,29 +30,29 @@ namespace I2PCore.Data
             Addresses = addresses;
             Options = options;
 
-            var dest = new BufRefStream();
+            var dest = new ArrayBufferWriter<byte>();
             Identity.Write( dest );
             PublishedDate.Write( dest );
-            dest.Write( (byte)Addresses.Length );
+            dest.WriteByte( (byte)Addresses.Length );
             foreach ( var addr in Addresses )
             {
                 addr.Write( dest );
             }
-            dest.Write( 0 ); // Always zero
+            dest.WriteByte( 0 ); // Always zero
             Options.Write( dest );
-            Data = new BufLen( dest.ToArray() );
+            Data = new I2PByteBlock( dest.WrittenSpan.ToArray() );
 
-            Signature = new I2PSignature( new BufRefLen( I2PSignature.DoSign( privskey, Data ) ), privskey.Certificate );
+            Signature = new I2PSignature( new I2PBufferCursor( I2PSignature.DoSign( privskey, Data ) ), privskey.Certificate );
         }
 
-        public I2PRouterInfo( BufRef reader, bool verifysig )
+        public I2PRouterInfo( I2PBufferCursor reader, bool verifysig )
         {
-            var startview = new BufRef( reader );
+            var startPos = reader.Position;
 
             Identity = new I2PRouterIdentity( reader );
             PublishedDate = new I2PDate( reader );
 
-            int addrcount = reader.Read8();
+            int addrcount = reader.ReadByte();
             var addresses = new List<I2PRouterAddress>();
             for ( int i = 0; i < addrcount; ++i )
             {
@@ -59,12 +60,11 @@ namespace I2PCore.Data
             }
             Addresses = addresses.ToArray();
 
-            reader.Seek( reader.Read8() * 32 ); // peer_size. Unused.
+            reader.Seek( reader.ReadByte() * 32 ); // peer_size. Unused.
 
             Options = new I2PMapping( reader );
-            var payloadend = new BufRef( reader );
 
-            Data = new BufLen( startview, 0, reader - startview );
+            Data = reader.BlockSince( startPos );
             Signature = new I2PSignature( reader, Identity.Certificate );
 
             if ( verifysig )
@@ -123,9 +123,9 @@ namespace I2PCore.Data
             return null;
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
-            Data.WriteTo( dest );
+            dest.WriteBlock( Data );
             Signature.Write( dest );
         }
 

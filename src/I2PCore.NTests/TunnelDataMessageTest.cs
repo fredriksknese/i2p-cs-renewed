@@ -31,7 +31,7 @@ namespace I2PTests
             var firstmsg = msgfrags.First();
             var serialized = firstmsg.CreateHeader16.HeaderAndPayload;
 
-            var recovered = I2NpMessage.ReadHeader16( new BufRefLen( serialized ) );
+            var recovered = I2NpMessage.ReadHeader16( new I2PBufferCursor( serialized ) );
 
             var reassembler = new TunnelDataFragmentReassembly();
             var reassembledmsgs = reassembler.Process( 
@@ -51,7 +51,7 @@ namespace I2PTests
         [Test]
         public void TestSingleLargeTunnelDataCreation()
         {
-            var sourcedata = new BufLen( BufUtils.RandomBytes( 9000 ) );
+            var sourcedata = new I2PByteBlock( BufUtils.RandomBytes( 9000 ) );
 
             var srcmsgs = new List<TunnelMessage>();
             srcmsgs.Add( new TunnelMessageTunnel( new DataMessage( sourcedata ), new I2PIdentHash( true ), 4242 ) );
@@ -64,7 +64,7 @@ namespace I2PTests
             var serbufarray = serbuf.ToArray();
 
             var reassembler = new TunnelDataFragmentReassembly();
-            var reader = new BufRefLen( serbufarray );
+            var reader = new I2PBufferCursor( serbufarray );
             var readmsgs = new List<TunnelDataMessage>();
             while ( reader.Length > 0 ) readmsgs.Add( (TunnelDataMessage)( I2NpMessage.ReadHeader16( reader ) ).Message );
 

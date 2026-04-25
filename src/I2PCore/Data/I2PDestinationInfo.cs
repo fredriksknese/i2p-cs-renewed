@@ -34,7 +34,7 @@ namespace I2PCore.Data
                     new I2PSigningPublicKey( PrivateSigningKey ) );
         }
 
-        public I2PDestinationInfo( BufRef reader )
+        public I2PDestinationInfo( I2PBufferCursor reader )
         {
             Destination = new I2PDestination( reader );
             PrivateKey = new I2PPrivateKey( reader, Destination.Certificate );
@@ -42,7 +42,7 @@ namespace I2PCore.Data
         }
 
         public I2PDestinationInfo( string base64 )
-                : this( new BufRefLen( FreenetBase64.Decode( base64 ) ) )
+                : this( new I2PBufferCursor( FreenetBase64.Decode( base64 ) ) )
         {
         }
 
@@ -53,7 +53,7 @@ namespace I2PCore.Data
 
         public string ToBase64()
         {
-            return FreenetBase64.Encode( new BufLen( ToByteArray() ) );
+            return FreenetBase64.Encode( new I2PByteBlock( ToByteArray() ) );
         }
 
         public override string ToString()

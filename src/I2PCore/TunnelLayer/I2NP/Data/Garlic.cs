@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using I2PCore.Data;
@@ -13,11 +14,11 @@ namespace I2PCore.TunnelLayer.I2NP.Data
 {
     public class Garlic : I2PType
     {
-        public BufLen Data;
+        public I2PByteBlock Data;
 
         public List<GarlicClove> Cloves = new();
 
-        public Garlic( BufRefLen reader )
+        public Garlic( I2PBufferCursor reader )
         {
             ParseData( reader );
         }
@@ -44,38 +45,38 @@ namespace I2PCore.TunnelLayer.I2NP.Data
 
         public Garlic( I2PDate expiration, IEnumerable<GarlicClove> cloves )
         {
-            BufRefStream buf = new BufRefStream();
-            buf.Write( (byte)cloves.Count() );
+            var buf = new ArrayBufferWriter<byte>();
+            buf.WriteByte( (byte)cloves.Count() );
             foreach ( var clove in cloves ) clove.Write( buf );
             Cloves = cloves.ToList();
 
             // Certificate
-            buf.Write( new byte[] { 0, 0, 0 } );
+            buf.WriteBytes( new byte[] { 0, 0, 0 } );
 
-            buf.Write( (BufRefLen)BufUtils.Flip32Bl( BufUtils.RandomUint() ) );
+            buf.WriteUInt32BigEndian( BufUtils.RandomUint() );
             expiration.Write( buf );
 
-            Data = new BufLen( buf.ToArray() );
-            ParseData( new BufRefLen( Data ) );
+            Data = new I2PByteBlock( buf.WrittenSpan.ToArray() );
+            ParseData( new I2PBufferCursor( Data ) );
         }
 
-        private void ParseData( BufRefLen reader )
+        private void ParseData( I2PBufferCursor reader )
         {
-            var start = new BufLen( reader );
+            var startPos = reader.Position;
 
-            var cloves = reader.Read8();
+            var cloves = reader.ReadByte();
             for ( int i = 0; i < cloves; ++i )
             {
                 Cloves.Add( new GarlicClove( reader ) );
             }
             reader.Seek( 3 + 4 + 8 ); // Garlic: Cert, MessageId, Expiration
 
-            Data = new BufLen( start, 0, reader - start );
+            Data = new I2PByteBlock( reader.BaseArray, startPos, reader.DistanceFrom( startPos ) );
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
-            Data.WriteTo( dest );
+            dest.WriteBlock( Data );
         }
 
         public override string ToString()
@@ -92,59 +93,60 @@ namespace I2PCore.TunnelLayer.I2NP.Data
             var cipher = new CbcBlockCipher( new AesEngine() );
 
             var payload = msg.ToByteArray();
-            var dest = new BufLen( new byte[65536] );
+            var dest = new I2PByteBlock( new byte[65536] );
             // Reserve header + 4 bytes for GarlicMessageLength
-            var writer = new BufRefLen( dest, I2NpMaxHeaderSize + 4 );
+            var writer = new I2PBufferCursor( dest.BaseArray, dest.BaseArrayOffset + I2NpMaxHeaderSize + 4 );
 
             // ElGamal block
-            var egbuf = new BufLen( new byte[222] );
-            var sessionkeybuf = new BufLen( egbuf, 0, 32 );
-            var preivbuf = new BufLen( egbuf, 32, 32 );
-            var egpadding = new BufLen( egbuf, 64, 158 );
+            var egbuf = new I2PByteBlock( new byte[222] );
+            var sessionkeybuf = egbuf.Slice( 0, 32 );
+            var preivbuf = egbuf.Slice( 32, 32 );
+            var egpadding = egbuf.Slice( 64, 158 );
 
             egpadding.Randomize();
             preivbuf.Randomize();
-            sessionkeybuf.Poke( sessionkey.Key, 0 );
+            sessionkeybuf.CopyFrom( sessionkey.Key, 0 );
 
-            var iv = new BufLen( I2PHashSha256.GetHash( preivbuf ), 0, 16 );
+            var iv = new I2PByteBlock( I2PHashSha256.GetHash( preivbuf ), 0, 16 );
 
             ElGamalCrypto.Encrypt( writer, egbuf, pubkey, true );
 
+
             // AES block
-            var aesstart = new BufLen( writer );
-            var aesblock = new GarlicAesBlock( writer, newtags, null, new BufRefLen( payload ) );
+            var aesstart = writer.CurrentBlock;
+            var aesblock = new GarlicAesBlock( writer, newtags, null, new I2PBufferCursor( payload ) );
 
             cipher.Init( true, sessionkey.Key.ToParametersWithIv( iv ) );
             cipher.ProcessBytes( aesblock.DataBuf );
 
-            var length = writer - dest;
-            dest.PokeFlip32( (uint)( length - 4 ), I2NpMaxHeaderSize );
+            var length = writer.Position - dest.BaseArrayOffset;
+            dest.WriteUInt32BigEndian( (uint)( length - 4 ), I2NpMaxHeaderSize );
 
-            return new GarlicMessage( new BufRefLen( dest, I2NpMaxHeaderSize, length ) );
+            return new GarlicMessage( new I2PBufferCursor( dest.BaseArray, dest.BaseArrayOffset + I2NpMaxHeaderSize, length ) );
         }
 
-        public static (GarlicAesBlock,I2PSessionKey) EgDecryptGarlic( 
-                    GarlicMessage garlic, 
+        public static (GarlicAesBlock,I2PSessionKey) EgDecryptGarlic(
+                    GarlicMessage garlic,
                     I2PPrivateKey privkey )
         {
             var cipher = new CbcBlockCipher( new AesEngine() );
             var egdata = garlic.EgData;
 
-            var egbuf = new BufLen( egdata, 0, 514 );
+            var egbuf = egdata.Slice( 0, 514 );
             var egheader = ElGamalCrypto.Decrypt( egbuf, privkey, true );
 
-            var sessionkey = new I2PSessionKey( new BufLen( egheader, 0, 32 ) );
-            var preiv = new BufLen( egheader, 32, 32 );
-            var egpadding = new BufLen( egheader, 64, 158 );
-            var aesbuf = new BufLen( egdata, 514 );
+            var sessionkey = new I2PSessionKey( egheader.Slice( 0, 32 ) );
+            var preiv = egheader.Slice( 32, 32 );
+            var egpadding = egheader.Slice( 64, 158 );
+            var aesbuf = egdata.Slice( 514 );
 
             var pivh = I2PHashSha256.GetHash( preiv );
 
-            cipher.Init( false, sessionkey.Key.ToParametersWithIv( new BufLen( pivh, 0, 16 ) ) );
+            cipher.Init( false, sessionkey.Key.ToParametersWithIv( new I2PByteBlock( pivh, 0, 16 ) ) );
             cipher.ProcessBytes( aesbuf );
 
             GarlicAesBlock aesblock =
-                    new GarlicAesBlock( new BufRefLen( aesbuf ) );
+                    new GarlicAesBlock( new I2PBufferCursor( aesbuf ) );
 
             if ( !aesblock.VerifyPayloadHash() )
             {
@@ -165,26 +167,26 @@ namespace I2PCore.TunnelLayer.I2NP.Data
             var cipher = new CbcBlockCipher( new AesEngine() );
 
             var payload = msg.ToByteArray();
-            var dest = new BufLen( new byte[65536] );
+            var dest = new I2PByteBlock( new byte[65536] );
             // Reserve header + 4 bytes for GarlicMessageLength
-            var writer = new BufRefLen( dest, I2NpMaxHeaderSize + 4 );
+            var writer = new I2PBufferCursor( dest.BaseArray, dest.BaseArrayOffset + I2NpMaxHeaderSize + 4 );
 
             // Tag as header
-            writer.Write( tag.Value );
+            writer.WriteBlock( tag.Value );
 
             // AES block
-            var aesstart = new BufLen( writer );
-            var aesblock = new GarlicAesBlock( writer, newtags, newsessionkey, new BufRefLen( payload ) );
+            var aesstart = writer.CurrentBlock;
+            var aesblock = new GarlicAesBlock( writer, newtags, newsessionkey, new I2PBufferCursor( payload ) );
 
             var pivh = I2PHashSha256.GetHash( tag.Value );
 
-            cipher.Init( true, sessionkey.Key.ToParametersWithIv( new BufLen( pivh, 0, 16 ) ) );
+            cipher.Init( true, sessionkey.Key.ToParametersWithIv( new I2PByteBlock( pivh, 0, 16 ) ) );
             cipher.ProcessBytes( aesblock.DataBuf );
 
-            var length = writer - dest;
-            dest.PokeFlip32( (uint)( length - 4 ), I2NpMaxHeaderSize );
+            var length = writer.Position - dest.BaseArrayOffset;
+            dest.WriteUInt32BigEndian( (uint)( length - 4 ), I2NpMaxHeaderSize );
 
-            return new GarlicMessage( new BufRefLen( dest, I2NpMaxHeaderSize, length ) );
+            return new GarlicMessage( new I2PBufferCursor( dest.BaseArray, dest.BaseArrayOffset + I2NpMaxHeaderSize, length ) );
         }
 
         public static (GarlicAesBlock,I2PSessionKey) RetrieveAesBlock(
@@ -196,22 +198,22 @@ namespace I2PCore.TunnelLayer.I2NP.Data
 
             var cipher = new CbcBlockCipher( new AesEngine() );
 
-            var tag = new I2PSessionTag( new BufRefLen( garlic.EgData, 0, 32 ) );
+            var tag = new I2PSessionTag( new I2PBufferCursor( garlic.EgData.BaseArray, garlic.EgData.BaseArrayOffset, 32 ) );
             var sessionkey = findsessionkey?.Invoke( tag );
 #if LOG_ALL_LEASE_MGMT
             Logging.LogDebug( $"RetrieveAESBlock: Garlic: Session key {sessionkey?.Key.ToString() ?? "[null]"}" );
 #endif
             if ( sessionkey != null )
             {
-                var aesbuf = new BufLen( garlic.EgData, 32 );
+                var aesbuf = garlic.EgData.Slice( 32 );
                 var pivh = I2PHashSha256.GetHash( tag.Value );
 
-                cipher.Init( false, sessionkey.Key.ToParametersWithIv( new BufLen( pivh, 0, 16 ) ) );
+                cipher.Init( false, sessionkey.Key.ToParametersWithIv( new I2PByteBlock( pivh, 0, 16 ) ) );
                 cipher.ProcessBytes( aesbuf );
 
                 try
                 {
-                    result = new GarlicAesBlock( new BufRefLen( aesbuf ) );
+                    result = new GarlicAesBlock( new I2PBufferCursor( aesbuf ) );
 
                     if ( !result.VerifyPayloadHash() )
                     {

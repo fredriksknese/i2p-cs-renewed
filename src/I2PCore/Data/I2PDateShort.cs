@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using I2PCore.Utils;
 
 namespace I2PCore.Data
@@ -18,9 +19,9 @@ namespace I2PCore.Data
             DateSeconds = val;
         }
 
-        public I2PDateShort( BufRef reader )
+        public I2PDateShort( I2PBufferCursor reader )
         {
-            DateSeconds = reader.ReadFlip32();
+            DateSeconds = reader.ReadUInt32BigEndian();
         }
         public I2PDateShort( I2PDateShort date )
         {
@@ -39,9 +40,9 @@ namespace I2PCore.Data
             DateSeconds = (uint)( dt - RefDate ).TotalSeconds;
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
-            dest.Write( BufUtils.Flip32B( DateSeconds ) );
+            dest.WriteUInt32BigEndian( DateSeconds );
         }
 
         public static explicit operator DateTime( I2PDateShort ds )

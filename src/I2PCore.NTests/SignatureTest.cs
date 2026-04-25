@@ -22,8 +22,8 @@ namespace I2PTests
             var privskey = new I2PSigningPrivateKey( certificate );
             var pubskey = new I2PSigningPublicKey( privskey );
 
-            var data = new BufLen( BufUtils.RandomBytes( 500 ) );
-            var sign = new I2PSignature( new BufRefLen( I2PSignature.DoSign( privskey, data ) ), certificate );
+            var data = new I2PByteBlock( BufUtils.RandomBytes( 500 ) );
+            var sign = new I2PSignature( new I2PBufferCursor( I2PSignature.DoSign( privskey, data ) ), certificate );
 
             Assert.IsTrue( I2PSignature.DoVerify( pubskey, sign, data ) );
         }

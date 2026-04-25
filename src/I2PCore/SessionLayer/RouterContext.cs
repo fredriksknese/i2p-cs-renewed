@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using I2PCore.Data;
@@ -174,7 +175,7 @@ namespace I2PCore.SessionLayer
         public HttpProxyEncryptionType ProxyEncryption = HttpProxyEncryptionType.Hybrid;
 
         // SSU
-        public BufLen IntroKey = new( new byte[32] );
+        public I2PByteBlock IntroKey = new( new byte[32] );
 
         // Store
 
@@ -411,7 +412,7 @@ namespace I2PCore.SessionLayer
                     int len;
                     while ( ( len = fs.Read( buf, 0, buf.Length ) ) != 0 ) ms.Write( buf, 0, len );
 
-                    var reader = new BufRefLen( ms.ToArray() );
+                    var reader = new I2PBufferCursor( ms.ToArray() );
 
                     Certificate = new I2PCertificate( reader );
                     PrivateSigningKey = new I2PSigningPrivateKey( reader, Certificate );
@@ -422,7 +423,7 @@ namespace I2PCore.SessionLayer
 
                     MyRouterIdentity = new I2PRouterIdentity( reader );
                     Published = new I2PDate( reader );
-                    IntroKey = reader.ReadBufLen( 32 );
+                    IntroKey = reader.ReadBlock( 32 );
                 }
             }
         }
@@ -439,7 +440,7 @@ namespace I2PCore.SessionLayer
 
             using ( var fs = new FileStream( fullpath, FileMode.Create, FileAccess.Write ) )
             {
-                var dest = new BufRefStream();
+                var dest = new ArrayBufferWriter<byte>();
 
                 Certificate.Write( dest );
                 PrivateSigningKey.Write( dest );
@@ -450,9 +451,9 @@ namespace I2PCore.SessionLayer
 
                 MyRouterIdentity.Write( dest );
                 Published.Write( dest );
-                IntroKey.WriteTo( dest );
+                dest.WriteBlock( IntroKey );
 
-                var ar = dest.ToArray();
+                var ar = dest.WrittenSpan.ToArray();
                 fs.Write( ar, 0, ar.Length );
             }
         }

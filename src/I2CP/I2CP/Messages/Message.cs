@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -53,25 +54,25 @@ namespace I2P.I2CP.Messages
             MessageType = msgtype;
         }
 
-        public abstract void Write( BufRefStream dest );
+        public abstract void Write( ArrayBufferWriter<byte> dest );
 
         /*
-        public void WriteMessage( BufRefStream dest, params I2PType[] fields )
+        public void WriteMessage( ArrayBufferWriter<byte> dest, params I2PType[] fields )
         {
-            var buf = new BufRefStream();
+            var buf = new ArrayBufferWriter<byte>();
             foreach ( var field in fields ) field.Write( buf );
 
-            dest.Write( BufUtils.Flip32B( (uint)buf.Length ) );
-            dest.Write( (byte)MessageType );
+            dest.WriteUInt32BigEndian( (uint)buf.WrittenCount );
+            dest.WriteByte( (byte)MessageType );
             dest.Write( buf );
         }
         */
 
         public byte[] ToByteArray()
         {
-            var buf = new BufRefStream();
+            var buf = new ArrayBufferWriter<byte>();
             Write( buf );
-            return buf.ToArray();
+            return buf.WrittenSpan.ToArray();
         }
 
         public override string ToString()

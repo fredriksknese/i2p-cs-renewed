@@ -10,7 +10,7 @@ namespace I2PCore.Utils
     */
     public static class MurMurHash3
     {
-        public static uint Hash( BufRefLen reader, uint seed = 144 )
+        public static uint Hash( I2PBufferCursor reader, uint seed = 144 )
         {
             const uint c1 = 0xcc9e2d51;
             const uint c2 = 0x1b873593;
@@ -19,8 +19,8 @@ namespace I2PCore.Utils
             uint k1 = 0;
             uint streamlength = 0;
 
-            var chunklength = reader.Length;
-            var chunk = reader.ReadBufRefLen( chunklength );
+            var chunklength = reader.Remaining;
+            var chunk = reader.ReadBlock( chunklength );
 
             while ( chunklength > 0 )
             {
@@ -74,8 +74,8 @@ namespace I2PCore.Utils
                     
                 }
 
-                chunklength = reader.Length;
-                chunk = reader.ReadBufRefLen( chunklength );
+                chunklength = reader.Remaining;
+                chunk = reader.ReadBlock( chunklength );
             }
                     
             // finalization, magic chants to wrap it all up

@@ -24,20 +24,20 @@ namespace I2PTests
             var data3 = new byte[20000];
             data3.Randomize();
 
-            var bl1 = new List<BufLen>();
-            var bl2 = new List<BufLen>();
-            var bl3 = new List<BufLen>();
+            var bl1 = new List<I2PByteBlock>();
+            var bl2 = new List<I2PByteBlock>();
+            var bl3 = new List<I2PByteBlock>();
 
-            bl1.Add( new BufLen( data1 ) );
-            bl1.Add( new BufLen( data2 ) );
-            bl1.Add( new BufLen( data3 ) );
+            bl1.Add( new I2PByteBlock( data1 ) );
+            bl1.Add( new I2PByteBlock( data2 ) );
+            bl1.Add( new I2PByteBlock( data3 ) );
 
-            bl2.Add( new BufLen( data2 ) );
-            bl2.Add( new BufLen( data1 ) );
-            bl2.Add( new BufLen( data3 ) );
+            bl2.Add( new I2PByteBlock( data2 ) );
+            bl2.Add( new I2PByteBlock( data1 ) );
+            bl2.Add( new I2PByteBlock( data3 ) );
 
-            bl3.Add( new BufLen( data3 ) );
-            bl3.Add( new BufLen( data1 ) );
+            bl3.Add( new I2PByteBlock( data3 ) );
+            bl3.Add( new I2PByteBlock( data1 ) );
 
             var filename = Path.GetFullPath( Path.GetTempFileName() );
 
@@ -49,10 +49,10 @@ namespace I2PTests
                     var ix = target.Write( bl1 );
                     Assert.AreEqual( bl1.Sum( bl => bl.Length ), target.GetDataLength( ix ) );
                     var copy = target.Read( ix );
-                    var cbl = new BufRefLen( copy );
-                    var cdata1 = cbl.ReadBufLen( data1.Length );
-                    var cdata2 = cbl.ReadBufLen( data2.Length );
-                    var cdata3 = cbl.ReadBufLen( data3.Length );
+                    var cbl = new I2PBufferCursor( copy );
+                    var cdata1 = cbl.ReadBlock( data1.Length );
+                    var cdata2 = cbl.ReadBlock( data2.Length );
+                    var cdata3 = cbl.ReadBlock( data3.Length );
                     Assert.IsTrue( cdata1.Equals( data1 ) );
                     Assert.IsTrue( cdata2.Equals( data2 ) );
                     Assert.IsTrue( cdata3.Equals( data3 ) );
@@ -60,10 +60,10 @@ namespace I2PTests
                     target.Write( bl2, ix );
                     Assert.AreEqual( bl2.Sum( bl => bl.Length ), target.GetDataLength( ix ) );
                     copy = target.Read( ix );
-                    cbl = new BufRefLen( copy );
-                    cdata2 = cbl.ReadBufLen( data2.Length );
-                    cdata1 = cbl.ReadBufLen( data1.Length );
-                    cdata3 = cbl.ReadBufLen( data3.Length );
+                    cbl = new I2PBufferCursor( copy );
+                    cdata2 = cbl.ReadBlock( data2.Length );
+                    cdata1 = cbl.ReadBlock( data1.Length );
+                    cdata3 = cbl.ReadBlock( data3.Length );
                     Assert.IsTrue( cdata1.Equals( data1 ) );
                     Assert.IsTrue( cdata2.Equals( data2 ) );
                     Assert.IsTrue( cdata3.Equals( data3 ) );
@@ -71,9 +71,9 @@ namespace I2PTests
                     target.Write( bl3, ix );
                     Assert.AreEqual( bl3.Sum( bl => bl.Length ), target.GetDataLength( ix ) );
                     copy = target.Read( ix );
-                    cbl = new BufRefLen( copy );
-                    cdata3 = cbl.ReadBufLen( data3.Length );
-                    cdata1 = cbl.ReadBufLen( data1.Length );
+                    cbl = new I2PBufferCursor( copy );
+                    cdata3 = cbl.ReadBlock( data3.Length );
+                    cdata1 = cbl.ReadBlock( data1.Length );
                     Assert.IsTrue( cdata1.Equals( data1 ) );
                     Assert.IsTrue( cdata3.Equals( data3 ) );
 
@@ -330,7 +330,7 @@ namespace I2PTests
                         var threesectors = new byte[target.SectorDataSize * 3];
                         threesectors.Populate<byte>( 2 );
 
-                        var towrite = new BufLen[] { new( firstsector ), new( threesectors ) };
+                        var towrite = new I2PByteBlock[] { new( firstsector ), new( threesectors ) };
 
                         var strix = target.Write( towrite );
 
@@ -400,7 +400,7 @@ namespace I2PTests
                             var threesectors = new byte[target.SectorDataSize * 3];
                             threesectors.Populate<byte>( 2 );
 
-                            var towrite = new BufLen[] { new( firstsector ), new( threesectors ) };
+                            var towrite = new I2PByteBlock[] { new( firstsector ), new( threesectors ) };
 
                             var strix = target.Write( towrite );
 

@@ -88,11 +88,11 @@ namespace I2PTests
             var msg1Dec = bob.ProcessMessage1(aliceEph, msg1Enc);
             
             Assert.IsNotNull(msg1Dec);
-            var reader = new BufRef(msg1Dec);
-            reader.Read8(); // networkId
-            reader.Read8(); // version
-            reader.ReadFlip16(); // padLen
-            var m3p2len = reader.ReadFlip16();
+            var reader = new I2PBufferCursor(msg1Dec);
+            reader.ReadByte(); // networkId
+            reader.ReadByte(); // version
+            reader.ReadUInt16BigEndian(); // padLen
+            var m3p2len = reader.ReadUInt16BigEndian();
             Assert.AreEqual(1234, m3p2len);
             
             // Verify that Bob's ProcessMessage1 correctly identifies the fields
@@ -121,13 +121,13 @@ namespace I2PTests
             // But we can test if Alice's ProcessMessage2 can parse it if it follows the spec.
 
             var payload = new byte[16];
-            var writer = new BufRefLen(payload);
-            writer.WriteFlip16(0); // Rsvd
-            writer.WriteFlip16(64); // padLen
-            writer.WriteFlip32(0); // Reserved
+            var writer = new I2PBufferCursor(payload);
+            writer.WriteUInt16BigEndian(0); // Rsvd
+            writer.WriteUInt16BigEndian(64); // padLen
+            writer.WriteUInt32BigEndian(0); // Reserved
             uint tsB = (uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            writer.WriteFlip32(tsB); // tsB
-            writer.WriteFlip32(0); // Reserved
+            writer.WriteUInt32BigEndian(tsB); // tsB
+            writer.WriteUInt32BigEndian(0); // Reserved
 
             var (bobEph, msg2Enc) = bob.CreateMessage2(payload);
             var msg2Dec = alice.ProcessMessage2(bobEph, msg2Enc);
@@ -135,12 +135,12 @@ namespace I2PTests
             Assert.IsNotNull(msg2Dec);
             Assert.AreEqual(16, msg2Dec.Length);
 
-            var reader = new BufRefLen(msg2Dec);
-            Assert.AreEqual(0, reader.ReadFlip16()); // Rsvd
-            Assert.AreEqual(64, reader.ReadFlip16()); // padLen
-            Assert.AreEqual(0, reader.ReadFlip32()); // Reserved
-            Assert.AreEqual(tsB, reader.ReadFlip32()); // tsB
-            Assert.AreEqual(0, reader.ReadFlip32()); // Reserved
+            var reader = new I2PBufferCursor(msg2Dec);
+            Assert.AreEqual(0, reader.ReadUInt16BigEndian()); // Rsvd
+            Assert.AreEqual(64, reader.ReadUInt16BigEndian()); // padLen
+            Assert.AreEqual(0, reader.ReadUInt32BigEndian()); // Reserved
+            Assert.AreEqual(tsB, reader.ReadUInt32BigEndian()); // tsB
+            Assert.AreEqual(0, reader.ReadUInt32BigEndian()); // Reserved
         }
 
         [Test]
@@ -178,10 +178,10 @@ namespace I2PTests
 
             Assert.IsNotNull(msg2Dec, "Alice should decrypt Message 2 even with junk in reserved fields");
             
-            var reader = new BufRef(msg2Dec);
-            Assert.AreEqual(0xFF, reader.Read8());
-            Assert.AreEqual(0xEE, reader.Read8());
-            Assert.AreEqual(16, reader.ReadFlip16()); // padLen
+            var reader = new I2PBufferCursor(msg2Dec);
+            Assert.AreEqual(0xFF, reader.ReadByte());
+            Assert.AreEqual(0xEE, reader.ReadByte());
+            Assert.AreEqual(16, reader.ReadUInt16BigEndian()); // padLen
             
             // This test verifies that the low-level crypto works.
             // NTCP2Session was updated to treat these fields as Reserved and ignore them.
@@ -351,7 +351,7 @@ namespace I2PTests
             Assert.AreEqual(12, serialized.Length);
 
             var parsed = new NTCP2OptionsBlock();
-            parsed.Parse(new BufRefLen(serialized));
+            parsed.Parse(new I2PBufferCursor(serialized));
 
             Assert.AreEqual(0x12, parsed.TMin);
             Assert.AreEqual(0x34, parsed.TMax);
@@ -378,7 +378,7 @@ namespace I2PTests
             Assert.AreEqual((byte)NTCP2TerminationReason.ClockSkew, serialized[8]);
 
             var parsed = new NTCP2TerminationBlock();
-            parsed.Parse(new BufRefLen(serialized));
+            parsed.Parse(new I2PBufferCursor(serialized));
 
             Assert.AreEqual(NTCP2TerminationReason.ClockSkew, parsed.Reason);
             Assert.AreEqual(12345678, parsed.ValidPacketsReceived);

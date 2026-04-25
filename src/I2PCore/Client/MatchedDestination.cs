@@ -127,7 +127,7 @@ namespace I2PCore.Client
                     var destBytes = FreenetBase64.Decode(_remoteName);
                     if (destBytes != null && destBytes.Length >= 387)
                     {
-                        var dest = new I2PDestination(new BufRef(destBytes));
+                        var dest = new I2PDestination(new I2PBufferCursor(destBytes));
                         _remoteIdentHash = new I2PIdentHash(dest);
                     }
                 }

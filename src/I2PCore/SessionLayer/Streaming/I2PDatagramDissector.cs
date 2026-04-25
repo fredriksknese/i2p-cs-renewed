@@ -1,3 +1,4 @@
+using System.Buffers;
 using System;
 using I2PCore.Data;
 using I2PCore.Utils;
@@ -39,7 +40,7 @@ namespace I2PCore.SessionLayer.Streaming
             byte[] signature;
             if (signingKey != null)
             {
-                signature = I2PSignature.DoSign(signingKey, new BufLen(toSign));
+                signature = I2PSignature.DoSign(signingKey, new I2PByteBlock(toSign));
             }
             else
             {
@@ -68,15 +69,15 @@ namespace I2PCore.SessionLayer.Streaming
 
             try
             {
-                var reader = new BufRef(data);
+                var reader = new I2PBufferCursor(data);
                 var sender = new I2PDestination(reader);
                 var senderBytes = sender.ToByteArray();
 
                 var signatureSize = sender.Certificate.SignatureLength;
-                var signatureData = reader.ReadBufLen(signatureSize);
+                var signatureData = reader.ReadBlock(signatureSize);
 
                 var payloadLen = data.Length - reader.BaseArrayOffset;
-                var payload = reader.Read(payloadLen);
+                var payload = reader.ReadBytes(payloadLen);
 
                 // Verify signature
                 var toVerify = new byte[senderBytes.Length + payload.Length];
@@ -90,9 +91,9 @@ namespace I2PCore.SessionLayer.Streaming
                 };
                 var sigPubKey = sender.SigningPublicKey;
                 var verified = I2PSignature.DoVerify(
-                    new I2PSigningPublicKey(new BufRef(sigPubKey.ToByteArray()), sender.Certificate),
+                    new I2PSigningPublicKey(new I2PBufferCursor(sigPubKey.ToByteArray()), sender.Certificate),
                     signature,
-                    new BufLen(toVerify));
+                    new I2PByteBlock(toVerify));
 
                 return (sender, payload, verified);
             }
@@ -133,9 +134,9 @@ namespace I2PCore.SessionLayer.Streaming
             byte[] offlineSigBytes;
             if (offlineSignature != null)
             {
-                var sigStream = new BufRefStream();
+                var sigStream = new ArrayBufferWriter<byte>();
                 offlineSignature.Write(sigStream);
-                offlineSigBytes = sigStream.ToByteArray();
+                offlineSigBytes = sigStream.WrittenSpan.ToArray();
             }
             else
             {
@@ -151,7 +152,7 @@ namespace I2PCore.SessionLayer.Streaming
             // Sign with the transient key (if offline signature present) or primary key
             byte[] signature;
             if (signingKey != null)
-                signature = I2PSignature.DoSign(signingKey, new BufLen(toSign));
+                signature = I2PSignature.DoSign(signingKey, new I2PByteBlock(toSign));
             else
                 signature = new byte[sender.Certificate.SignatureLength];
 
@@ -189,8 +190,8 @@ namespace I2PCore.SessionLayer.Streaming
 
             try
             {
-                var reader = new BufRef(data);
-                byte flags = reader.Read8();
+                var reader = new I2PBufferCursor(data);
+                byte flags = reader.ReadByte();
                 bool hasOfflineSig = (flags & 0x01) != 0;
 
                 var sender = new I2PDestination(reader);
@@ -212,15 +213,15 @@ namespace I2PCore.SessionLayer.Streaming
                 var signatureSize = hasOfflineSig
                     ? offlineSig.TransientPublicKey.Certificate.SignatureLength
                     : sender.Certificate.SignatureLength;
-                var signatureData = reader.ReadBufLen(signatureSize);
+                var signatureData = reader.ReadBlock(signatureSize);
 
                 // Read ports
-                ushort fromPort = reader.ReadFlip16();
-                ushort toPort = reader.ReadFlip16();
+                ushort fromPort = reader.ReadUInt16BigEndian();
+                ushort toPort = reader.ReadUInt16BigEndian();
 
                 // Remaining is payload
                 var payloadLen = data.Length - reader.BaseArrayOffset;
-                var payload = reader.Read(payloadLen);
+                var payload = reader.ReadBytes(payloadLen);
 
                 // Build port data for verification
                 var portData = new byte[4];
@@ -240,7 +241,7 @@ namespace I2PCore.SessionLayer.Streaming
                     Certificate = verifyKey.Certificate,
                     Sig = signatureData
                 };
-                var verified = I2PSignature.DoVerify(verifyKey, signature, new BufLen(toVerify));
+                var verified = I2PSignature.DoVerify(verifyKey, signature, new I2PByteBlock(toVerify));
 
                 return (sender, payload, verified, fromPort, toPort);
             }

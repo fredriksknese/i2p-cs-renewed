@@ -43,7 +43,7 @@ namespace I2PCore.SessionLayer.ECIES
             if (replyKey == null)
                 throw new InvalidOperationException("DatabaseLookup has ECIES flag but no reply key");
 
-            // Convert BufLen to byte array
+            // Convert I2PByteBlock to byte array
             var keyBytes = new byte[replyKey.Key.Length];
             Array.Copy(replyKey.Key.BaseArray, replyKey.Key.BaseArrayOffset, keyBytes, 0, replyKey.Key.Length);
             return keyBytes;
@@ -83,8 +83,8 @@ namespace I2PCore.SessionLayer.ECIES
             {
                 EncryptionFlag = false,
                 EciesFlag = true,
-                ReplyKey = new BufLen(replyPublicKey),
-                Tags = Array.Empty<BufLen>()
+                ReplyKey = new I2PByteBlock(replyPublicKey),
+                Tags = Array.Empty<I2PByteBlock>()
             };
 
             return new DatabaseLookupMessage(
@@ -178,7 +178,7 @@ namespace I2PCore.SessionLayer.ECIES
                 throw new ArgumentException("Data cannot be null or empty", nameof(data));
 
             // Parse as DatabaseStore message
-            return new DatabaseStoreMessage(new BufRef(data));
+            return new DatabaseStoreMessage(new I2PBufferCursor(data));
         }
     }
 

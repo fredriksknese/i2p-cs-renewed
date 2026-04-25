@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using I2PCore.Utils;
 
 namespace I2PCore.Data
@@ -13,26 +14,26 @@ namespace I2PCore.Data
         public static readonly TickSpan TagLifetime = TickSpan.Minutes( 15 );
         public readonly TickCounter Created = TickCounter.Now;
 
-        public readonly BufLen Value;
+        public readonly I2PByteBlock Value;
 
         public I2PSessionTag()
         {
-            Value = new BufLen( BufUtils.RandomBytes( TagLength ) );
+            Value = new I2PByteBlock( BufUtils.RandomBytes( TagLength ) );
         }
 
-        public I2PSessionTag( BufRef buf )
+        public I2PSessionTag( I2PBufferCursor buf )
         {
-            Value = buf.ReadBufLen( TagLength );
+            Value = buf.ReadBlock( TagLength );
         }
 
-        public I2PSessionTag( BufRef buf, int tagsize )
+        public I2PSessionTag( I2PBufferCursor buf, int tagsize )
         {
-            Value = buf.ReadBufLen( tagsize );
+            Value = buf.ReadBlock( tagsize );
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
-            Value.WriteTo( dest );
+            dest.WriteBlock( Value );
         }
 
         public bool Equals( I2PSessionTag other )

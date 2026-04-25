@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -63,15 +64,15 @@ namespace I2PCore.Data
             Options["port"] = port.ToString();
         }
 
-        public I2PRouterAddress( BufRef buf )
+        public I2PRouterAddress( I2PBufferCursor buf )
         {
-            Cost = buf.Read8();
+            Cost = buf.ReadByte();
             Expiration = new I2PDate( buf );
             TransportStyle = new I2PString( buf );
             Options = new I2PMapping( buf );
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
             // Routers MUST set this (expire) field to all zeros. As of release 0.9.12, 
             // a non-zero expiration field is again recognized, however we must 
@@ -79,7 +80,7 @@ namespace I2PCore.Data
             // of the network recognizes it.
             // TODO: Hmmm?
 
-            dest.Write( Cost );
+            dest.WriteByte( Cost );
             Expiration.Write( dest );
             TransportStyle.Write( dest );
             Options.Write( dest );

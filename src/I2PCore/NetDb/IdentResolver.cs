@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -660,8 +661,8 @@ namespace I2PCore
                 {
                     EncryptionFlag = false,
                     EciesFlag = true,
-                    ReplyKey = new BufLen( replyKey ),
-                    Tags = new BufLen[] { new BufLen( ratchetTag.ToByteArray() ) }
+                    ReplyKey = new I2PByteBlock( replyKey ),
+                    Tags = new I2PByteBlock[] { new I2PByteBlock( ratchetTag.ToByteArray() ) }
                 };
 
                 var dlm = new DatabaseLookupMessage(
@@ -697,19 +698,19 @@ namespace I2PCore
             // Build the garlic clove with local delivery instructions.
             // ECIES clove format (per Proposal 144 / readBytesRatchet):
             //   DeliveryInstructions(1 byte: 0x00 = local) + type(1) + msgID(4) + expiration_secs(4) + payload
-            var cloveStream = new BufRefStream();
-            cloveStream.Write( (byte)0 ); // Local delivery
-            cloveStream.Write( (byte)dlm.MessageType );
-            cloveStream.Write( BufUtils.Flip32Bl( dlm.MessageId ) );
+            var cloveStream = new ArrayBufferWriter<byte>();
+            cloveStream.WriteByte( (byte)0 ); // Local delivery
+            cloveStream.WriteByte( (byte)dlm.MessageType );
+            cloveStream.WriteBlock( BufUtils.Flip32Bl( dlm.MessageId ) );
             var expirationSecs = (uint)( DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 20 ); // 20s like Java SINGLE_SEARCH_MSG_TIME
-            cloveStream.Write( BufUtils.Flip32Bl( expirationSecs ) );
-            cloveStream.Write( dlm.Payload );
+            cloveStream.WriteBlock( BufUtils.Flip32Bl( expirationSecs ) );
+            cloveStream.WriteBlock( dlm.Payload );
 
             // Build ECIES blocks: DateTime + GarlicClove + Padding
             var blocks = new List<SessionLayer.ECIES.Block>
             {
                 new DateTimeBlock { Timestamp = (uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds() },
-                new GarlicCloveBlock { Data = cloveStream.ToByteArray() },
+                new GarlicCloveBlock { Data = cloveStream.WrittenSpan.ToArray() },
                 new PaddingBlock { Data = BufUtils.RandomBytes( 16 + BufUtils.RandomInt( 32 ) ) }
             };
 

@@ -28,7 +28,7 @@ namespace I2PCore.Data
                         var combined = new byte[mlkemPriv.Length + x25519Priv.Length];
                         Array.Copy( mlkemPriv, 0, combined, 0, mlkemPriv.Length );
                         Array.Copy( x25519Priv, 0, combined, mlkemPriv.Length, x25519Priv.Length );
-                        Key = new BufLen( combined );
+                        Key = new I2PByteBlock( combined );
                     }
                     break;
 
@@ -43,7 +43,7 @@ namespace I2PCore.Data
                         var combined = new byte[mlkemPriv.Length + x25519Priv.Length];
                         Array.Copy( mlkemPriv, 0, combined, 0, mlkemPriv.Length );
                         Array.Copy( x25519Priv, 0, combined, mlkemPriv.Length, x25519Priv.Length );
-                        Key = new BufLen( combined );
+                        Key = new I2PByteBlock( combined );
                     }
                     break;
 
@@ -58,12 +58,12 @@ namespace I2PCore.Data
                         var combined = new byte[mlkemPriv.Length + x25519Priv.Length];
                         Array.Copy( mlkemPriv, 0, combined, 0, mlkemPriv.Length );
                         Array.Copy( x25519Priv, 0, combined, mlkemPriv.Length, x25519Priv.Length );
-                        Key = new BufLen( combined );
+                        Key = new I2PByteBlock( combined );
                     }
                     break;
 
                 default:
-                    Key = new BufLen( BufUtils.RandomBytes( KeySizeBytes ) );
+                    Key = new I2PByteBlock( BufUtils.RandomBytes( KeySizeBytes ) );
 
                     switch ( Certificate.PublicKeyType )
                     {
@@ -84,7 +84,7 @@ namespace I2PCore.Data
             }
         }
 
-        public I2PPrivateKey( BufRef reader, I2PCertificate cert ) : base( reader, cert ) { }
+        public I2PPrivateKey( I2PBufferCursor reader, I2PCertificate cert ) : base( reader, cert ) { }
 
         public override int KeySizeBytes { get { return Certificate.PrivateKeyLength; } }
 

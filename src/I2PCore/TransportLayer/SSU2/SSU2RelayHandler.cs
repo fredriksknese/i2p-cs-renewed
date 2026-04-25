@@ -55,19 +55,19 @@ namespace I2PCore.TransportLayer.SSU2
 
         private static byte[] Sign(byte[] prologue, I2PIdentHash h, I2PIdentHash h2, byte[] data, I2PSigningPrivateKey key)
         {
-            var bufs = new List<BufLen> { new BufLen(prologue), new BufLen(h.Hash) };
-            if (h2 != null) bufs.Add(new BufLen(h2.Hash));
-            bufs.Add(new BufLen(data));
+            var bufs = new List<I2PByteBlock> { new I2PByteBlock(prologue), h.Hash };
+            if (h2 != null) bufs.Add(h2.Hash);
+            bufs.Add(new I2PByteBlock(data));
             return I2PSignature.DoSign(key, bufs.ToArray());
         }
 
         private static bool Verify(byte[] prologue, I2PIdentHash h, I2PIdentHash h2, byte[] data, byte[] signature, I2PSigningPublicKey key)
         {
-            var bufs = new List<BufLen> { new BufLen(prologue), new BufLen(h.Hash) };
-            if (h2 != null) bufs.Add(new BufLen(h2.Hash));
-            bufs.Add(new BufLen(data));
+            var bufs = new List<I2PByteBlock> { new I2PByteBlock(prologue), h.Hash };
+            if (h2 != null) bufs.Add(h2.Hash);
+            bufs.Add(new I2PByteBlock(data));
 
-            var sig = new I2PSignature(new BufRef(signature), key.Certificate);
+            var sig = new I2PSignature(new I2PBufferCursor(signature), key.Certificate);
             return I2PSignature.DoVerify(key, sig, bufs.ToArray());
         }
 
@@ -111,18 +111,18 @@ namespace I2PCore.TransportLayer.SSU2
             var addrLen = address?.Length ?? 0;
             var sigLen = signature?.Length ?? 0;
             var data = new byte[1 + 4 + 4 + 4 + 1 + 1 + addrLen + sigLen];
-            var writer = new BufRefLen(data);
+            var writer = new I2PBufferCursor(data);
 
-            writer.Write8(flags);
-            writer.WriteFlip32(nonce);
-            writer.WriteFlip32(relayTag);
-            writer.WriteFlip32(timestamp);
-            writer.Write8(version);
-            writer.Write8((byte)addrLen);
+            writer.WriteByte(flags);
+            writer.WriteUInt32BigEndian(nonce);
+            writer.WriteUInt32BigEndian(relayTag);
+            writer.WriteUInt32BigEndian(timestamp);
+            writer.WriteByte(version);
+            writer.WriteByte((byte)addrLen);
             if (addrLen > 0)
-                writer.Write(address);
+                writer.WriteBytes(address);
             if (sigLen > 0)
-                writer.Write(signature);
+                writer.WriteBytes(signature);
 
             return data;
         }
@@ -132,19 +132,19 @@ namespace I2PCore.TransportLayer.SSU2
         /// </summary>
         public static RelayRequestData ParseRelayRequestData(byte[] data)
         {
-            var reader = new BufRef(data);
+            var reader = new I2PBufferCursor(data);
             var result = new RelayRequestData
             {
-                Flags = reader.Read8(),
-                Nonce = reader.ReadFlip32(),
-                RelayTag = reader.ReadFlip32(),
-                Timestamp = reader.ReadFlip32(),
-                Version = reader.Read8()
+                Flags = reader.ReadByte(),
+                Nonce = reader.ReadUInt32BigEndian(),
+                RelayTag = reader.ReadUInt32BigEndian(),
+                Timestamp = reader.ReadUInt32BigEndian(),
+                Version = reader.ReadByte()
             };
 
-            var addrSize = reader.Read8();
+            var addrSize = reader.ReadByte();
             if (addrSize > 0)
-                result.Address = reader.Read(addrSize);
+                result.Address = reader.ReadBytes(addrSize);
 
             // Java signs everything before the signature
             result.RawSignedData = new byte[reader.BaseArrayOffset];
@@ -152,7 +152,7 @@ namespace I2PCore.TransportLayer.SSU2
 
             var remaining = data.Length - reader.BaseArrayOffset;
             if (remaining > 0)
-                result.Signature = reader.Read(remaining);
+                result.Signature = reader.ReadBytes(remaining);
 
             return result;
         }
@@ -206,7 +206,7 @@ namespace I2PCore.TransportLayer.SSU2
             PendingRelaySessions[request.Nonce] = session;
 
             // Build RelayIntro block and send to Charlie
-            var aliceHash = fromAlice.RemoteRouterIdentity?.IdentHash?.Hash?.ToByteArray();
+            var aliceHash = fromAlice.RemoteRouterIdentity?.IdentHash?.Hash.ToByteArray();
             if (aliceHash == null)
                 aliceHash = new byte[32];
 
@@ -236,19 +236,19 @@ namespace I2PCore.TransportLayer.SSU2
             var addrLen = address?.Length ?? 0;
             var sigLen = signature?.Length ?? 0;
             var data = new byte[1 + 1 + 4 + 4 + 1 + 1 + addrLen + sigLen + 8];
-            var writer = new BufRefLen(data);
+            var writer = new I2PBufferCursor(data);
 
-            writer.Write8(flags);
-            writer.Write8(code);
-            writer.WriteFlip32(nonce);
-            writer.WriteFlip32(timestamp);
-            writer.Write8(version);
-            writer.Write8((byte)addrLen);
+            writer.WriteByte(flags);
+            writer.WriteByte(code);
+            writer.WriteUInt32BigEndian(nonce);
+            writer.WriteUInt32BigEndian(timestamp);
+            writer.WriteByte(version);
+            writer.WriteByte((byte)addrLen);
             if (addrLen > 0)
-                writer.Write(address);
+                writer.WriteBytes(address);
             if (sigLen > 0)
-                writer.Write(signature);
-            writer.WriteFlip64(token);
+                writer.WriteBytes(signature);
+            writer.WriteUInt64BigEndian(token);
 
             return data;
         }
@@ -258,19 +258,19 @@ namespace I2PCore.TransportLayer.SSU2
         /// </summary>
         public static RelayResponseData ParseRelayResponseData(byte[] data)
         {
-            var reader = new BufRef(data);
+            var reader = new I2PBufferCursor(data);
             var result = new RelayResponseData
             {
-                Flags = reader.Read8(),
-                Code = reader.Read8(),
-                Nonce = reader.ReadFlip32(),
-                Timestamp = reader.ReadFlip32(),
-                Version = reader.Read8()
+                Flags = reader.ReadByte(),
+                Code = reader.ReadByte(),
+                Nonce = reader.ReadUInt32BigEndian(),
+                Timestamp = reader.ReadUInt32BigEndian(),
+                Version = reader.ReadByte()
             };
 
-            var csz = reader.Read8();
+            var csz = reader.ReadByte();
             if (csz > 0)
-                result.Address = reader.Read(csz);
+                result.Address = reader.ReadBytes(csz);
 
             // Java signs everything before the signature
             result.RawSignedData = new byte[reader.BaseArrayOffset];
@@ -281,10 +281,10 @@ namespace I2PCore.TransportLayer.SSU2
             if (remaining > 8)
             {
                 var sigLen = remaining - 8;
-                result.Signature = reader.Read(sigLen);
+                result.Signature = reader.ReadBytes(sigLen);
             }
 
-            result.Token = reader.ReadFlip64();
+            result.Token = reader.ReadUInt64BigEndian();
             return result;
         }
 
@@ -362,21 +362,21 @@ namespace I2PCore.TransportLayer.SSU2
         {
             var reqLen = relayRequestData?.Length ?? 0;
             var data = new byte[1 + 32 + reqLen];
-            var writer = new BufRefLen(data);
+            var writer = new I2PBufferCursor(data);
 
-            writer.Write8(flags);
+            writer.WriteByte(flags);
             if (aliceHash != null && aliceHash.Length >= 32)
             {
                 var hash32 = new byte[32];
                 Array.Copy(aliceHash, 0, hash32, 0, 32);
-                writer.Write(hash32);
+                writer.WriteBytes(hash32);
             }
             else
             {
-                writer.Write(new byte[32]);
+                writer.WriteBytes(new byte[32]);
             }
             if (reqLen > 0)
-                writer.Write(relayRequestData);
+                writer.WriteBytes(relayRequestData);
 
             return data;
         }
@@ -386,16 +386,16 @@ namespace I2PCore.TransportLayer.SSU2
         /// </summary>
         public static RelayIntroData ParseRelayIntroData(byte[] data)
         {
-            var reader = new BufRef(data);
+            var reader = new I2PBufferCursor(data);
             var result = new RelayIntroData
             {
-                Flags = reader.Read8(),
-                AliceHash = reader.Read(32)
+                Flags = reader.ReadByte(),
+                AliceHash = reader.ReadBytes(32)
             };
 
             var remaining = data.Length - reader.BaseArrayOffset;
             if (remaining > 0)
-                result.RelayRequestData = reader.Read(remaining);
+                result.RelayRequestData = reader.ReadBytes(remaining);
 
             return result;
         }
@@ -484,21 +484,21 @@ namespace I2PCore.TransportLayer.SSU2
             // 1(msgNum) + 1(code) + 1(flags) + [32(hash)] + 1(ver) + 4(nonce) + 4(ts) + 1(asz) + addr + sig
             var size = 3 + (hasHash ? 32 : 0) + 1 + 4 + 4 + 1 + addrLen + sigLen;
             var data = new byte[size];
-            var writer = new BufRefLen(data);
+            var writer = new I2PBufferCursor(data);
 
-            writer.Write8(msgNum);
-            writer.Write8(code);
-            writer.Write8(flags);
+            writer.WriteByte(msgNum);
+            writer.WriteByte(code);
+            writer.WriteByte(flags);
             if (hasHash)
-                writer.Write(hash);
-            writer.Write8(version);
-            writer.WriteFlip32(nonce);
-            writer.WriteFlip32(timestamp);
-            writer.Write8((byte)addrLen);
+                writer.WriteBytes(hash);
+            writer.WriteByte(version);
+            writer.WriteUInt32BigEndian(nonce);
+            writer.WriteUInt32BigEndian(timestamp);
+            writer.WriteByte((byte)addrLen);
             if (addrLen > 0)
-                writer.Write(address);
+                writer.WriteBytes(address);
             if (sigLen > 0)
-                writer.Write(signature);
+                writer.WriteBytes(signature);
 
             return data;
         }
@@ -508,27 +508,27 @@ namespace I2PCore.TransportLayer.SSU2
         /// </summary>
         public static PeerTestData ParsePeerTestData(byte[] data)
         {
-            var reader = new BufRef(data);
+            var reader = new I2PBufferCursor(data);
             var result = new PeerTestData
             {
-                MsgNum = reader.Read8(),
-                Code = reader.Read8(),
-                Flags = reader.Read8()
+                MsgNum = reader.ReadByte(),
+                Code = reader.ReadByte(),
+                Flags = reader.ReadByte()
             };
 
             // Messages 2, 3, 4 contain a 32-byte hash; message 1 does not
             if (result.MsgNum >= 2)
             {
-                result.Hash = reader.Read(32);
+                result.Hash = reader.ReadBytes(32);
             }
 
-            result.Version = reader.Read8();
-            result.Nonce = reader.ReadFlip32();
-            result.Timestamp = reader.ReadFlip32();
+            result.Version = reader.ReadByte();
+            result.Nonce = reader.ReadUInt32BigEndian();
+            result.Timestamp = reader.ReadUInt32BigEndian();
 
-            var asz = reader.Read8();
+            var asz = reader.ReadByte();
             if (asz > 0)
-                result.Address = reader.Read(asz);
+                result.Address = reader.ReadBytes(asz);
 
             // Java signs everything before the signature
             result.RawSignedData = new byte[reader.BaseArrayOffset];
@@ -536,7 +536,7 @@ namespace I2PCore.TransportLayer.SSU2
 
             var remaining = data.Length - reader.BaseArrayOffset;
             if (remaining > 0)
-                result.Signature = reader.Read(remaining);
+                result.Signature = reader.ReadBytes(remaining);
 
             return result;
         }
@@ -571,7 +571,7 @@ namespace I2PCore.TransportLayer.SSU2
                     // Charlie receives Msg 2 from Bob (relay)
                     if ( fromSession?.RemoteRouterIdentity?.SigningPublicKey != null )
                     {
-                        var aliceHash = new I2PIdentHash( new BufRef( pt.Hash ) );
+                        var aliceHash = new I2PIdentHash( new I2PBufferCursor( pt.Hash ) );
                         if ( !Verify( PEER_TEST_PROLOGUE, myHash, aliceHash, pt.RawSignedData, pt.Signature, fromSession.RemoteRouterIdentity.SigningPublicKey ) )
                         {
                             Logging.LogWarning( $"SSU2Relay: PeerTest msg 2 signature verification failed from Bob {fromSession.DebugId}" );
@@ -600,7 +600,7 @@ namespace I2PCore.TransportLayer.SSU2
                     // Alice receives Msg 4 from Bob (relay)
                     if ( fromSession?.RemoteRouterIdentity?.SigningPublicKey != null )
                     {
-                        var charlieHash = new I2PIdentHash( new BufRef( pt.Hash ) );
+                        var charlieHash = new I2PIdentHash( new I2PBufferCursor( pt.Hash ) );
                         if ( !Verify( PEER_TEST_PROLOGUE, myHash, charlieHash, pt.RawSignedData, pt.Signature, fromSession.RemoteRouterIdentity.SigningPublicKey ) )
                         {
                             Logging.LogWarning( $"SSU2Relay: PeerTest msg 4 signature verification failed from Bob {fromSession.DebugId}" );
@@ -611,7 +611,7 @@ namespace I2PCore.TransportLayer.SSU2
                     break;
                 case 5:
                     // Alice receives Msg 5 from Charlie (direct)
-                    var charlieHash5 = new I2PIdentHash( new BufRef( pt.Hash ) );
+                    var charlieHash5 = new I2PIdentHash( new I2PBufferCursor( pt.Hash ) );
                     var charlieRI5 = NetDb.Inst[charlieHash5];
                     if ( charlieRI5?.Identity?.SigningPublicKey != null )
                     {
@@ -625,7 +625,7 @@ namespace I2PCore.TransportLayer.SSU2
                     break;
                 case 6:
                     // Charlie receives Msg 6 from Alice (direct)
-                    var aliceHash6 = new I2PIdentHash( new BufRef( pt.Hash ) );
+                    var aliceHash6 = new I2PIdentHash( new I2PBufferCursor( pt.Hash ) );
                     var aliceRI6 = NetDb.Inst[aliceHash6];
                     if ( aliceRI6?.Identity?.SigningPublicKey != null )
                     {
@@ -748,7 +748,7 @@ namespace I2PCore.TransportLayer.SSU2
             // We are Charlie. 
             // 1. Send Msg 3 to Bob
             var bobHash = fromBob.RemoteRouterIdentity.IdentHash;
-            var aliceHash = new I2PIdentHash( new BufRef( pt.Hash ) );
+            var aliceHash = new I2PIdentHash( new I2PBufferCursor( pt.Hash ) );
             var timestamp = (uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
             // signs (prologue + Bob + Alice + data)
@@ -884,7 +884,7 @@ namespace I2PCore.TransportLayer.SSU2
             ProcessPeerTestResult( pt.Nonce, PeerTestAccept, pt.Address );
 
             // Send Msg 6 back to Charlie (direct)
-            var charlieHash = new I2PIdentHash( new BufRef( pt.Hash ) );
+            var charlieHash = new I2PIdentHash( new I2PBufferCursor( pt.Hash ) );
             var charlieRI = NetDb.Inst[charlieHash];
             if ( charlieRI == null ) return;
 
@@ -930,7 +930,7 @@ namespace I2PCore.TransportLayer.SSU2
             if ( !PendingPeerTests.TryGetValue( pt.Nonce, out var ptSession ) ) return;
 
             // Send Msg 7 to Bob (relay)
-            var aliceHash = new I2PIdentHash( new BufRef( pt.Hash ) );
+            var aliceHash = new I2PIdentHash( new I2PBufferCursor( pt.Hash ) );
             var bobHash = ptSession.CharlieSession.RemoteRouterIdentity.IdentHash;
             var timestamp = (uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
@@ -1035,8 +1035,8 @@ namespace I2PCore.TransportLayer.SSU2
 
             // Send RelayTag block (type 16) back with the assigned tag
             var data = new byte[4];
-            var writer = new BufRefLen(data);
-            writer.WriteFlip32(tagValue);
+            var writer = new I2PBufferCursor(data);
+            writer.WriteUInt32BigEndian(tagValue);
 
             SendBlockToSession(fromSession, SSU2BlockType.RelayTag, data);
 
@@ -1055,8 +1055,8 @@ namespace I2PCore.TransportLayer.SSU2
                 return;
             }
 
-            var reader = new BufRef(blockData);
-            var tagValue = reader.ReadFlip32();
+            var reader = new I2PBufferCursor(blockData);
+            var tagValue = reader.ReadUInt32BigEndian();
 
             fromSession.AssignedRelayTag = tagValue;
 
@@ -1114,12 +1114,12 @@ namespace I2PCore.TransportLayer.SSU2
 
             // Build HolePunch payload: DateTime block + Address block
             var timestamp = (uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            var payloadWriter = new BufRefLen(new byte[64]);
+            var payloadWriter = new I2PBufferCursor(new byte[64]);
 
             // DateTime block
-            payloadWriter.Write8((byte)SSU2BlockType.DateTime);
-            payloadWriter.WriteFlip16(4);
-            payloadWriter.WriteFlip32(timestamp);
+            payloadWriter.WriteByte((byte)SSU2BlockType.DateTime);
+            payloadWriter.WriteUInt16BigEndian(4);
+            payloadWriter.WriteUInt32BigEndian(timestamp);
 
             var payloadLen = payloadWriter.BaseArrayOffset;
             var payload = new byte[payloadLen];
@@ -1203,13 +1203,13 @@ namespace I2PCore.TransportLayer.SSU2
             // Alice signs RelayRequest (prologue + Bob + Charlie + data)
             // flags(1) + nonce(4) + relayTag(4) + timestamp(4) + version(1) + asz(1) + addr(0)
             var signedPart = new byte[1 + 4 + 4 + 4 + 1 + 1];
-            var writer = new BufRefLen( signedPart );
-            writer.Write8( 0 ); // flags
-            writer.WriteFlip32( nonce );
-            writer.WriteFlip32( relayTag );
-            writer.WriteFlip32( timestamp );
-            writer.Write8( SSU2Constants.VERSION );
-            writer.Write8( 0 ); // asz
+            var writer = new I2PBufferCursor( signedPart );
+            writer.WriteByte( 0 ); // flags
+            writer.WriteUInt32BigEndian( nonce );
+            writer.WriteUInt32BigEndian( relayTag );
+            writer.WriteUInt32BigEndian( timestamp );
+            writer.WriteByte( SSU2Constants.VERSION );
+            writer.WriteByte( 0 ); // asz
 
             var signature = Sign( RELAY_REQUEST_PROLOGUE, bobHash, charlieHash, signedPart, SessionLayer.RouterContext.Inst.PrivateSigningKey );
 
@@ -1247,14 +1247,14 @@ namespace I2PCore.TransportLayer.SSU2
             // Alice signs PeerTest msg 1 (prologue + Bob + null + data)
             // msgNum(1) + code(1) + flags(1) + hash(0) + version(1) + nonce(4) + timestamp(4) + asz(1) + addr(0)
             var signedPart = new byte[1 + 1 + 1 + 1 + 4 + 4 + 1];
-            var writer = new BufRefLen( signedPart );
-            writer.Write8( 1 ); // msg 1
-            writer.Write8( PeerTestAccept );
-            writer.Write8( 0 ); // flags
-            writer.Write8( SSU2Constants.VERSION );
-            writer.WriteFlip32( nonce );
-            writer.WriteFlip32( timestamp );
-            writer.Write8( 0 ); // asz
+            var writer = new I2PBufferCursor( signedPart );
+            writer.WriteByte( 1 ); // msg 1
+            writer.WriteByte( PeerTestAccept );
+            writer.WriteByte( 0 ); // flags
+            writer.WriteByte( SSU2Constants.VERSION );
+            writer.WriteUInt32BigEndian( nonce );
+            writer.WriteUInt32BigEndian( timestamp );
+            writer.WriteByte( 0 ); // asz
 
             var signature = Sign( PEER_TEST_PROLOGUE, bobHash, null, signedPart, SessionLayer.RouterContext.Inst.PrivateSigningKey );
 

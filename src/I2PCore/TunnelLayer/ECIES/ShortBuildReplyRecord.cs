@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using I2PCore.Crypto;
 using I2PCore.Data;
 using I2PCore.Utils;
@@ -75,9 +76,9 @@ namespace I2PCore.TunnelLayer.ECIES
             var result = new byte[ClearTextSize];
 
             // Write options mapping at the beginning
-            var stream = new BufRefStream();
+            var stream = new ArrayBufferWriter<byte>();
             Options.Write(stream);
-            var optionsBytes = stream.ToByteArray();
+            var optionsBytes = stream.WrittenSpan.ToArray();
             Array.Copy(optionsBytes, 0, result, 0, Math.Min(optionsBytes.Length, StatusByteOffset));
 
             // Fill padding with random bytes (between options and status)

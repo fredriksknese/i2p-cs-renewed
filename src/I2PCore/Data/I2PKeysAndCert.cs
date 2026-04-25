@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -18,29 +19,29 @@ namespace I2PCore.Data
         /// When the signing key is larger than 128 bytes, it overflows into the end of
         /// the 256-byte encryption key area, reducing the available encryption key space.
         /// </summary>
-        public BufLen PublicKeyBuf
+        public I2PByteBlock PublicKeyBuf
         {
             get
             {
                 var spkLen = Certificate.SigningPublicKeyLength;
                 var overflow = Math.Max( 0, spkLen - 128 );
                 var effectiveLen = Math.Min( Certificate.PublicKeyLength, 256 - overflow );
-                return new BufLen( Data, 0, effectiveLen );
+                return new I2PByteBlock( Data.BaseArray, Data.BaseArrayOffset, effectiveLen );
             }
         }
         public I2PPublicKey PublicKey { 
             get 
             { 
-                return new I2PPublicKey( (BufRefLen)PublicKeyBuf, Certificate ); 
+                return new I2PPublicKey( new I2PBufferCursor( PublicKeyBuf ), Certificate ); 
             } 
             
             set 
             { 
-                ( (BufRefLen)PublicKeyBuf ).Write( value.ToByteArray() ); 
+                PublicKeyBuf.CopyFrom( value.ToByteArray(), 0 ); 
             } 
         }
 
-        public BufLen Padding
+        public I2PByteBlock Padding
         {
             get
             {
@@ -48,7 +49,7 @@ namespace I2PCore.Data
                 // of the 128-byte signing key field. For oversized keys (> 128 bytes),
                 // no padding - the key extends into the encryption key area.
                 var spkLen = Certificate.SigningPublicKeyLength;
-                return new BufLen( Data, 256 + 128 - Math.Min( 128, spkLen ), spkLen );
+                return new I2PByteBlock( Data.BaseArray, Data.BaseArrayOffset + 256 + 128 - Math.Min( 128, spkLen ), spkLen );
             }
         }
 
@@ -59,7 +60,7 @@ namespace I2PCore.Data
         /// key area. The full signing key is a contiguous block starting at
         /// offset (384 - spkLen) with length spkLen.
         /// </summary>
-        public BufLen SigningPublicKeyBuf
+        public I2PByteBlock SigningPublicKeyBuf
         {
             get
             {
@@ -67,7 +68,7 @@ namespace I2PCore.Data
                 // The signing key always ends at byte 383 (offset 256+128-1).
                 // It starts at (384 - spkLen). For keys <= 128, start >= 256 (within signing area).
                 // For keys > 128, start < 256 (overflows into encryption key area).
-                return new BufLen( Data, 384 - spkLen, spkLen );
+                return new I2PByteBlock( Data.BaseArray, Data.BaseArrayOffset + 384 - spkLen, spkLen );
             }
         }
 
@@ -75,13 +76,13 @@ namespace I2PCore.Data
         /// Unused padding bytes in the 128-byte signing key field (offsets 256..255+padding).
         /// Only non-zero when the signing key is shorter than 128 bytes.
         /// </summary>
-        public BufLen SigningPublicKeyPadding
+        public I2PByteBlock SigningPublicKeyPadding
         {
             get
             {
                 var spkLen = Certificate.SigningPublicKeyLength;
                 var paddingLen = spkLen >= 128 ? 0 : 128 - spkLen;
-                return new BufLen( Data, 256, paddingLen );
+                return new I2PByteBlock( Data.BaseArray, Data.BaseArrayOffset + 256, paddingLen );
             }
         }
 
@@ -89,26 +90,25 @@ namespace I2PCore.Data
         {
             get
             {
-                return new I2PSigningPublicKey( (BufRefLen)SigningPublicKeyBuf, Certificate );
+                return new I2PSigningPublicKey( new I2PBufferCursor( SigningPublicKeyBuf ), Certificate );
             }
 
             set
             {
                 SigningPublicKeyPadding.Randomize();
-                var writer = (BufRefLen)SigningPublicKeyBuf;
-                writer.Write( value.ToByteArray() );
+                SigningPublicKeyBuf.CopyFrom( value.ToByteArray(), 0 );
             }
         }
 
-        public BufLen CertificateBuf 
+        public I2PByteBlock CertificateBuf 
         { 
             get 
             { 
-                return new BufLen( 
-                        Data, 
-                        256 + 128, 
-                        new I2PCertificate( 
-                            new BufRef( Data, 256 + 128 ) )
+                return new I2PByteBlock(
+                        Data.BaseArray,
+                        Data.BaseArrayOffset + 256 + 128,
+                        new I2PCertificate(
+                            new I2PBufferCursor( Data.BaseArray, Data.BaseArrayOffset + 256 + 128 ) )
                                 .CertLength ); 
             } 
         }
@@ -117,22 +117,21 @@ namespace I2PCore.Data
         {
             get
             {
-                return new I2PCertificate( new BufRef( Data, 256 + 128 ) );
+                return new I2PCertificate( new I2PBufferCursor( Data.BaseArray, Data.BaseArrayOffset + 256 + 128 ) );
             }
 
             protected set
             {
-                var writer = new BufRef( CertificateBuf ); // We know the length
                 var ar = value.ToByteArray();
-                writer.Write( ar );
+                CertificateBuf.CopyFrom( ar, 0 );
             }
         }
 
-        private readonly BufLen Data;
+        private readonly I2PByteBlock Data;
 
         public I2PKeysAndCert( I2PPublicKey pubkey, I2PSigningPublicKey signkey )
         {
-            Data = new BufLen( new byte[RecordSize( signkey.Certificate )] );
+            Data = new I2PByteBlock( new byte[RecordSize( signkey.Certificate )] );
             Data.Randomize();
 
             Certificate = signkey.Certificate;
@@ -147,15 +146,15 @@ namespace I2PCore.Data
             return 256 + 128 + cert.CertLength;
         }
 
-        public I2PKeysAndCert( BufRef reader )
+        public I2PKeysAndCert( I2PBufferCursor reader )
         {
-            var cert = new I2PCertificate( new BufRef( reader, 256 + 128 ) );
-            Data = reader.ReadBufLen( RecordSize( cert ) );
+            var cert = new I2PCertificate( reader.CreateSubCursor( 256 + 128 ) );
+            Data = reader.ReadBlock( RecordSize( cert ) );
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
-            dest.Write( (BufRefLen)Data );
+            dest.WriteBlock( Data );
         }
 
         private I2PIdentHash CachedIdentHash;

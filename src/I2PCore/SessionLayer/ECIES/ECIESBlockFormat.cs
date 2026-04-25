@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using I2PCore.Data;
 using I2PCore.Utils;
@@ -48,18 +49,18 @@ namespace I2PCore.SessionLayer.ECIES
                 throw new ArgumentNullException(nameof(payload));
 
             var blocks = new List<Block>();
-            var reader = new BufRef(payload);
+            var reader = new I2PBufferCursor(payload);
 
-            while (reader.BaseArrayOffset < payload.Length)
+            while (reader.Remaining > 0)
             {
                 // Read block type
-                var blockType = (BlockType)reader.Read8();
+                var blockType = (BlockType)reader.ReadByte();
 
                 // Read block length (2 bytes)
-                var blockLength = reader.ReadFlip16();
+                var blockLength = reader.ReadUInt16BigEndian();
 
                 // Read block data
-                var blockData = reader.Read(blockLength);
+                var blockData = reader.ReadBytes(blockLength);
 
                 var block = ParseBlock(blockType, blockData);
                 blocks.Add(block);
@@ -100,8 +101,8 @@ namespace I2PCore.SessionLayer.ECIES
             if (data.Length != 4)
                 throw new ArgumentException("DateTime block must be 4 bytes", nameof(data));
 
-            var reader = new BufRef(data);
-            var timestamp = reader.ReadFlip32();
+            var reader = new I2PBufferCursor(data);
+            var timestamp = reader.ReadUInt32BigEndian();
 
             return new DateTimeBlock
             {
@@ -118,8 +119,8 @@ namespace I2PCore.SessionLayer.ECIES
             if (data.Length < 2)
                 throw new ArgumentException("SessionID block must be at least 2 bytes", nameof(data));
 
-            var reader = new BufRef(data);
-            return new SessionIDBlock { SessionID = reader.ReadFlip16() };
+            var reader = new I2PBufferCursor(data);
+            return new SessionIDBlock { SessionID = reader.ReadUInt16BigEndian() };
         }
 
         /// <summary>
@@ -158,14 +159,14 @@ namespace I2PCore.SessionLayer.ECIES
             if (data.Length < 3)
                 throw new ArgumentException("NextKey block must be at least 3 bytes", nameof(data));
 
-            var reader = new BufRef(data);
-            var flag = reader.Read8();
-            var keyID = reader.ReadFlip16();
+            var reader = new I2PBufferCursor(data);
+            var flag = reader.ReadByte();
+            var keyID = reader.ReadUInt16BigEndian();
 
             byte[] publicKey = null;
             if ((flag & NEXT_KEY_KEY_PRESENT_FLAG) != 0 && data.Length >= 35)
             {
-                publicKey = reader.Read(32);
+                publicKey = reader.ReadBytes(32);
             }
 
             return new NextKeyBlock
@@ -188,13 +189,13 @@ namespace I2PCore.SessionLayer.ECIES
             var block = new AckBlock();
             if (data.Length < 1) return block;
 
-            var reader = new BufRef(data);
-            var numAcks = reader.Read8();
+            var reader = new I2PBufferCursor(data);
+            var numAcks = reader.ReadByte();
 
-            for (int i = 0; i < numAcks && reader.BaseArrayOffset + 4 <= data.Length; i++)
+            for (int i = 0; i < numAcks && reader.Remaining >= 4; i++)
             {
-                var tagsetID = reader.ReadFlip16();
-                var ackThrough = reader.ReadFlip16();
+                var tagsetID = reader.ReadUInt16BigEndian();
+                var ackThrough = reader.ReadUInt16BigEndian();
                 block.Acks.Add((tagsetID, ackThrough));
             }
 
@@ -214,32 +215,32 @@ namespace I2PCore.SessionLayer.ECIES
             if (blocks == null)
                 throw new ArgumentNullException(nameof(blocks));
 
-            var stream = new BufRefStream();
+            var stream = new ArrayBufferWriter<byte>();
 
             foreach (var block in blocks)
             {
                 WriteBlock(stream, block);
             }
 
-            return stream.ToByteArray();
+            return stream.WrittenSpan.ToArray();
         }
 
         /// <summary>
         /// Write a single block
         /// </summary>
-        private static void WriteBlock(BufRefStream stream, Block block)
+        private static void WriteBlock(ArrayBufferWriter<byte> stream, Block block)
         {
             // Write block type
-            stream.Write((byte)block.Type);
+            stream.WriteByte((byte)block.Type);
 
             // Get block data
             var blockData = block.ToByteArray();
 
             // Write block length
-            stream.Write(BufUtils.Flip16Bl((ushort)blockData.Length));
+            stream.WriteUInt16BigEndian((ushort)blockData.Length);
 
             // Write block data
-            stream.Write(blockData);
+            stream.WriteBytes(blockData);
         }
     }
 
@@ -263,9 +264,9 @@ namespace I2PCore.SessionLayer.ECIES
 
         public override byte[] ToByteArray()
         {
-            var stream = new BufRefStream();
-            stream.Write(BufUtils.Flip32Bl(Timestamp));
-            return stream.ToByteArray();
+            var stream = new ArrayBufferWriter<byte>();
+            stream.WriteUInt32BigEndian(Timestamp);
+            return stream.WrittenSpan.ToArray();
         }
     }
 
@@ -279,9 +280,9 @@ namespace I2PCore.SessionLayer.ECIES
 
         public override byte[] ToByteArray()
         {
-            var stream = new BufRefStream();
-            stream.Write(BufUtils.Flip16Bl(SessionID));
-            return stream.ToByteArray();
+            var stream = new ArrayBufferWriter<byte>();
+            stream.WriteUInt16BigEndian(SessionID);
+            return stream.WrittenSpan.ToArray();
         }
     }
 
@@ -337,12 +338,12 @@ namespace I2PCore.SessionLayer.ECIES
 
         public override byte[] ToByteArray()
         {
-            var stream = new BufRefStream();
-            stream.Write(Flag);
-            stream.Write(BufUtils.Flip16Bl(KeyID));
+            var stream = new ArrayBufferWriter<byte>();
+            stream.WriteByte(Flag);
+            stream.WriteUInt16BigEndian(KeyID);
             if (PublicKey != null)
-                stream.Write(PublicKey);
-            return stream.ToByteArray();
+                stream.WriteBytes(PublicKey);
+            return stream.WrittenSpan.ToArray();
         }
     }
 
@@ -357,14 +358,14 @@ namespace I2PCore.SessionLayer.ECIES
 
         public override byte[] ToByteArray()
         {
-            var stream = new BufRefStream();
-            stream.Write((byte)Acks.Count);
+            var stream = new ArrayBufferWriter<byte>();
+            stream.WriteByte((byte)Acks.Count);
             foreach (var (tagSetID, ackThrough) in Acks)
             {
-                stream.Write(BufUtils.Flip16Bl(tagSetID));
-                stream.Write(BufUtils.Flip16Bl(ackThrough));
+                stream.WriteUInt16BigEndian(tagSetID);
+                stream.WriteUInt16BigEndian(ackThrough);
             }
-            return stream.ToByteArray();
+            return stream.WrittenSpan.ToArray();
         }
     }
 

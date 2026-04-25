@@ -113,34 +113,34 @@ namespace I2PTests
             var smalldataZero = new byte[200];
             var bigdataZero = new byte[2 * 1024 * 1024];
 
-            var b1 = LzUtils.BcgZipCompressNew( new BufLen( smalldata ) );
+            var b1 = LzUtils.BcgZipCompressNew( new I2PByteBlock( smalldata ) );
             var b2 = LzUtils.BcgZipDecompressNew( b1 );
-            Assert.IsTrue( b2 == new BufLen( smalldata ) );
+            Assert.IsTrue( b2 == new I2PByteBlock( smalldata ) );
 
-            b1 = LzUtils.BcgZipCompressNew( new BufLen( bigdata ) );
+            b1 = LzUtils.BcgZipCompressNew( new I2PByteBlock( bigdata ) );
             b2 = LzUtils.BcgZipDecompressNew( b1 );
-            Assert.IsTrue( b2 == new BufLen( bigdata ) );
+            Assert.IsTrue( b2 == new I2PByteBlock( bigdata ) );
 
-            b1 = LzUtils.BcgZipCompressNew( new BufLen( smalldataZero ) );
+            b1 = LzUtils.BcgZipCompressNew( new I2PByteBlock( smalldataZero ) );
             b2 = LzUtils.BcgZipDecompressNew( b1 );
-            Assert.IsTrue( b2 == new BufLen( smalldataZero ) );
+            Assert.IsTrue( b2 == new I2PByteBlock( smalldataZero ) );
 
-            b1 = LzUtils.BcgZipCompressNew( new BufLen( bigdataZero ) );
+            b1 = LzUtils.BcgZipCompressNew( new I2PByteBlock( bigdataZero ) );
             b2 = LzUtils.BcgZipDecompressNew( b1 );
-            Assert.IsTrue( b2 == new BufLen( bigdataZero ) );
+            Assert.IsTrue( b2 == new I2PByteBlock( bigdataZero ) );
 
             var ba1 = LzUtils.BcgZipCompress( bigdata );
-            b2 = LzUtils.BcgZipDecompressNew( new BufLen( ba1 ) );
-            Assert.IsTrue( b2 == new BufLen( bigdata ) );
+            b2 = LzUtils.BcgZipDecompressNew( new I2PByteBlock( ba1 ) );
+            Assert.IsTrue( b2 == new I2PByteBlock( bigdata ) );
 
-            b1 = LzUtils.BcgZipCompressNew( new BufLen( bigdataZero ) );
-            var ba2 = LzUtils.BcgZipDecompress( b1 );
-            Assert.IsTrue( new BufLen( ba2 ) == new BufLen( bigdataZero ) );
+            b1 = LzUtils.BcgZipCompressNew( new I2PByteBlock( bigdataZero ) );
+            var ba2 = LzUtils.BcgZipDecompressNew( b1 );
+            Assert.IsTrue( ba2 == new I2PByteBlock( bigdataZero ) );
 
             for ( int i = bigdata.Length / 10; i < bigdata.Length - bigdata.Length / 10; ++i ) bigdata[i] = 42;
-            b1 = LzUtils.BcgZipCompressNew( new BufLen( bigdata ) );
+            b1 = LzUtils.BcgZipCompressNew( new I2PByteBlock( bigdata ) );
             b2 = LzUtils.BcgZipDecompressNew( b1 );
-            Assert.IsTrue( b2 == new BufLen( bigdata ) );
+            Assert.IsTrue( b2 == new I2PByteBlock( bigdata ) );
         }
 
         [Test]
@@ -429,22 +429,22 @@ namespace I2PTests
                 | 00           | 0          | 0x514E28B7 |            
             */
 
-            Assert.IsTrue( MurMurHash3.Hash( new BufRefLen( new byte[0] ), 0 ) == 0 );
-            Assert.IsTrue( MurMurHash3.Hash( new BufRefLen( new byte[0] ), 1 ) == 0x514E28B7 );
-            Assert.IsTrue( MurMurHash3.Hash( new BufRefLen( new byte[0] ), 0xffffffff ) == 0x81F16F39 );
+            Assert.IsTrue( MurMurHash3.Hash( new I2PBufferCursor( new byte[0] ), 0 ) == 0 );
+            Assert.IsTrue( MurMurHash3.Hash( new I2PBufferCursor( new byte[0] ), 1 ) == 0x514E28B7 );
+            Assert.IsTrue( MurMurHash3.Hash( new I2PBufferCursor( new byte[0] ), 0xffffffff ) == 0x81F16F39 );
 
-            Assert.IsTrue( MurMurHash3.Hash( new BufRefLen( new byte[] { 0xff, 0xff, 0xff, 0xff } ), 0 ) == 0x76293B50 );
-            Assert.IsTrue( MurMurHash3.Hash( new BufRefLen( new byte[] { 0x21, 0x43, 0x65, 0x87 } ), 0 ) == 0xF55B516B );
+            Assert.IsTrue( MurMurHash3.Hash( new I2PBufferCursor( new byte[] { 0xff, 0xff, 0xff, 0xff } ), 0 ) == 0x76293B50 );
+            Assert.IsTrue( MurMurHash3.Hash( new I2PBufferCursor( new byte[] { 0x21, 0x43, 0x65, 0x87 } ), 0 ) == 0xF55B516B );
 
-            Assert.IsTrue( MurMurHash3.Hash( new BufRefLen( new byte[] { 0x21, 0x43, 0x65, 0x87 } ), 0x5082EDEE ) == 0x2362F9DE );
-            Assert.IsTrue( MurMurHash3.Hash( new BufRefLen( new byte[] { 0x21, 0x43, 0x65 } ), 0 ) == 0x7E4A8634 );
-            Assert.IsTrue( MurMurHash3.Hash( new BufRefLen( new byte[] { 0x21, 0x43 } ), 0 ) == 0xA0F7B07A );
-            Assert.IsTrue( MurMurHash3.Hash( new BufRefLen( new byte[] { 0x21 } ), 0 ) == 0x72661CF4 );
+            Assert.IsTrue( MurMurHash3.Hash( new I2PBufferCursor( new byte[] { 0x21, 0x43, 0x65, 0x87 } ), 0x5082EDEE ) == 0x2362F9DE );
+            Assert.IsTrue( MurMurHash3.Hash( new I2PBufferCursor( new byte[] { 0x21, 0x43, 0x65 } ), 0 ) == 0x7E4A8634 );
+            Assert.IsTrue( MurMurHash3.Hash( new I2PBufferCursor( new byte[] { 0x21, 0x43 } ), 0 ) == 0xA0F7B07A );
+            Assert.IsTrue( MurMurHash3.Hash( new I2PBufferCursor( new byte[] { 0x21 } ), 0 ) == 0x72661CF4 );
 
-            Assert.IsTrue( MurMurHash3.Hash( new BufRefLen( new byte[] { 0, 0, 0, 0 } ), 0 ) == 0x2362F9DE );
-            Assert.IsTrue( MurMurHash3.Hash( new BufRefLen( new byte[] { 0, 0, 0 } ), 0 ) == 0x85F0B427 );
-            Assert.IsTrue( MurMurHash3.Hash( new BufRefLen( new byte[] { 0, 0 } ), 0 ) == 0x30F4C306 );
-            Assert.IsTrue( MurMurHash3.Hash( new BufRefLen( new byte[] { 0 } ), 0 ) == 0x514E28B7 );
+            Assert.IsTrue( MurMurHash3.Hash( new I2PBufferCursor( new byte[] { 0, 0, 0, 0 } ), 0 ) == 0x2362F9DE );
+            Assert.IsTrue( MurMurHash3.Hash( new I2PBufferCursor( new byte[] { 0, 0, 0 } ), 0 ) == 0x85F0B427 );
+            Assert.IsTrue( MurMurHash3.Hash( new I2PBufferCursor( new byte[] { 0, 0 } ), 0 ) == 0x30F4C306 );
+            Assert.IsTrue( MurMurHash3.Hash( new I2PBufferCursor( new byte[] { 0 } ), 0 ) == 0x514E28B7 );
         }
     }
 }

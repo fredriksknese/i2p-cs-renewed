@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -9,6 +10,7 @@ using Org.BouncyCastle.Crypto;
 using Org.BouncyCastle.Crypto.Engines;
 using Org.BouncyCastle.Crypto.Modes;
 using Org.BouncyCastle.Crypto.Parameters;
+using System.Buffers.Binary;
 using System.Net;
 using System.IO;
 
@@ -18,108 +20,70 @@ namespace I2PCore.Utils
     {
         #region Endian conversion
         public static ulong Flip64( ulong src )
-        {
-            ulong result;
-            result = src & 0xff;
-            result = ( result << 8 ) | ( ( src & 0xff00 ) >> 8 );
-            result = ( result << 8 ) | ( ( src & 0xff0000 ) >> 16 );
-            result = ( result << 8 ) | ( ( src & 0xff000000 ) >> 24 );
-            result = ( result << 8 ) | ( ( src & 0xff00000000 ) >> 32 );
-            result = ( result << 8 ) | ( ( src & 0xff0000000000 ) >> 40 );
-            result = ( result << 8 ) | ( ( src & 0xff000000000000 ) >> 48 );
-            result = ( result << 8 ) | ( src >> 56 );
-            return result;
-        }
+            => BinaryPrimitives.ReverseEndianness( src );
 
         public static uint Flip32( uint src )
-        {
-            uint result;
-            result = src & 0xff;
-            result = ( result << 8 ) | ( ( src & 0xff00 ) >> 8 );
-            result = ( result << 8 ) | ( ( src & 0xff0000 ) >> 16 );
-            result = ( result << 8 ) | ( src >> 24 );
-            return result;
-        }
+            => BinaryPrimitives.ReverseEndianness( src );
 
         public static uint Flip32( byte[] buf, int offset )
-        {
-            return Flip32( BitConverter.ToUInt32( buf, offset ) );
-        }
+            => BinaryPrimitives.ReverseEndianness( BitConverter.ToUInt32( buf, offset ) );
 
         public static ushort Flip16( ushort src )
-        {
-            return (ushort)( ( ( src & 0xff ) << 8 ) | ( src >> 8 ) );
-        }
+            => BinaryPrimitives.ReverseEndianness( src );
 
         public static ushort Flip16( byte[] buf, int offset )
-        {
-            return Flip16( BitConverter.ToUInt16( buf, offset ) );
-        }
+            => BinaryPrimitives.ReverseEndianness( BitConverter.ToUInt16( buf, offset ) );
 
         public static byte[] Flip64B( ulong src )
         {
-            return BitConverter.GetBytes( Flip64( src ) );
+            var buf = new byte[8];
+            BinaryPrimitives.WriteUInt64BigEndian( buf, src );
+            return buf;
         }
 
         public static byte[] Flip32B( uint src )
         {
-            return BitConverter.GetBytes( Flip32( src ) );
+            var buf = new byte[4];
+            BinaryPrimitives.WriteUInt32BigEndian( buf, src );
+            return buf;
         }
 
-        public static BufLen Flip32Bl( uint src )
-        {
-            return new BufLen( Flip32B( src ) );
-        }
+        public static I2PByteBlock Flip32Bl( uint src )
+            => new( Flip32B( src ) );
 
         public static byte[] Flip16B( ushort src )
         {
-            return BitConverter.GetBytes( Flip16( src ) );
+            var buf = new byte[2];
+            BinaryPrimitives.WriteUInt16BigEndian( buf, src );
+            return buf;
         }
 
-        public static BufLen Flip16Bl( ushort src )
-        {
-            return new BufLen( Flip16B( src ) );
-        }
+        public static I2PByteBlock Flip16Bl( ushort src )
+            => new( Flip16B( src ) );
 
         public static byte[] To64B( ulong src )
-        {
-            return BitConverter.GetBytes( src );
-        }
+            => BitConverter.GetBytes( src );
 
-        public static BufLen To64Bl( ulong src )
-        {
-            return new BufLen( To64B( src ) );
-        }
+        public static I2PByteBlock To64Bl( ulong src )
+            => new( To64B( src ) );
 
         public static byte[] To32B( uint src )
-        {
-            return BitConverter.GetBytes( src );
-        }
+            => BitConverter.GetBytes( src );
 
-        public static BufLen To32Bl( uint src )
-        {
-            return new BufLen( To32B( src ) );
-        }
+        public static I2PByteBlock To32Bl( uint src )
+            => new( To32B( src ) );
 
         public static byte[] To16B( ushort src )
-        {
-            return BitConverter.GetBytes( src );
-        }
+            => BitConverter.GetBytes( src );
 
-        public static BufLen To16Bl( ushort src )
-        {
-            return new BufLen( To16B( src ) );
-        }
+        public static I2PByteBlock To16Bl( ushort src )
+            => new( To16B( src ) );
 
         public static byte[] To8B( byte src )
-        {
-            return new byte[] { src };
-        }
+            => new byte[] { src };
 
-        public static BufLen To8Bl( byte src )
-        {
-            return new BufLen( To8B( src ) );
-        }
+        public static I2PByteBlock To8Bl( byte src )
+            => new( To8B( src ) );
         #endregion
 
         #region Data structures to byte array
@@ -142,7 +106,7 @@ namespace I2PCore.Utils
             return result.Take( 32 ).ToArray();
         }
 
-        public static void Dhi2PToSessionAndMac( out BufLen sessionkey, out BufLen mackey, BigInteger bi )
+        public static void Dhi2PToSessionAndMac( out I2PByteBlock sessionkey, out I2PByteBlock mackey, BigInteger bi )
         {
             var result = new List<byte>();
 
@@ -157,15 +121,15 @@ namespace I2PCore.Utils
 
             while ( result.Count < 32 ) result.Add( 0 );
 
-            sessionkey = new BufLen( result.Take( 32 ).ToArray() );
+            sessionkey = new I2PByteBlock( result.Take( 32 ).ToArray() );
 
             if ( result.Count >= 64 )
             {
-                mackey = new BufLen( result.Skip( 32 ).Take( 32 ).ToArray() );
+                mackey = new I2PByteBlock( result.Skip( 32 ).Take( 32 ).ToArray() );
             }
             else
             {
-                mackey = new BufLen( I2PHashSha256.GetHash( result.ToArray() ) );
+                mackey = new I2PByteBlock( I2PHashSha256.GetHash( result.ToArray() ) );
             }
         }
 
@@ -188,16 +152,16 @@ namespace I2PCore.Utils
 
         public static byte[] ToByteArray( this I2PType data )
         {
-            var buf = new BufRefStream();
+            var buf = new ArrayBufferWriter<byte>();
             data.Write( buf );
-            return buf.ToArray();
+            return buf.WrittenSpan.ToArray();
         }
 
         public static byte[] ToByteArray( params I2PType[] fields )
         {
-            var buf = new BufRefStream();
+            var buf = new ArrayBufferWriter<byte>();
             foreach( var one in fields ) one.Write( buf );
-            return buf.ToArray();
+            return buf.WrittenSpan.ToArray();
         }
         #endregion
 
@@ -205,16 +169,12 @@ namespace I2PCore.Utils
 
         public static bool Equal( byte[] b1, byte[] b2 )
         {
-            if ( b1.Length != b2.Length ) return false;
-
-            for ( int i = 0; i < b1.Length; ++i ) if ( b1[i] != b2[i] ) return false;
-            return true;
+            return b1.AsSpan().SequenceEqual( b2 );
         }
 
         public static bool Equal( byte[] b1, int b1Offset, byte[] b2, int b2Offset, int length )
         {
-            for ( int i = 0; i < length; ++i ) if ( b1[i+b1Offset] != b2[i+b2Offset] ) return false;
-            return true;
+            return b1.AsSpan( b1Offset, length ).SequenceEqual( b2.AsSpan( b2Offset, length ) );
         }
 
         public static byte[] Copy( this byte[] b1, int offset, int length )
@@ -235,76 +195,76 @@ namespace I2PCore.Utils
 
         #region Crypto
 
-        public static void AesEcbEncrypt( this BufLen buf, byte[] key )
+        public static void AesEcbEncrypt( this I2PByteBlock buf, byte[] key )
         {
             var cipher = new AesEngine();
             cipher.Init( true, new KeyParameter( key ) );
             cipher.ProcessBlock( buf.BaseArray, buf.BaseArrayOffset, buf.BaseArray, buf.BaseArrayOffset );
         }
 
-        public static void AesEcbEncrypt( this BufLen buf, BufLen key )
+        public static void AesEcbEncrypt( this I2PByteBlock buf, I2PByteBlock key )
         {
             var cipher = new AesEngine();
             cipher.Init( true, new KeyParameter( key.BaseArray, key.BaseArrayOffset, key.Length ) );
             cipher.ProcessBlock( buf.BaseArray, buf.BaseArrayOffset, buf.BaseArray, buf.BaseArrayOffset );
         }
 
-        public static void AesEcbDecrypt( this BufLen buf, byte[] key )
+        public static void AesEcbDecrypt( this I2PByteBlock buf, byte[] key )
         {
             var cipher = new AesEngine();
             cipher.Init( false, new KeyParameter( key ) );
             cipher.ProcessBlock( buf.BaseArray, buf.BaseArrayOffset, buf.BaseArray, buf.BaseArrayOffset );
         }
 
-        public static void AesEcbDecrypt( this BufLen buf, BufLen key )
+        public static void AesEcbDecrypt( this I2PByteBlock buf, I2PByteBlock key )
         {
             var cipher = new AesEngine();
             cipher.Init( false, new KeyParameter( key.BaseArray, key.BaseArrayOffset, key.Length ) );
             cipher.ProcessBlock( buf.BaseArray, buf.BaseArrayOffset, buf.BaseArray, buf.BaseArrayOffset );
         }
 
-        public static void Encrypt( this BufferedBlockCipher cipher, byte[] key, BufLen iv, BufLen data )
+        public static void Encrypt( this BufferedBlockCipher cipher, byte[] key, I2PByteBlock iv, I2PByteBlock data )
         {
             cipher.Init( true, new ParametersWithIV( new KeyParameter( key ), iv.BaseArray, iv.BaseArrayOffset, iv.Length ) );
             cipher.ProcessBytes( data );
         }
 
-        public static void Decrypt( this BufferedBlockCipher cipher, byte[] key, BufLen iv, BufLen data )
+        public static void Decrypt( this BufferedBlockCipher cipher, byte[] key, I2PByteBlock iv, I2PByteBlock data )
         {
             cipher.Init( false, new ParametersWithIV( new KeyParameter( key ), iv.BaseArray, iv.BaseArrayOffset, iv.Length ) );
             cipher.ProcessBytes( data );
         }
 
-        public static void Encrypt( this BufferedBlockCipher cipher, BufLen key, BufLen iv, BufLen data )
+        public static void Encrypt( this BufferedBlockCipher cipher, I2PByteBlock key, I2PByteBlock iv, I2PByteBlock data )
         {
             cipher.Init( true, new ParametersWithIV( new KeyParameter( key.BaseArray, key.BaseArrayOffset, key.Length ), iv.BaseArray, iv.BaseArrayOffset, iv.Length ) );
             cipher.ProcessBytes( data );
         }
 
-        public static void Decrypt( this BufferedBlockCipher cipher, BufLen key, BufLen iv, BufLen data )
+        public static void Decrypt( this BufferedBlockCipher cipher, I2PByteBlock key, I2PByteBlock iv, I2PByteBlock data )
         {
             cipher.Init( false, new ParametersWithIV( new KeyParameter( key.BaseArray, key.BaseArrayOffset, key.Length ), iv.BaseArray, iv.BaseArrayOffset, iv.Length ) );
             cipher.ProcessBytes( data  );
         }
 
-        public static void Encrypt( this CbcBlockCipher cipher, BufLen key, BufLen iv, BufLen data )
+        public static void Encrypt( this CbcBlockCipher cipher, I2PByteBlock key, I2PByteBlock iv, I2PByteBlock data )
         {
             cipher.Init( true, key.ToParametersWithIv( iv ) );
             cipher.ProcessBytes( data );
         }
 
-        public static void Decrypt( this CbcBlockCipher cipher, BufLen key, BufLen iv, BufLen data )
+        public static void Decrypt( this CbcBlockCipher cipher, I2PByteBlock key, I2PByteBlock iv, I2PByteBlock data )
         {
             cipher.Init( false, key.ToParametersWithIv( iv ) );
             cipher.ProcessBytes( data );
         }
 
-        public static void ProcessBytes( this BufferedBlockCipher cipher, BufLen data )
+        public static void ProcessBytes( this BufferedBlockCipher cipher, I2PByteBlock data )
         {
             cipher.ProcessBytes( data.BaseArray, data.BaseArrayOffset, data.Length, data.BaseArray, data.BaseArrayOffset );
         }
 
-        public static void ProcessBytes( this CbcBlockCipher cipher, BufLen data )
+        public static void ProcessBytes( this CbcBlockCipher cipher, I2PByteBlock data )
         {
             if ( Get16BytePadding( data.Length ) != 0 ) throw new ArgumentException( "Cbc needs blocks of 16 bytes!" );
 
@@ -314,12 +274,12 @@ namespace I2PCore.Utils
                 data.BaseArray, data.BaseArrayOffset + i * 16 );
         }
 
-        public static KeyParameter ToKeyParameter( this BufLen key )
+        public static KeyParameter ToKeyParameter( this I2PByteBlock key )
         {
             return new KeyParameter( key.BaseArray, key.BaseArrayOffset, key.Length );
         }
 
-        public static ParametersWithIV ToParametersWithIv( this BufLen key, BufLen iv )
+        public static ParametersWithIV ToParametersWithIv( this I2PByteBlock key, I2PByteBlock iv )
         {
             return new ParametersWithIV( key.ToKeyParameter(), iv.BaseArray, iv.BaseArrayOffset, iv.Length );
         }
@@ -339,12 +299,12 @@ namespace I2PCore.Utils
             _rnd.GetBytes( buf );
         }
 
-        public static void Randomize( this BufRefLen buf )
+        public static void Randomize( this I2PBufferCursor buf )
         {
-            _rnd.GetBytes( buf.BaseArray, buf.BaseArrayOffset, buf.Length );
+            _rnd.GetBytes( buf.BaseArray, buf.BaseArrayOffset, buf.Remaining );
         }
 
-        public static void Randomize( this BufLen buf )
+        public static void Randomize( this I2PByteBlock buf )
         {
             _rnd.GetBytes( buf.BaseArray, buf.BaseArrayOffset, buf.Length );
         }
@@ -502,7 +462,7 @@ namespace I2PCore.Utils
                 var ix = i + RandomInt( list.Count - i );
                 list[i] = list[ix];
                 list[ix] = tmp;
-            } 
+            }
         }
 
         public static IEnumerable<T> Shuffle<T>( this IEnumerable<T> source )
@@ -577,9 +537,9 @@ namespace I2PCore.Utils
             public int Count;
         }
 
-        public static HistogramBin[] Histogram<T>( this IEnumerable<T> list, 
-            Func<T, float> select, 
-            int bins, 
+        public static HistogramBin[] Histogram<T>( this IEnumerable<T> list,
+            Func<T, float> select,
+            int bins,
             float lowerabsdevs = float.MaxValue,
             float upperabsdevs = float.MaxValue )
         {
@@ -630,9 +590,9 @@ namespace I2PCore.Utils
                     val = Math.Min( avg + absdev * upperabsdevs, val );
                 }
 
-                var ix = Math.Max( 0, 
-                    Math.Min( 
-                        result.Length - 1, 
+                var ix = Math.Max( 0,
+                    Math.Min(
+                        result.Length - 1,
                         (int)( ( bins * ( val - min ) ) / ( max - min ) ) ) );
                 ++result[ix].Count;
             }
@@ -743,12 +703,12 @@ namespace I2PCore.Utils
 
         public static string ToBase32String( byte[] input )
         {
-            return ToBase32String( new BufLen( input ) );
+            return ToBase32String( new I2PByteBlock( input ) );
         }
 
-        public static string ToBase32String( BufLen input )
+        public static string ToBase32String( I2PByteBlock input )
         {
-            if ( input == null || input.Length == 0 )
+            if ( input.IsEmpty || input.Length == 0 )
             {
                 return "";
             }
@@ -778,7 +738,6 @@ namespace I2PCore.Utils
             if ( result.Length != charcount )
             {
                 result.Append( ToBase32Char( nextchar ) );
-                //while ( result.Length != charcount ) result.Append( '=' );
             }
 
             return result.ToString();

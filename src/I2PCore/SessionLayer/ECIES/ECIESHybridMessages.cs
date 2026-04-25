@@ -1,3 +1,4 @@
+using System.Buffers;
 using System;
 using I2PCore.Crypto;
 using I2PCore.Crypto.MLKEM;
@@ -65,15 +66,15 @@ namespace I2PCore.SessionLayer.ECIES
             if (data.Length < minSize)
                 throw new ArgumentException($"Hybrid message too short: {data.Length} < {minSize}");
 
-            var reader = new BufRef(data);
+            var reader = new I2PBufferCursor(data);
 
             var msg = new ECIESHybridNewSessionMessage();
-            msg.EphemeralPublicKey = reader.ReadBufLen(32).ToByteArray();
-            msg.EncryptedKEMPublicKey = reader.ReadBufLen(encryptedKemPubSize).ToByteArray();
-            msg.EncryptedStaticKey = reader.ReadBufLen(encryptedStaticSize).ToByteArray();
+            msg.EphemeralPublicKey = reader.ReadBlock(32).ToByteArray();
+            msg.EncryptedKEMPublicKey = reader.ReadBlock(encryptedKemPubSize).ToByteArray();
+            msg.EncryptedStaticKey = reader.ReadBlock(encryptedStaticSize).ToByteArray();
 
             int remaining = data.Length - reader.BaseArrayOffset;
-            msg.EncryptedPayload = reader.ReadBufLen(remaining).ToByteArray();
+            msg.EncryptedPayload = reader.ReadBlock(remaining).ToByteArray();
 
             return msg;
         }
@@ -83,12 +84,12 @@ namespace I2PCore.SessionLayer.ECIES
         /// </summary>
         public byte[] ToByteArray()
         {
-            var stream = new BufRefStream();
-            stream.Write(EphemeralPublicKey);
-            stream.Write(EncryptedKEMPublicKey);
-            stream.Write(EncryptedStaticKey);
-            stream.Write(EncryptedPayload);
-            return stream.ToByteArray();
+            var stream = new ArrayBufferWriter<byte>();
+            stream.WriteBytes(EphemeralPublicKey);
+            stream.WriteBytes(EncryptedKEMPublicKey);
+            stream.WriteBytes(EncryptedStaticKey);
+            stream.WriteBytes(EncryptedPayload);
+            return stream.WrittenSpan.ToArray();
         }
 
         /// <summary>
@@ -222,16 +223,16 @@ namespace I2PCore.SessionLayer.ECIES
             if (data.Length < minSize)
                 throw new ArgumentException($"Hybrid reply message too short: {data.Length} < {minSize}");
 
-            var reader = new BufRef(data);
+            var reader = new I2PBufferCursor(data);
 
             var msg = new ECIESHybridNewSessionReplyMessage();
-            msg.SessionTag = reader.ReadBufLen(8).ToByteArray();
-            msg.EphemeralPublicKey = reader.ReadBufLen(32).ToByteArray();
-            msg.EncryptedKEMCiphertext = reader.ReadBufLen(encryptedKemCtSize).ToByteArray();
-            msg.EmptySectionMac = reader.ReadBufLen(16).ToByteArray();
+            msg.SessionTag = reader.ReadBlock(8).ToByteArray();
+            msg.EphemeralPublicKey = reader.ReadBlock(32).ToByteArray();
+            msg.EncryptedKEMCiphertext = reader.ReadBlock(encryptedKemCtSize).ToByteArray();
+            msg.EmptySectionMac = reader.ReadBlock(16).ToByteArray();
 
             int remaining = data.Length - reader.BaseArrayOffset;
-            msg.EncryptedPayload = reader.ReadBufLen(remaining).ToByteArray();
+            msg.EncryptedPayload = reader.ReadBlock(remaining).ToByteArray();
 
             return msg;
         }
@@ -241,13 +242,13 @@ namespace I2PCore.SessionLayer.ECIES
         /// </summary>
         public byte[] ToByteArray()
         {
-            var stream = new BufRefStream();
-            stream.Write(SessionTag);
-            stream.Write(EphemeralPublicKey);
-            stream.Write(EncryptedKEMCiphertext);
-            stream.Write(EmptySectionMac);
-            stream.Write(EncryptedPayload);
-            return stream.ToByteArray();
+            var stream = new ArrayBufferWriter<byte>();
+            stream.WriteBytes(SessionTag);
+            stream.WriteBytes(EphemeralPublicKey);
+            stream.WriteBytes(EncryptedKEMCiphertext);
+            stream.WriteBytes(EmptySectionMac);
+            stream.WriteBytes(EncryptedPayload);
+            return stream.WrittenSpan.ToArray();
         }
 
         /// <summary>

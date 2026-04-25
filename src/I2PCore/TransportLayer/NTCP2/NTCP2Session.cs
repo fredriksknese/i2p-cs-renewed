@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
@@ -600,7 +601,7 @@ namespace I2PCore.TransportLayer.NTCP2
         {
             // Build options block for SessionRequest
             var payload = new byte[16];
-            var writer = new BufRefLen(payload);
+            var writer = new I2PBufferCursor(payload);
 
             // Per i2pd, timestamp is rounded to seconds with +500ms bias
             var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -614,9 +615,9 @@ namespace I2PCore.TransportLayer.NTCP2
             // 3. AEAD MAC (16 bytes)
 
             var myRouterInfo = Host.GetMyRouterInfo();
-            var riStream = new BufRefStream();
+            var riStream = new ArrayBufferWriter<byte>();
             myRouterInfo.Write(riStream);
-            CachedMyRouterInfoBytes = riStream.ToArray();
+            CachedMyRouterInfoBytes = riStream.WrittenSpan.ToArray();
 
             // Calculate total payload size (without MAC - that's added by Noise)
             // RI Format: type (1) + length (2) + flood flag (1) + RouterInfo data
@@ -629,13 +630,13 @@ namespace I2PCore.TransportLayer.NTCP2
             // Spec says including, and i2pd's m3p2Len = bufLen + 4 + 16.
             CachedM3P2Len = (ushort)(totalPart2PayloadSize + 16); 
 
-            writer.Write8((byte)I2PCore.Data.I2PConstants.I2PNetworkId);  // NetworkId (byte 0)
-            writer.Write8(2);  // Version (byte 1)
-            writer.WriteFlip16((ushort)paddingLen);  // Padding length (bytes 2-3)
-            writer.WriteFlip16(CachedM3P2Len);  // m3p2len (bytes 4-5, 16-bit per i2pd)
-            writer.WriteFlip16(0);  // Reserved (bytes 6-7)
-            writer.WriteFlip32(timestamp);  // tsA (bytes 8-11)
-            writer.WriteFlip32(0);  // Reserved (bytes 12-15)
+            writer.WriteByte((byte)I2PCore.Data.I2PConstants.I2PNetworkId);  // NetworkId (byte 0)
+            writer.WriteByte(2);  // Version (byte 1)
+            writer.WriteUInt16BigEndian((ushort)paddingLen);  // Padding length (bytes 2-3)
+            writer.WriteUInt16BigEndian(CachedM3P2Len);  // m3p2len (bytes 4-5, 16-bit per i2pd)
+            writer.WriteUInt16BigEndian(0);  // Reserved (bytes 6-7)
+            writer.WriteUInt32BigEndian(timestamp);  // tsA (bytes 8-11)
+            writer.WriteUInt32BigEndian(0);  // Reserved (bytes 12-15)
 
             Logging.LogDebug($"{DebugId}: BuildRequestPayload - NetworkId={I2PCore.Data.I2PConstants.I2PNetworkId}, Version=2, PaddingLen={paddingLen}, m3p2len={CachedM3P2Len}, timestamp={timestamp}");
 
@@ -880,10 +881,10 @@ namespace I2PCore.TransportLayer.NTCP2
                     return;
                 }
 
-                var readerOpts = new BufRef(HandshakeDecryptedOptions);
-                readerOpts.Read8(); // networkId
-                readerOpts.Read8(); // version
-                HandshakePaddingLen = readerOpts.ReadFlip16();
+                var readerOpts = new I2PBufferCursor(HandshakeDecryptedOptions);
+                readerOpts.ReadByte(); // networkId
+                readerOpts.ReadByte(); // version
+                HandshakePaddingLen = readerOpts.ReadUInt16BigEndian();
                 HandshakeDecrypted = true;
             }
 
@@ -892,11 +893,11 @@ namespace I2PCore.TransportLayer.NTCP2
             if (ReceiveBufferPos < totalMsgSize) return;
 
             // Parse options from already decrypted payload
-            var reader = new BufRef(HandshakeDecryptedOptions);
-            RemoteNetworkId = reader.Read8();
-            RemoteVersion = reader.Read8();
-            var paddingLen = reader.ReadFlip16();
-            var m3p2len = reader.ReadFlip16();
+            var reader = new I2PBufferCursor(HandshakeDecryptedOptions);
+            RemoteNetworkId = reader.ReadByte();
+            RemoteVersion = reader.ReadByte();
+            var paddingLen = reader.ReadUInt16BigEndian();
+            var m3p2len = reader.ReadUInt16BigEndian();
             RemoteM3P2Len = m3p2len;
 
             // Spec line 876: part 2 max frame length is 65487
@@ -906,8 +907,8 @@ namespace I2PCore.TransportLayer.NTCP2
                 Terminate();
                 return;
             }
-            reader.ReadFlip16(); // Reserved
-            var timestamp = reader.ReadFlip32();
+            reader.ReadUInt16BigEndian(); // Reserved
+            var timestamp = reader.ReadUInt32BigEndian();
 
             // Log options for debugging
             Logging.LogDebug($"{DebugId}: SessionRequest options: networkId={RemoteNetworkId}, version={RemoteVersion}, paddingLen={paddingLen}, m3p2len={m3p2len}, timestamp={timestamp}");
@@ -1089,9 +1090,9 @@ namespace I2PCore.TransportLayer.NTCP2
                     return;
                 }
 
-                var readerOpts = new BufRef(HandshakeDecryptedOptions);
-                readerOpts.ReadFlip16(); // Reserved (bytes 0-1)
-                HandshakePaddingLen = readerOpts.ReadFlip16(); // padLen (bytes 2-3)
+                var readerOpts = new I2PBufferCursor(HandshakeDecryptedOptions);
+                readerOpts.ReadUInt16BigEndian(); // Reserved (bytes 0-1)
+                HandshakePaddingLen = readerOpts.ReadUInt16BigEndian(); // padLen (bytes 2-3)
                 HandshakeDecrypted = true;
             }
 
@@ -1100,9 +1101,9 @@ namespace I2PCore.TransportLayer.NTCP2
             if (ReceiveBufferPos < totalMsgSize) return;
 
             // Parse options (16 bytes)
-            var reader = new BufRef(HandshakeDecryptedOptions);
-            reader.ReadFlip16(); // Reserved (bytes 0-1)
-            var paddingLen = reader.ReadFlip16(); // padLen (bytes 2-3)
+            var reader = new I2PBufferCursor(HandshakeDecryptedOptions);
+            reader.ReadUInt16BigEndian(); // Reserved (bytes 0-1)
+            var paddingLen = reader.ReadUInt16BigEndian(); // padLen (bytes 2-3)
             
             // Spec line 640: max padding is 848 bytes for SessionCreated
             if (paddingLen > 848)
@@ -1112,9 +1113,9 @@ namespace I2PCore.TransportLayer.NTCP2
                 return;
             }
 
-            reader.ReadFlip32(); // Reserved (bytes 4-7)
-            var timestamp = reader.ReadFlip32(); // tsB (bytes 8-11)
-            reader.ReadFlip32(); // Reserved (bytes 12-15)
+            reader.ReadUInt32BigEndian(); // Reserved (bytes 4-7)
+            var timestamp = reader.ReadUInt32BigEndian(); // tsB (bytes 8-11)
+            reader.ReadUInt32BigEndian(); // Reserved (bytes 12-15)
 
             // Spec line 635: Alice must reject bad timestamp.
             if (!NTCP2SecurityValidator.ValidateTimestamp(timestamp))
@@ -1199,21 +1200,21 @@ namespace I2PCore.TransportLayer.NTCP2
             PreSplitHash = NoiseState.GetPreSplitHash();
 
             // Parse payload to get RouterInfo and other blocks
-            var reader = new BufRefLen(payload);
+            var reader = new I2PBufferCursor(payload);
             try
             {
-                while (reader.Length >= 3)
+                while (reader.Remaining >= 3)
                 {
-                    var blockType = reader.Read8();
-                    var blockLen = reader.ReadFlip16();
+                    var blockType = reader.ReadByte();
+                    var blockLen = reader.ReadUInt16BigEndian();
                     
-                    if (reader.Length < blockLen)
+                    if (reader.Remaining < blockLen)
                     {
-                        Logging.LogWarning($"{DebugId}: SessionConfirmed block length {blockLen} exceeds remaining payload {reader.Length}");
+                        Logging.LogWarning($"{DebugId}: SessionConfirmed block length {blockLen} exceeds remaining payload {reader.Remaining}");
                         break;
                     }
 
-                    var blockData = reader.Read(blockLen);
+                    var blockData = reader.ReadBytes(blockLen);
 
                     switch ((NTCP2BlockType)blockType)
                     {
@@ -1221,7 +1222,7 @@ namespace I2PCore.TransportLayer.NTCP2
                             var floodFlag = blockData[0];
                             var riData = new byte[blockLen - 1];
                             Array.Copy(blockData, 1, riData, 0, blockLen - 1);
-                            RemoteRouterInfo = new I2PRouterInfo(new BufRefLen(riData), false);
+                            RemoteRouterInfo = new I2PRouterInfo(new I2PBufferCursor(riData), false);
 
                             // Verify Alice's static key matches (spec line 853)
                             var riStaticKey = RemoteRouterInfo.Addresses
@@ -1254,7 +1255,7 @@ namespace I2PCore.TransportLayer.NTCP2
                             Logging.LogDebug($"{DebugId}: Received Options block in SessionConfirmed");
                             // We don't act on options for now, but we parse them
                             var opts = new NTCP2OptionsBlock();
-                            opts.Parse(new BufRefLen(blockData));
+                            opts.Parse(new I2PBufferCursor(blockData));
                             break;
 
                         case NTCP2BlockType.Padding:
@@ -1367,7 +1368,7 @@ namespace I2PCore.TransportLayer.NTCP2
                 NTCP2DataFrame dataFrame;
                 try
                 {
-                    var reader = new BufRef(frameData);
+                    var reader = new I2PBufferCursor(frameData);
                     dataFrame = NTCP2DataFrame.Parse(
                         reader,
                         NoiseState,
@@ -1414,7 +1415,7 @@ namespace I2PCore.TransportLayer.NTCP2
                             try
                             {
                                 var riBlock = new NTCP2RouterInfoBlock();
-                                riBlock.Parse(new BufRefLen(block.Data));
+                                riBlock.Parse(new I2PBufferCursor(block.Data));
                                 if (riBlock.RouterInfo != null)
                                 {
                                     Logging.LogDebug($"{DebugId}: Received RouterInfo block for {riBlock.RouterInfo.Identity.IdentHash}");
@@ -1438,7 +1439,7 @@ namespace I2PCore.TransportLayer.NTCP2
                             try
                             {
                                 var dtBlock = new NTCP2DateTimeBlock();
-                                dtBlock.Parse(new BufRefLen(block.Data));
+                                dtBlock.Parse(new I2PBufferCursor(block.Data));
                                 var now = (uint)((DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 500) / 1000);
                                 var skew = (long)now - dtBlock.Timestamp;
                                 
@@ -1461,7 +1462,7 @@ namespace I2PCore.TransportLayer.NTCP2
                             try
                             {
                                 var termBlock = new NTCP2TerminationBlock();
-                                termBlock.Parse(new BufRefLen(block.Data));
+                                termBlock.Parse(new I2PBufferCursor(block.Data));
                                 Logging.LogInformation($"{DebugId}: Received termination block (reason={termBlock.Reason}, ValidPackets={termBlock.ValidPacketsReceived})");
                                 Terminate();
                                 return;
@@ -1575,17 +1576,17 @@ namespace I2PCore.TransportLayer.NTCP2
             // Per NTCP2 spec line 611: Bob MUST buffer and then flush the entire contents
             var totalLen = obfuscatedKey.Length + (encryptedPQFrame?.Length ?? 0) + encryptedPayload.Length + paddingLen;
             var totalMsg2 = new byte[totalLen];
-            var writer = new BufRefLen(totalMsg2);
+            var writer = new I2PBufferCursor(totalMsg2);
 
-            writer.Write(obfuscatedKey);
+            writer.WriteBytes(obfuscatedKey);
             if (IsPQSession && encryptedPQFrame != null)
             {
-                writer.Write(encryptedPQFrame);
+                writer.WriteBytes(encryptedPQFrame);
             }
-            writer.Write(encryptedPayload);
+            writer.WriteBytes(encryptedPayload);
             if (paddingLen > 0)
             {
-                writer.Write(padding);
+                writer.WriteBytes(padding);
             }
 
             // Per NTCP2 spec lines 829-835: Bob must MixHash padding after sending Message 2
@@ -1659,9 +1660,9 @@ namespace I2PCore.TransportLayer.NTCP2
             if (routerInfoBytes == null)
             {
                 var myRouterInfo = Host.GetMyRouterInfo();
-                var riStream = new BufRefStream();
+                var riStream = new ArrayBufferWriter<byte>();
                 myRouterInfo.Write(riStream);
-                routerInfoBytes = riStream.ToArray();
+                routerInfoBytes = riStream.WrittenSpan.ToArray();
             }
 
             // Options block (12 bytes fixed part)
@@ -1690,32 +1691,32 @@ namespace I2PCore.TransportLayer.NTCP2
             }
 
             var payload = new byte[availableSize];
-            var writer = new BufRefLen(payload);
+            var writer = new I2PBufferCursor(payload);
 
             // RouterInfo block
-            writer.Write8((byte)NTCP2BlockType.RouterInfo);
-            writer.WriteFlip16((ushort)(1 + routerInfoBytes.Length));  // Length: flood flag + RI
+            writer.WriteByte((byte)NTCP2BlockType.RouterInfo);
+            writer.WriteUInt16BigEndian((ushort)(1 + routerInfoBytes.Length));  // Length: flood flag + RI
             
             byte flags = 0;
             if (RouterContext.Inst.FloodfillEnabled) flags |= 0x01; // bit 0: flood
-            writer.Write8(flags);
-            writer.Write(routerInfoBytes);
+            writer.WriteByte(flags);
+            writer.WriteBytes(routerInfoBytes);
 
             // Options block
-            writer.Write8((byte)NTCP2BlockType.Options);
-            writer.WriteFlip16((ushort)optionsBytes.Length);
-            writer.Write(optionsBytes);
+            writer.WriteByte((byte)NTCP2BlockType.Options);
+            writer.WriteUInt16BigEndian((ushort)optionsBytes.Length);
+            writer.WriteBytes(optionsBytes);
 
             // Padding block if needed
             if (availableSize > requiredSize && availableSize - requiredSize >= 3)
             {
-                writer.Write8((byte)NTCP2BlockType.Padding);
-                writer.WriteFlip16((ushort)paddingSize);
+                writer.WriteByte((byte)NTCP2BlockType.Padding);
+                writer.WriteUInt16BigEndian((ushort)paddingSize);
                 if (paddingSize > 0)
                 {
                     var padding = new byte[paddingSize];
                     new Random().NextBytes(padding);
-                    writer.Write(padding);
+                    writer.WriteBytes(padding);
                 }
             }
 
@@ -1735,13 +1736,13 @@ namespace I2PCore.TransportLayer.NTCP2
             // Row 2: 4 bytes tsB, 4 bytes Reserved (0)
             // Total: 16 bytes. Note: NO echoed networkId, version or m3p2len here.
             var payload = new byte[16];
-            var writer = new BufRefLen(payload);
+            var writer = new I2PBufferCursor(payload);
 
-            writer.WriteFlip16(0);  // Rsvd (0)
-            writer.WriteFlip16((ushort)paddingLen);  // padLen
-            writer.WriteFlip32(0);  // Reserved (0)
-            writer.WriteFlip32((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());  // tsB
-            writer.WriteFlip32(0);  // Reserved (0)
+            writer.WriteUInt16BigEndian(0);  // Rsvd (0)
+            writer.WriteUInt16BigEndian((ushort)paddingLen);  // padLen
+            writer.WriteUInt32BigEndian(0);  // Reserved (0)
+            writer.WriteUInt32BigEndian((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());  // tsB
+            writer.WriteUInt32BigEndian(0);  // Reserved (0)
 
             return payload;
         }

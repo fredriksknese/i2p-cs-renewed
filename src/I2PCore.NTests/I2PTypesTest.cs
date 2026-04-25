@@ -28,7 +28,7 @@ namespace I2PTests
                     keys.PublicKey,
                     new I2PSigningPublicKey( privskey ) );
 
-            var d2 = new I2PDestination( new BufRefLen( dest.ToByteArray() ) );
+            var d2 = new I2PDestination( new I2PBufferCursor( dest.ToByteArray() ) );
 
             Assert.IsTrue( BufUtils.Equal( dest.ToByteArray(), d2.ToByteArray() ) );
         }
@@ -39,7 +39,7 @@ namespace I2PTests
             var destinfo = new I2PDestinationInfo( I2PSigningKey.SigningKeyTypes.EdDsaSha512Ed25519 );
 
             var asba = destinfo.ToByteArray();
-            var dfromba = new I2PDestinationInfo( new BufRefLen( asba ) );
+            var dfromba = new I2PDestinationInfo( new I2PBufferCursor( asba ) );
             Assert.IsTrue( BufUtils.Equal( destinfo.ToByteArray(), dfromba.ToByteArray() ) );
 
             var asstr = destinfo.ToBase64();
@@ -53,7 +53,7 @@ namespace I2PTests
             var destinfo = new I2PDestinationInfo( I2PSigningKey.SigningKeyTypes.DsaSha1 );
 
             var asba = destinfo.ToByteArray();
-            var dfromba = new I2PDestinationInfo( new BufRefLen( asba ) );
+            var dfromba = new I2PDestinationInfo( new I2PBufferCursor( asba ) );
             Assert.IsTrue( BufUtils.Equal( destinfo.ToByteArray(), dfromba.ToByteArray() ) );
 
             var asstr = destinfo.ToBase64();
@@ -67,7 +67,7 @@ namespace I2PTests
             var destinfo = new I2PDestinationInfo( I2PSigningKey.SigningKeyTypes.EcdsaSha384P384 );
 
             var asba = destinfo.ToByteArray();
-            var dfromba = new I2PDestinationInfo( new BufRefLen( asba ) );
+            var dfromba = new I2PDestinationInfo( new I2PBufferCursor( asba ) );
             Assert.IsTrue( BufUtils.Equal( destinfo.ToByteArray(), dfromba.ToByteArray() ) );
 
             var asstr = destinfo.ToBase64();
@@ -119,7 +119,7 @@ namespace I2PTests
 
             Assert.IsTrue( ls.VerifySignature( dest.SigningPublicKey ) );
 
-            var ls2 = new I2PLeaseSet( new BufRefLen( ls.ToByteArray() ) );
+            var ls2 = new I2PLeaseSet( new I2PBufferCursor( ls.ToByteArray() ) );
             Assert.IsTrue( ls2.VerifySignature( dest.SigningPublicKey ) );
 
             var ls3 = new I2PLeaseSet(
@@ -130,7 +130,7 @@ namespace I2PTests
 
             Assert.IsTrue( ls3.VerifySignature( dest.SigningPublicKey ) );
 
-            Assert.IsTrue( new BufLen( ls.ToByteArray() ) == new BufLen( ls3.ToByteArray() ) );
+            Assert.IsTrue( new I2PByteBlock( ls.ToByteArray() ) == new I2PByteBlock( ls3.ToByteArray() ) );
         }
         [Test]
         public void TestI2PLeaseSet2()
@@ -143,7 +143,7 @@ namespace I2PTests
 
             //Assert.IsTrue( ls.VerifySignature( dest.SigningPublicKey ) );
 
-            var ls2 = new I2PLeaseSet2( new BufRefLen( ls.ToByteArray() ) );
+            var ls2 = new I2PLeaseSet2( new I2PBufferCursor( ls.ToByteArray() ) );
             //Assert.IsTrue( ls2.VerifySignature( dest.SigningPublicKey ) );
 
             var ls3 = new I2PLeaseSet2(
@@ -154,7 +154,7 @@ namespace I2PTests
 
             //Assert.IsTrue( ls3.VerifySignature( dest.SigningPublicKey ) );
 
-            Assert.IsTrue( new BufLen( ls.ToByteArray() ) == new BufLen( ls3.ToByteArray() ) );
+            Assert.IsTrue( new I2PByteBlock( ls.ToByteArray() ) == new I2PByteBlock( ls3.ToByteArray() ) );
         }
     }
 }

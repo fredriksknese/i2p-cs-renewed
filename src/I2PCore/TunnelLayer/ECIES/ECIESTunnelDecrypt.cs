@@ -114,16 +114,16 @@ namespace I2PCore.TunnelLayer.ECIES
         /// Strips the 16-byte router hash prefix before passing to Noise N.
         /// Saves chaining key and handshake hash for reply key derivation.
         /// </summary>
-        public ShortBuildRequestRecord DecryptShortRecord(BufLen encryptedRecord)
+        public ShortBuildRequestRecord DecryptShortRecord(I2PByteBlock encryptedRecord)
         {
-            if (encryptedRecord == null || encryptedRecord.Length != ShortBuildRequestRecord.OnWireRecordSize)
+            if (encryptedRecord.IsEmpty || encryptedRecord.Length != ShortBuildRequestRecord.OnWireRecordSize)
                 throw new ArgumentException(
-                    $"Encrypted record must be {ShortBuildRequestRecord.OnWireRecordSize} bytes, got {encryptedRecord?.Length}",
+                    $"Encrypted record must be {ShortBuildRequestRecord.OnWireRecordSize} bytes, got {encryptedRecord.Length}",
                     nameof(encryptedRecord));
 
             // Strip the 16-byte router hash prefix; Noise N message starts at offset 16
             var noiseMessage = new byte[encryptedRecord.Length - ShortBuildRequestRecord.EncryptedOffset];
-            encryptedRecord.Peek(noiseMessage, 0, ShortBuildRequestRecord.EncryptedOffset, noiseMessage.Length);
+            encryptedRecord.Peek(noiseMessage, ShortBuildRequestRecord.EncryptedOffset, 0, noiseMessage.Length);
 
             var noiseN = NoiseN.CreateResponder(_staticPrivateKey, _staticPublicKey);
             var plaintext = noiseN.ProcessMessage(noiseMessage);
@@ -137,13 +137,13 @@ namespace I2PCore.TunnelLayer.ECIES
                 throw new InvalidOperationException(
                     $"Decrypted record is {plaintext.Length} bytes, expected {ShortBuildRequestRecord.ClearTextSize}");
 
-            return new ShortBuildRequestRecord(new BufRef(plaintext));
+            return new ShortBuildRequestRecord(new I2PBufferCursor(plaintext));
         }
 
         /// <summary>
         /// Decrypt a long build request record using Noise N pattern
         /// </summary>
-        public LongBuildRequestRecord DecryptLongRecord(BufLen encryptedRecord)
+        public LongBuildRequestRecord DecryptLongRecord(I2PByteBlock encryptedRecord)
         {
             if (encryptedRecord == null || encryptedRecord.Length != LongBuildRequestRecord.EncryptedRecordSize)
                 throw new ArgumentException(
@@ -152,7 +152,7 @@ namespace I2PCore.TunnelLayer.ECIES
 
             // Strip the 16-byte router hash prefix
             var noiseMessage = new byte[encryptedRecord.Length - 16];
-            encryptedRecord.Peek(noiseMessage, 0, 16, noiseMessage.Length);
+            encryptedRecord.Peek(noiseMessage, 16, 0, noiseMessage.Length);
 
             var noiseN = NoiseN.CreateResponder(_staticPrivateKey, _staticPublicKey);
             var plaintext = noiseN.ProcessMessage(noiseMessage);
@@ -165,7 +165,7 @@ namespace I2PCore.TunnelLayer.ECIES
                 throw new InvalidOperationException(
                     $"Decrypted record is {plaintext.Length} bytes, expected {LongBuildRequestRecord.UnencryptedRecordSize}");
 
-            return new LongBuildRequestRecord(new BufRef(plaintext));
+            return new LongBuildRequestRecord(new I2PBufferCursor(plaintext));
         }
 
         /// <summary>

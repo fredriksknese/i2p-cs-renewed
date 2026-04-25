@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -57,35 +58,35 @@ namespace I2PCore.Data
             return val.ToString().Contains( value );
         }
 
-        public I2PMapping( BufRef buf )
+        public I2PMapping( I2PBufferCursor buf )
         {
-            var bytes = buf.ReadFlip16();
+            var bytes = buf.ReadUInt16BigEndian();
             var endpos = buf.BaseArrayOffset + bytes;
 
             while ( buf.BaseArrayOffset < endpos )
             {
                 var key = new I2PString( buf );
-                if ( buf.BaseArrayOffset < endpos && buf.Peek8( 0 ) == '=' ) buf.Seek( 1 );
+                if ( buf.BaseArrayOffset < endpos && buf.PeekByte( 0 ) == '=' ) buf.Seek( 1 );
                 var value = new I2PString( buf );
-                if ( buf.BaseArrayOffset < endpos && buf.Peek8( 0 ) == ';' ) buf.Seek( 1 );
+                if ( buf.BaseArrayOffset < endpos && buf.PeekByte( 0 ) == ';' ) buf.Seek( 1 );
                 Mappings[key] = value;
             }
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
-            var buf = new BufRefStream();
+            var buf = new ArrayBufferWriter<byte>();
 
             foreach ( var one in Mappings )
             {
                 one.Key.Write( buf );
-                buf.Write( (byte)'=' );
+                buf.WriteByte( (byte)'=' );
                 one.Value.Write( buf );
-                buf.Write( (byte)';' );
+                buf.WriteByte( (byte)';' );
             }
 
-            dest.Write( BufUtils.Flip16B( (ushort)buf.Length ) );
-            dest.Write( buf );
+            dest.WriteUInt16BigEndian( (ushort)buf.WrittenCount );
+            dest.WriteFrom( buf );
         }
 
         public override string ToString()

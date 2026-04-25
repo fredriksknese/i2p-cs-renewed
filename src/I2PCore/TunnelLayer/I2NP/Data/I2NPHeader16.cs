@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -24,15 +25,15 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
         {
             private const int HeaderLength = 16;
 
-            private BufLen Buf;
+            private I2PByteBlock Buf;
 
             public I2NpMessage.MessageTypes MessageType
             {
-                get { return (I2NpMessage.MessageTypes)Buf.Peek8( 0 ); }
-                set { Buf.Poke8( (byte)value, 0 ); }
+                get { return (I2NpMessage.MessageTypes)Buf.ReadByte( 0 ); }
+                set { Buf.WriteByte( (byte)value, 0 ); }
             }
 
-            public BufLen HeaderAndPayload
+            public I2PByteBlock HeaderAndPayload
             {
                 get
                 {
@@ -47,28 +48,28 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
 
             public uint MessageId
             {
-                get { return Buf.PeekFlip32( 1 ); }
-                set { Buf.PokeFlip32( value, 1 ); }
+                get { return Buf.ReadUInt32BigEndian( 1 ); }
+                set { Buf.WriteUInt32BigEndian( value, 1 ); }
             }
 
             public I2PDate Expiration
             {
-                get { return new I2PDate( Buf.PeekFlip64( 5 ) ); }
-                set { Buf.PokeFlip64( (ulong)value, 5 ); }
+                get { return new I2PDate( Buf.ReadUInt64BigEndian( 5 ) ); }
+                set { Buf.WriteUInt64BigEndian( (ulong)value, 5 ); }
             }
 
             public int Length { get { return HeaderLength; } }
 
             public ushort PayloadLength
             {
-                get { return Buf.PeekFlip16( 13 ); }
-                set { Buf.PokeFlip16( value, 13 ); }
+                get { return Buf.ReadUInt16BigEndian( 13 ); }
+                set { Buf.WriteUInt16BigEndian( value, 13 ); }
             }
 
             public byte PayloadChecksum
             {
-                get { return Buf.Peek8( 15 ); }
-                set { Buf.Poke8( value, 15 ); }
+                get { return Buf.ReadByte( 15 ); }
+                set { Buf.WriteByte( value, 15 ); }
             }
 
             private I2NpMessage MessageRefField;
@@ -96,9 +97,9 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
             public I2NpMessage Message { get { return MessageRef; } }
 
             // Created from stream
-            public I2NpHeader16( BufRefLen reader )
+            public I2NpHeader16( I2PBufferCursor reader )
             {
-                Buf = new BufLen( reader );
+                Buf = reader.CurrentBlock;
 
                 reader.Seek( HeaderLength );
 
@@ -133,9 +134,9 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
 #endif
             }
 
-            public void Write( BufRefStream dest )
+            public void Write( IBufferWriter<byte> dest )
             {
-                HeaderAndPayload.WriteTo( dest );
+                dest.WriteBlock( HeaderAndPayload );
             }
 
             public override string ToString()

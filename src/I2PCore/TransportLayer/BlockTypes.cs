@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using I2PCore.Data;
 using I2PCore.Utils;
 using I2PCore.TunnelLayer.I2NP.Data;
@@ -29,24 +30,24 @@ namespace I2PCore.TransportLayer
         public ushort Length { get; set; }
         public byte[] Data { get; set; }
 
-        public static Block Parse(BufRef reader)
+        public static Block Parse(I2PBufferCursor reader)
         {
             var block = new Block
             {
-                Type = (BlockType)reader.Read8(),
-                Length = reader.ReadFlip16()
+                Type = (BlockType)reader.ReadByte(),
+                Length = reader.ReadUInt16BigEndian()
             };
 
-            block.Data = reader.ReadBufLen(block.Length).ToByteArray();
+            block.Data = reader.ReadBlock(block.Length).ToByteArray();
 
             return block;
         }
 
-        public void Write(BufRefLen writer)
+        public void Write(I2PBufferCursor writer)
         {
-            writer.Write8((byte)Type);
-            writer.WriteFlip16(Length);
-            writer.Write(Data);
+            writer.WriteByte((byte)Type);
+            writer.WriteUInt16BigEndian(Length);
+            writer.WriteBytes(Data);
         }
 
         /// <summary>
@@ -58,8 +59,8 @@ namespace I2PCore.TransportLayer
             if (Type != BlockType.DateTime || Data.Length < 4)
                 throw new InvalidOperationException("Not a valid DateTime block");
 
-            var reader = new BufRef(Data);
-            return reader.ReadFlip32();
+            var reader = new I2PBufferCursor(Data);
+            return reader.ReadUInt32BigEndian();
         }
 
         /// <summary>
@@ -71,8 +72,8 @@ namespace I2PCore.TransportLayer
             if (Type != BlockType.RouterInfo || Data.Length < 1)
                 throw new InvalidOperationException("Not a valid RouterInfo block");
 
-            var reader = new BufRef(Data);
-            var flags = reader.Read8(); // flags (currently unused)
+            var reader = new I2PBufferCursor(Data);
+            var flags = reader.ReadByte(); // flags (currently unused)
 
             return new I2PRouterInfo(reader, false);
         }
@@ -86,9 +87,9 @@ namespace I2PCore.TransportLayer
             if (Type != BlockType.I2NP || Data.Length < 3)
                 throw new InvalidOperationException("Not a valid I2NP block");
 
-            var reader = new BufRefLen(Data);
-            var flags = reader.Read8(); // flags
-            var msgId = reader.ReadFlip16(); // message ID (for fragmentation)
+            var reader = new I2PBufferCursor(Data);
+            var flags = reader.ReadByte(); // flags
+            var msgId = reader.ReadUInt16BigEndian(); // message ID (for fragmentation)
 
             // Parse I2NP message header
             return I2NpMessage.ReadHeader16(reader);
@@ -103,13 +104,13 @@ namespace I2PCore.TransportLayer
             if (Type != BlockType.Termination || Data.Length < 1)
                 throw new InvalidOperationException("Not a valid Termination block");
 
-            var reader = new BufRef(Data);
-            var reason = reader.Read8();
+            var reader = new I2PBufferCursor(Data);
+            var reason = reader.ReadByte();
 
             ulong timestamp = 0;
             if (Data.Length >= 9)
             {
-                timestamp = reader.ReadFlip64();
+                timestamp = reader.ReadUInt64BigEndian();
             }
 
             return (reason, timestamp);
@@ -121,8 +122,8 @@ namespace I2PCore.TransportLayer
         public static Block CreateDateTimeBlock(uint timestamp)
         {
             var data = new byte[4];
-            var writer = new BufRefLen(data);
-            writer.WriteFlip32(timestamp);
+            var writer = new I2PBufferCursor(data);
+            writer.WriteUInt32BigEndian(timestamp);
 
             return new Block
             {
@@ -137,9 +138,9 @@ namespace I2PCore.TransportLayer
         /// </summary>
         public static Block CreateRouterInfoBlock(I2PRouterInfo routerInfo, byte flags = 0)
         {
-            var riStream = new BufRefStream();
+            var riStream = new ArrayBufferWriter<byte>();
             routerInfo.Write(riStream);
-            var riBytes = riStream.ToArray();
+            var riBytes = riStream.WrittenSpan.ToArray();
 
             var data = new byte[1 + riBytes.Length];
             data[0] = flags;
@@ -162,10 +163,10 @@ namespace I2PCore.TransportLayer
             var msgBytes = message.CreateHeader16.HeaderAndPayload.ToByteArray();
 
             var data = new byte[3 + msgBytes.Length];
-            var writer = new BufRefLen(data);
-            writer.Write8(flags);
-            writer.WriteFlip16(messageId);
-            writer.Write(msgBytes);
+            var writer = new I2PBufferCursor(data);
+            writer.WriteByte(flags);
+            writer.WriteUInt16BigEndian(messageId);
+            writer.WriteBytes(msgBytes);
 
             return new Block
             {
@@ -200,12 +201,12 @@ namespace I2PCore.TransportLayer
         public static Block CreateTerminationBlock(byte reason, ulong timestamp = 0)
         {
             var data = timestamp > 0 ? new byte[9] : new byte[1];
-            var writer = new BufRefLen(data);
-            writer.Write8(reason);
+            var writer = new I2PBufferCursor(data);
+            writer.WriteByte(reason);
 
             if (timestamp > 0)
             {
-                writer.WriteFlip64(timestamp);
+                writer.WriteUInt64BigEndian(timestamp);
             }
 
             return new Block

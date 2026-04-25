@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Text;
 using I2PCore.Data;
 using I2PCore.Utils;
@@ -154,7 +155,7 @@ namespace I2PCore
             }
         }
 
-        public RouterStatistics( BufRef buf )
+        public RouterStatistics( I2PBufferCursor buf )
         {
             Id = new I2PIdentHash( buf );
             LastSeen = new I2PDate( buf );
@@ -211,12 +212,12 @@ namespace I2PCore
             return mapping;
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
             Id.Write( dest );
             LastSeen.Write( dest );
             Created.Write( dest );
-            dest.Write( BufUtils.RandomBytes( 52 ) ); // Reserved space
+            dest.WriteBytes( BufUtils.RandomBytes( 52 ) ); // Reserved space
 
             var mapping = CreateMapping();
 

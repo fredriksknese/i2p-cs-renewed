@@ -1,4 +1,5 @@
 ﻿using I2PCore.Data;
+using System.Buffers;
 using I2PCore.Utils;
 
 namespace I2P.I2CP.Messages
@@ -12,12 +13,12 @@ namespace I2P.I2CP.Messages
             Config = cfg;
         }
 
-        public CreateSessionMessage( BufRef reader ) : base( ProtocolMessageType.CreateSession )
+        public CreateSessionMessage( I2PBufferCursor reader ) : base( ProtocolMessageType.CreateSession )
         {
             Config = new I2PSessionConfig( reader );
         }
 
-        public override void Write( BufRefStream dest )
+        public override void Write( ArrayBufferWriter<byte> dest )
         {
             Config.Write( dest );
         }

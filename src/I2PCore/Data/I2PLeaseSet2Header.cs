@@ -1,5 +1,6 @@
 
 using System;
+using System.Buffers;
 using I2PCore.Utils;
 
 namespace I2PCore.Data
@@ -36,23 +37,23 @@ namespace I2PCore.Data
             Flags = flags;
             ExpiresSeconds = expiresseconds;
         }
-        public I2PLeaseSet2Header( BufRef reader )
+        public I2PLeaseSet2Header( I2PBufferCursor reader )
         {
             Destination = new I2PDestination( reader );
             Published = new I2PDateShort( reader );
-            ExpiresSeconds = reader.ReadFlip16();
-            Flags = (HeaderFlagTypes)reader.ReadFlip16();
+            ExpiresSeconds = reader.ReadUInt16BigEndian();
+            Flags = (HeaderFlagTypes)reader.ReadUInt16BigEndian();
             if ( Flags.HasFlag( HeaderFlagTypes.OfflineKey ) )
             {
                 OfflineSignature = new I2POfflineSignature( reader, Destination.Certificate );
             }
         }
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
             Destination.Write( dest );
             Published.Write( dest );
-            dest.Write( BufUtils.Flip16B( ExpiresSeconds ) );
-            dest.Write( BufUtils.Flip16B( (ushort)Flags ) );
+            dest.WriteUInt16BigEndian( ExpiresSeconds );
+            dest.WriteUInt16BigEndian( (ushort)Flags );
             if ( Flags.HasFlag( HeaderFlagTypes.OfflineKey ) )
             {
                 OfflineSignature?.Write( dest );

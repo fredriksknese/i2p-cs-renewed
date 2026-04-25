@@ -20,24 +20,24 @@ namespace I2PCore.Utils
 
         public static int[] Codomain = null;
 
-	    public static string Encode( BufLen data )
+	    public static string Encode( I2PByteBlock data )
 	    {
             var result = new StringBuilder();
-            var reader = new BufRefLen( data );
+            var reader = new I2PBufferCursor( data );
 
             byte v1, v2;
 
             for ( int i = 0; i < data.Length / 3; ++i )
             {
-                v1 = reader.Read8();
+                v1 = reader.ReadByte();
                 v2 = (byte)( ( v1 << 4 ) & 0x30 );
                 v1 >>= 2;
                 result.Append( Domain[v1] );
-                v1 = reader.Read8();
+                v1 = reader.ReadByte();
                 v2 |= (byte)( v1 >> 4 );
                 result.Append( Domain[v2] );
                 v1 = (byte)( ( v1 & 0x0f ) << 2 );
-                v2 = reader.Read8();
+                v2 = reader.ReadByte();
                 v1 |= (byte)( v2 >> 6 );
                 result.Append( Domain[v1] );
                 v2 &= 0x3f;
@@ -47,7 +47,7 @@ namespace I2PCore.Utils
             switch ( data.Length % 3 )
             {
                 case 1:
-                    v1 = reader.Read8();
+                    v1 = reader.ReadByte();
                     v2 = (byte)( ( v1 << 4 ) & 0x3f );
                     v1 >>= 2;
                     result.Append( Domain[v1] );
@@ -56,11 +56,11 @@ namespace I2PCore.Utils
                     break;
 
                 case 2:
-                    v1 = reader.Read8();
+                    v1 = reader.ReadByte();
                     v2 = (byte)( ( v1 << 4 ) & 0x3f );
                     v1 >>= 2;
                     result.Append( Domain[v1] );
-                    v1 = reader.Read8();
+                    v1 = reader.ReadByte();
                     v2 |= (byte)( v1 >> 4 );
                     result.Append( Domain[v2] );
                     v1 = (byte)( ( v1 & 0x0f ) << 2 );
@@ -92,7 +92,7 @@ namespace I2PCore.Utils
             byte v1, v2;
             var reader = data.GetEnumerator();
             reader.MoveNext();
-            var writer = new BufRefLen( result );
+            var writer = new I2PBufferCursor( result );
 
             for ( int i = 0; i < data.Length / 4; ++i )
             {
@@ -100,17 +100,17 @@ namespace I2PCore.Utils
                 v2 = Lookup( reader );
                 v1 <<= 2;
                 v1 |= (byte)( v2 >> 4 );
-                writer.Write8( v1 );
-                if ( writer.Length == 0 ) break;
+                writer.WriteByte( v1 );
+                if ( writer.Remaining == 0 ) break;
                 v2 <<= 4;
                 v1 = Lookup( reader );
                 v2 |= (byte)( v1 >> 2 );
-                writer.Write8( v2 );
-                if ( writer.Length == 0 ) break;
+                writer.WriteByte( v2 );
+                if ( writer.Remaining == 0 ) break;
                 v2 = Lookup( reader );
                 v2 |= (byte)( v1 << 6 );
-                writer.Write8( v2 );
-                if ( writer.Length == 0 ) break;
+                writer.WriteByte( v2 );
+                if ( writer.Remaining == 0 ) break;
             }
 
             return result;

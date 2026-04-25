@@ -10,7 +10,7 @@ namespace I2PCore.Data
     {
         public bool Equals( I2PIdentHash x, I2PIdentHash y )
         {
-            return BufUtils.Equals( x.Hash, y.Hash );
+            return x.Hash == y.Hash;
         }
 
         public int GetHashCode( I2PIdentHash x )

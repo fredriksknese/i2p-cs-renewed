@@ -84,7 +84,7 @@ namespace I2PCore.Utils
             var mysubnet = And( Address, Mask );
             var addrsubnet = And( addr, Mask );
 
-            return new BufLen( mysubnet ) == new BufLen( addrsubnet );
+            return new I2PByteBlock( mysubnet ) == new I2PByteBlock( addrsubnet );
         }
     }
 }

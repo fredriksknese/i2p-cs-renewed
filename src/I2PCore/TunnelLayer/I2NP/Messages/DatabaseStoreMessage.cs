@@ -1,4 +1,4 @@
-﻿#define USE_BC_GZIP
+#define USE_BC_GZIP
 
 using System;
 using System.Text;
@@ -12,25 +12,25 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
     {
         public override MessageTypes MessageType { get { return MessageTypes.DatabaseStore; } }
 
-        public enum MessageContent: byte 
-        { 
+        public enum MessageContent: byte
+        {
             RouterInfo          = 0b000,
             LeaseSet            = 0b001,
-            LeaseSet2           = 0b011, 
+            LeaseSet2           = 0b011,
             EncryptedLeaseSet   = 0b101,
             MetaLeaseSet        = 0b111,
         }
 
-        public DatabaseStoreMessage( 
-            I2PRouterInfo info, 
-            uint replytoken, 
-            I2PIdentHash replygw, 
+        public DatabaseStoreMessage(
+            I2PRouterInfo info,
+            uint replytoken,
+            I2PIdentHash replygw,
             I2PTunnelId replytunnelid )
         {
-            BufLen msb;
+            I2PByteBlock msb;
 
 #if USE_BC_GZIP
-            msb = LzUtils.BcgZipCompressNew( new BufLen( info.ToByteArray() ) );
+            msb = LzUtils.BcgZipCompressNew( new I2PByteBlock( info.ToByteArray() ) );
 #else
 
             using ( var ms = new MemoryStream() )
@@ -43,62 +43,62 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
                     gzs.Flush();
                 }
 
-                msb = new BufLen( ms.ToArray() );
+                msb = new I2PByteBlock( ms.ToArray() );
             }
 #endif
 
             var len = 32 + 1 + 4 + 2 + msb.Length + ( replytoken != 0 ? 4 + 32 : 0 );
             AllocateBuffer( len );
-            var writer = new BufRefLen( Payload );
+            var writer = new I2PBufferCursor( Payload );
 
-            writer.Write( info.Identity.IdentHash.Hash );
-            writer.Write8( (byte)MessageContent.RouterInfo );
-            writer.WriteFlip32( replytoken );
+            writer.WriteBlock( info.Identity.IdentHash.Hash );
+            writer.WriteByte( (byte)MessageContent.RouterInfo );
+            writer.WriteUInt32BigEndian( replytoken );
             if ( replytoken != 0 )
             {
-                writer.WriteFlip32( replytunnelid );
+                writer.WriteUInt32BigEndian( replytunnelid );
                 if ( replygw == null || replygw.Hash.Length != 32 )
                 {
                     throw new FormatException( "ReplyGateway has to be 32 bytes long!" );
                 }
-                writer.Write( replygw.Hash );
+                writer.WriteBlock( replygw.Hash );
             }
 
-            writer.WriteFlip16( (ushort)msb.Length );
-            writer.Write( msb );
-            UpdateCachedFields( (BufRefLen)Payload );
+            writer.WriteUInt16BigEndian( (ushort)msb.Length );
+            writer.WriteBlock( msb );
+            UpdateCachedFields( new I2PBufferCursor( Payload ) );
         }
 
         public DatabaseStoreMessage( I2PRouterInfo info ): this( info, 0, null, 0 )
         {
         }
 
-        public DatabaseStoreMessage( 
-                ILeaseSet leaseset, 
-                uint replytoken, 
-                I2PIdentHash replygw, 
+        public DatabaseStoreMessage(
+                ILeaseSet leaseset,
+                uint replytoken,
+                I2PIdentHash replygw,
                 I2PTunnelId replytunnelid )
         {
             var ls = leaseset.ToByteArray();
 
             AllocateBuffer( 32 + 5 + ( replytoken != 0 ? 4 + 32: 0 ) + ls.Length );
-            var writer = new BufRefLen( Payload );
+            var writer = new I2PBufferCursor( Payload );
 
-            writer.Write( leaseset.Destination.IdentHash.Hash );
-            writer.Write8( (byte)leaseset.MessageType );
-            writer.WriteFlip32( replytoken );
+            writer.WriteBlock( leaseset.Destination.IdentHash.Hash );
+            writer.WriteByte( (byte)leaseset.MessageType );
+            writer.WriteUInt32BigEndian( replytoken );
             if ( replytoken != 0 )
             {
-                writer.WriteFlip32( replytunnelid );
+                writer.WriteUInt32BigEndian( replytunnelid );
                 if ( replygw == null || replygw.Hash.Length != 32 )
                 {
                     throw new FormatException( "ReplyGateway has to be 32 bytes long!" );
                 }
-                writer.Write( replygw.Hash );
+                writer.WriteBlock( replygw.Hash );
             }
 
-            writer.Write( ls );
-            UpdateCachedFields( (BufRefLen)Payload );
+            writer.WriteBytes( ls );
+            UpdateCachedFields( new I2PBufferCursor( Payload ) );
         }
 
         public DatabaseStoreMessage( ILeaseSet leaseset ): this( leaseset, 0, null, 0 )
@@ -113,97 +113,95 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
         private I2PRouterInfo CachedRouterInfo;
         private ILeaseSet CachedLeaseSet;
 
-        public I2PIdentHash Key 
-        { 
-            get 
-            { 
-                if ( CachedRouterId == null ) UpdateCachedFields( new BufRefLen( Payload ) );
+        public I2PIdentHash Key
+        {
+            get
+            {
+                if ( CachedRouterId == null ) UpdateCachedFields( new I2PBufferCursor( Payload ) );
                 return CachedRouterId;
             }
         }
 
         public MessageContent Content
-        { 
-            get 
-            { 
-                if ( CachedRouterId == null ) UpdateCachedFields( new BufRefLen( Payload ) );
+        {
+            get
+            {
+                if ( CachedRouterId == null ) UpdateCachedFields( new I2PBufferCursor( Payload ) );
                 return CachedContentType;
             }
         }
 
         public uint ReplyToken
-        { 
-            get 
-            { 
-                if ( CachedRouterId == null ) UpdateCachedFields( new BufRefLen( Payload ) );
+        {
+            get
+            {
+                if ( CachedRouterId == null ) UpdateCachedFields( new I2PBufferCursor( Payload ) );
                 return CachedReplyToken;
             }
         }
 
         public uint ReplyTunnelId
-        { 
-            get 
-            { 
-                if ( CachedRouterId == null ) UpdateCachedFields( new BufRefLen( Payload ) );
+        {
+            get
+            {
+                if ( CachedRouterId == null ) UpdateCachedFields( new I2PBufferCursor( Payload ) );
                 return CachedReplyTunnelId;
             }
         }
 
         public I2PIdentHash ReplyGateway
-        { 
-            get 
-            { 
-                if ( CachedRouterId == null ) UpdateCachedFields( new BufRefLen( Payload ) );
+        {
+            get
+            {
+                if ( CachedRouterId == null ) UpdateCachedFields( new I2PBufferCursor( Payload ) );
                 return CachedReplyGateway;
             }
         }
 
         public I2PRouterInfo RouterInfo
-        { 
-            get 
-            { 
-                if ( CachedRouterId == null ) UpdateCachedFields( new BufRefLen( Payload ) );
+        {
+            get
+            {
+                if ( CachedRouterId == null ) UpdateCachedFields( new I2PBufferCursor( Payload ) );
                 return CachedRouterInfo;
             }
         }
 
         public ILeaseSet LeaseSet
-        { 
-            get 
-            { 
-                if ( CachedRouterId == null ) UpdateCachedFields( new BufRefLen( Payload ) );
+        {
+            get
+            {
+                if ( CachedRouterId == null ) UpdateCachedFields( new I2PBufferCursor( Payload ) );
                 return CachedLeaseSet;
             }
         }
 
-        public DatabaseStoreMessage( BufRef reader )
+        public DatabaseStoreMessage( I2PBufferCursor reader )
         {
-            var start = new BufRef( reader );
+            var start = new I2PBufferCursor( reader.BaseArray, reader.BaseArrayOffset );
             UpdateCachedFields( reader );
             SetBuffer( start, reader );
         }
 
-        private void UpdateCachedFields( BufRef reader )
+        private void UpdateCachedFields( I2PBufferCursor reader )
         {
             CachedRouterId = new I2PIdentHash( reader );
-            CachedContentType = (MessageContent)reader.Read8();
-            CachedReplyToken = reader.ReadFlip32();
+            CachedContentType = (MessageContent)reader.ReadByte();
+            CachedReplyToken = reader.ReadUInt32BigEndian();
             if ( CachedReplyToken != 0 )
             {
-                CachedReplyTunnelId = reader.ReadFlip32();
+                CachedReplyTunnelId = reader.ReadUInt32BigEndian();
                 CachedReplyGateway = new I2PIdentHash( reader );
             }
-
-            //Logging.LogDebug( $"DatabaseStoreMessage: {CachedContentType}, {CachedRouterId?.Id32Short}, {CachedReplyToken}" );
 
             switch ( CachedContentType )
             {
                 case MessageContent.RouterInfo:
-                    var length = reader.ReadFlip16();
+                    var length = reader.ReadUInt16BigEndian();
 
 #if USE_BC_GZIP
                     CachedRouterInfo = new I2PRouterInfo(
-                        new BufRefLen( LzUtils.BcgZipDecompressNew( new BufLen( reader, 0, length ) ) ), true );
+                        new I2PBufferCursor( LzUtils.BcgZipDecompressNew( new I2PByteBlock( reader.BaseArray, reader.BaseArrayOffset, length ) ) ), true );
 #else
                     using ( var ms = new MemoryStream() )
                     {
@@ -213,7 +211,7 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
                         using ( var gzs = new GZipStream( ms, CompressionMode.Decompress ) )
                         {
                             var gzdata = StreamUtils.Read( gzs );
-                            CachedRouterInfo = new I2PRouterInfo( new BufRefLen( gzdata ), true );
+                            CachedRouterInfo = new I2PRouterInfo( new I2PBufferCursor( gzdata ), true );
                         }
                     }
 #endif

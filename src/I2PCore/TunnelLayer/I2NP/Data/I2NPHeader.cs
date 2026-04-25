@@ -12,7 +12,7 @@ namespace I2PCore.TunnelLayer.I2NP.Data
     {
         I2NpMessage.MessageTypes MessageType { get; set; }
         I2PDate Expiration { get; set; }
-        BufLen HeaderAndPayload { get; }
+        I2PByteBlock HeaderAndPayload { get; }
         int Length { get; }
 
         I2NpMessage Message { get; }

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -19,13 +20,13 @@ namespace I2P.I2CP.Messages
         public I2PIdentHash Hash;
         public I2PString HostName;
 
-        public HostLookupMessage( BufRefLen reader )
+        public HostLookupMessage( I2PBufferCursor reader )
             : base( ProtocolMessageType.HostLookup )
         {
-            SessionId = reader.ReadFlip16();
-            RequestId = reader.ReadFlip32();
-            TimeoutMilliseconds = reader.ReadFlip32();
-            RequestType = (HostLookupTypes)reader.Read8();
+            SessionId = reader.ReadUInt16BigEndian();
+            RequestId = reader.ReadUInt32BigEndian();
+            TimeoutMilliseconds = reader.ReadUInt32BigEndian();
+            RequestType = (HostLookupTypes)reader.ReadByte();
 
             switch ( RequestType )
             {
@@ -39,12 +40,12 @@ namespace I2P.I2CP.Messages
             }
         }
 
-        public override void Write( BufRefStream dest )
+        public override void Write( ArrayBufferWriter<byte> dest )
         {
-            dest.Write( BufUtils.Flip16B( SessionId ) );
-            dest.Write( BufUtils.Flip32B( RequestId ) );
-            dest.Write( BufUtils.Flip32B( TimeoutMilliseconds ) );
-            dest.Write( (byte)RequestType );
+            dest.WriteUInt16BigEndian( SessionId );
+            dest.WriteUInt32BigEndian( RequestId );
+            dest.WriteUInt32BigEndian( TimeoutMilliseconds );
+            dest.WriteByte( (byte)RequestType );
 
             switch ( RequestType )
             {

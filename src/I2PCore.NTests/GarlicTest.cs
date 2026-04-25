@@ -1,3 +1,4 @@
+using System.Buffers;
 ﻿using NUnit.Framework;
 using Assert = NUnit.Framework.Legacy.ClassicAssert;
 using I2PCore.Data;
@@ -55,11 +56,11 @@ namespace I2PTests
         {
             for( int runs = 0; runs < 10; ++runs )
             {
-                var buf = new BufLen( new byte[30000] );
-                var writer = new BufRefLen( buf );
+                var buf = new I2PByteBlock( new byte[30000] );
+                var writer = new I2PBufferCursor( buf );
 
                 var data = BufUtils.RandomBytes( 1 + BufUtils.RandomInt( 45 ) );
-                var datar = new BufRefLen( data );
+                var datar = new I2PBufferCursor( data );
                 var tags = new List<I2PSessionTag>();
                 for ( int i = 0; i < BufUtils.RandomInt( 5 ); ++i )
                 {
@@ -69,20 +70,20 @@ namespace I2PTests
                 var newsession = BufUtils.RandomDouble( 1.0 ) < 0.3 ? new I2PSessionKey() : null;
                 var b1 = new GarlicAesBlock( writer, tags, newsession, datar );
 
-                var bldata = new BufLen( buf, 0, writer - buf ).Clone();
+                var bldata = new I2PByteBlock( buf.BaseArray, 0, writer.DistanceFrom( buf.BaseArrayOffset ) ).Clone();
 
-                var b2 = new GarlicAesBlock( new BufRefLen( bldata ) );
+                var b2 = new GarlicAesBlock( new I2PBufferCursor( bldata ) );
 
-                var b1Ar = new BufLen( b1.ToByteArray() );
-                var b2Ar = new BufLen( b2.ToByteArray() );
+                var b1Ar = new I2PByteBlock( b1.ToByteArray() );
+                var b2Ar = new I2PByteBlock( b2.ToByteArray() );
                 Assert.IsTrue( b1Ar == b2Ar );
 
-                var bufs = new BufRefStream();
+                var bufs = new ArrayBufferWriter<byte>();
                 b1.Write( bufs );
 
-                var b3 = new GarlicAesBlock( new BufRefLen( bufs.ToByteArray() ) );
+                var b3 = new GarlicAesBlock( new I2PBufferCursor( bufs.WrittenSpan.ToArray() ) );
 
-                var b3Ar = new BufLen( b3.ToByteArray() );
+                var b3Ar = new I2PByteBlock( b3.ToByteArray() );
                 Assert.IsTrue( b1Ar == b3Ar );
             }
         }
@@ -111,26 +112,26 @@ namespace I2PTests
 
             var (aesblock, sessionkey1) = Garlic.EgDecryptGarlic( origegdata, Private );
 
-            var newgarlic = new Garlic( (BufRefLen)aesblock.Payload );
+            var newgarlic = new Garlic( new I2PBufferCursor(aesblock.Payload) );
 
-            var g1 = new BufLen( garlic.ToByteArray() );
-            var g2 = new BufLen( newgarlic.ToByteArray() );
+            var g1 = new I2PByteBlock( garlic.ToByteArray() );
+            var g2 = new I2PByteBlock( newgarlic.ToByteArray() );
 
             Assert.IsTrue( g1 == g2 );
-            Assert.IsTrue( g2 == new BufLen( garlic.ToByteArray() ) );
+            Assert.IsTrue( g2 == new I2PByteBlock( garlic.ToByteArray() ) );
 
             // Retrieve
 
             var (aesblock2, sessionkey2) = Garlic.RetrieveAesBlock( origegdata2, Private, null );
 
-            newgarlic = new Garlic( (BufRefLen)aesblock2.Payload );
+            newgarlic = new Garlic( new I2PBufferCursor(aesblock2.Payload) );
 
-            g1 = new BufLen( garlic.ToByteArray() );
-            g2 = new BufLen( newgarlic.ToByteArray() );
+            g1 = new I2PByteBlock( garlic.ToByteArray() );
+            g2 = new I2PByteBlock( newgarlic.ToByteArray() );
 
             Assert.IsTrue( g1 == g2 );
             Assert.IsTrue( sessionkey1 == sessionkey2 );
-            Assert.IsTrue( g2 == new BufLen( garlic.ToByteArray() ) );
+            Assert.IsTrue( g2 == new I2PByteBlock( garlic.ToByteArray() ) );
         }
 
         [Test]
@@ -139,7 +140,7 @@ namespace I2PTests
             var ls = new I2PDate( DateTime.Now + TimeSpan.FromMinutes( 5 ) );
 
             var origmessage = new DeliveryStatusMessage( I2NpMessage.GenerateMessageId() );
-            var bigmessage = new DataMessage( new BufLen( BufUtils.RandomBytes( 14 * 1024 ) ) );
+            var bigmessage = new DataMessage( new I2PByteBlock( BufUtils.RandomBytes( 14 * 1024 ) ) );
 
             var garlic = new Garlic(
                 new GarlicClove(
@@ -163,10 +164,10 @@ namespace I2PTests
 
             var (aesblock,sessionkey1) = Garlic.EgDecryptGarlic( origegdata, Private );
 
-            var newgarlic = new Garlic( (BufRefLen)aesblock.Payload );
+            var newgarlic = new Garlic( new I2PBufferCursor(aesblock.Payload) );
 
-            var g1 = new BufLen( garlic.ToByteArray() );
-            var g2 = new BufLen( newgarlic.ToByteArray() );
+            var g1 = new I2PByteBlock( garlic.ToByteArray() );
+            var g2 = new I2PByteBlock( newgarlic.ToByteArray() );
 
             Assert.IsTrue( g1 == g2 );
 
@@ -174,10 +175,10 @@ namespace I2PTests
 
             var (aesblock2,sessionkey2) = Garlic.RetrieveAesBlock( origegdata2, Private, null );
 
-            newgarlic = new Garlic( (BufRefLen)aesblock2.Payload );
+            newgarlic = new Garlic( new I2PBufferCursor(aesblock2.Payload) );
 
-            g1 = new BufLen( garlic.ToByteArray() );
-            g2 = new BufLen( newgarlic.ToByteArray() );
+            g1 = new I2PByteBlock( garlic.ToByteArray() );
+            g2 = new I2PByteBlock( newgarlic.ToByteArray() );
 
             Assert.IsTrue( g1 == g2 );
             Assert.IsTrue( sessionkey1 == sessionkey2 );
@@ -221,8 +222,8 @@ namespace I2PTests
             var gcd1Ar = gcd1.ToByteArray();
             var gcd2Ar = gcd2.ToByteArray();
 
-            var st1 = FreenetBase64.Encode( new BufLen( gcd1Ar ) );
-            var st2 = FreenetBase64.Encode( new BufLen( gcd2Ar ) );
+            var st1 = FreenetBase64.Encode( new I2PByteBlock( gcd1Ar ) );
+            var st2 = FreenetBase64.Encode( new I2PByteBlock( gcd2Ar ) );
 
             Assert.IsTrue( BufUtils.Equal( gcd1Ar, gcd2Ar ) );
 
@@ -230,7 +231,7 @@ namespace I2PTests
             var msg2 = new GarlicClove( gcd2 );
 
             var g1 = new Garlic( msg1, msg2 );
-            var g2 = new Garlic( new BufRefLen( g1.ToByteArray() ).Clone() );
+            var g2 = new Garlic( new I2PBufferCursor( g1.ToByteArray() ) );
 
             Assert.IsTrue( BufUtils.Equal( g1.ToByteArray(), g2.ToByteArray() ) );
         }
@@ -258,7 +259,7 @@ namespace I2PTests
             var egdata = I2NpMessage.Clone( cg );
 
             var (aesblock,sk) = Garlic.EgDecryptGarlic( egdata, Private );
-            var g2 = new Garlic( (BufRefLen)aesblock.Payload );
+            var g2 = new Garlic( new I2PBufferCursor(aesblock.Payload) );
 
             Assert.IsTrue( BufUtils.Equal( garlic.ToByteArray(), g2.ToByteArray() ) );
 
@@ -273,7 +274,7 @@ namespace I2PTests
             egdata = I2NpMessage.Clone( cg );
 
             (aesblock, sk) = Garlic.EgDecryptGarlic( egdata, Private );
-            g2 = new Garlic( (BufRefLen)aesblock.Payload );
+            g2 = new Garlic( new I2PBufferCursor(aesblock.Payload) );
 
             Assert.IsTrue( BufUtils.Equal( garlic.ToByteArray(), g2.ToByteArray() ) );
         }
@@ -304,7 +305,7 @@ namespace I2PTests
             var egdata = I2NpMessage.Clone( cg );
 
             var (aesblock, sk) = Garlic.RetrieveAesBlock( egdata, Private, (t) => sessionkey );
-            var g2 = new Garlic( (BufRefLen)aesblock.Payload );
+            var g2 = new Garlic( new I2PBufferCursor(aesblock.Payload) );
 
             Assert.IsTrue( BufUtils.Equal( garlic.ToByteArray(), g2.ToByteArray() ) );
 
@@ -319,7 +320,7 @@ namespace I2PTests
             egdata = I2NpMessage.Clone( cg );
 
             (aesblock, sk) = Garlic.RetrieveAesBlock( egdata, Private, ( t ) => sessionkey );
-            g2 = new Garlic( (BufRefLen)aesblock.Payload );
+            g2 = new Garlic( new I2PBufferCursor(aesblock.Payload) );
 
             Assert.IsTrue( BufUtils.Equal( garlic.ToByteArray(), g2.ToByteArray() ) );
         }
@@ -381,7 +382,7 @@ namespace I2PTests
                         Destination.IdentHash ) ),
                 new(
                     new GarlicCloveDeliveryLocal(
-                        new DataMessage( new BufLen( BufUtils.RandomBytes( 3000 ) ) ) ) ),
+                        new DataMessage( new I2PByteBlock( BufUtils.RandomBytes( 3000 ) ) ) ) ),
                 new(
                     new GarlicCloveDeliveryLocal(
                         new TunnelGatewayMessage( m1, new I2PTunnelId() ) ) ),
@@ -451,7 +452,7 @@ namespace I2PTests
                         replytunnel,
                         cloves.ToList() );
 
-                var recgarlic = recv.DecryptMessage( new GarlicMessage( (BufRefLen)tmsg.Payload.Clone() ) );
+                var recgarlic = recv.DecryptMessage( new GarlicMessage( new I2PBufferCursor(tmsg.Payload.Clone()) ) );
 
                 Assert.IsTrue( 
                         cloves.All( origclove => 
@@ -487,7 +488,7 @@ namespace I2PTests
 
                 cloves.Add( new GarlicClove(
                     new GarlicCloveDeliveryLocal(
-                        new DataMessage( new BufLen( BufUtils.RandomBytes( 3000 ) ) ) ) ) );
+                        new DataMessage( new I2PByteBlock( BufUtils.RandomBytes( 3000 ) ) ) ) ) );
             }
         }
 
@@ -532,7 +533,7 @@ namespace I2PTests
             recv.CurrentLeaseSet =
 
             var origdsmessage = new DeliveryStatusMessage( 0x425c );
-            var datamessage = new DataMessage( new BufLen( BufUtils.RandomBytes( 16000 ) ) );
+            var datamessage = new DataMessage( new I2PByteBlock( BufUtils.RandomBytes( 16000 ) ) );
             var origmessage1 = CreateDatabaseStoreMessage();
             var origmessage2 = CreateDatabaseStoreMessage();
             var origmessage3 = CreateDatabaseStoreMessage();
@@ -599,7 +600,7 @@ namespace I2PTests
             var recv = new EgaesDecryptReceivedSessions( this );
 
             /*
-            var datamessage = new DataMessage( new BufLen( BufUtils.Random( 65000 ) ) );
+            var datamessage = new DataMessage( new I2PByteBlock( BufUtils.Random( 65000 ) ) );
 
             try
             {

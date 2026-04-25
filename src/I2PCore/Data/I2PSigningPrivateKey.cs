@@ -8,7 +8,7 @@ namespace I2PCore.Data
         public override int KeySizeBytes { get { return Certificate.SigningPrivateKeyLength; } }
 
         public I2PSigningPrivateKey( I2PCertificate cert ) 
-            : base( new BufLen( BufUtils.RandomBytes( cert.SigningPrivateKeyLength ) ), cert ) 
+            : base( new I2PByteBlock( BufUtils.RandomBytes( cert.SigningPrivateKeyLength ) ), cert ) 
         {
             if ( cert.SignatureType == SigningKeyTypes.EcdsaSha512P521 )
             {
@@ -16,7 +16,7 @@ namespace I2PCore.Data
             }
         }
 
-        public I2PSigningPrivateKey( BufRef reader, I2PCertificate cert ) : base( reader, cert ) 
+        public I2PSigningPrivateKey( I2PBufferCursor reader, I2PCertificate cert ) : base( reader, cert ) 
         {
         }
 

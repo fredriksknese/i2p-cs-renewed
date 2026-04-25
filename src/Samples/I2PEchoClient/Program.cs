@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using I2PCore.Data;
 using System.Net.Sockets;
 using System.IO;
@@ -123,7 +124,7 @@ namespace I2PEchoClient
                                 var test = new I2PIdentHash( ls.Destination );
                                 Logging.LogInformation( $"Program {_unpublishedDestination}: Found {remotedest}, test: {test.Id32Short}." );
 
-                                var s = new BufRefStream();
+                                var s = new ArrayBufferWriter<byte>();
                                 var sh = new StreamingPacket(
                                         PacketFlags.Synchronize
                                         | PacketFlags.FromIncluded
@@ -135,14 +136,14 @@ namespace I2PEchoClient
                                     SigningKey = _myDestinationInfo.PrivateSigningKey,
                                     ReceiveStreamId = recvid,
                                     NacKs = new List<uint>(),
-                                    Payload = new BufLen( new byte[0] ),
+                                    Payload = new I2PByteBlock( new byte[0] ),
                                 };
 
                                 sh.Write( s );
-                                var buf = s.ToByteArray();
-                                var zipped = LzUtils.BcgZipCompressNew( new BufLen( buf ) );
-                                zipped.PokeFlip16( 4353, 4 ); // source port
-                                zipped.PokeFlip16( 25, 6 ); // dest port
+                                var buf = s.WrittenSpan.ToArray();
+                                var zipped = LzUtils.BcgZipCompressNew( new I2PByteBlock( buf ) );
+                                zipped.WriteUInt16BigEndian( 4353, 4 ); // source port
+                                zipped.WriteUInt16BigEndian( 25, 6 ); // dest port
                                 zipped[9] = (byte)PayloadFormat.Streaming; // streaming
 
                                 Logging.LogInformation( $"Program {_unpublishedDestination}: Sending {zipped:20}." );
@@ -167,13 +168,12 @@ namespace I2PEchoClient
             }
         }
 
-        private static void MyDestination_DataReceived( ClientDestination dest, BufLen data, I2PDestination sender )
+        private static void MyDestination_DataReceived( ClientDestination dest, I2PByteBlock data, I2PDestination sender )
         {
             Logging.LogInformation( $"Program {_unpublishedDestination}: data received {data:20}" );
 
-            var reader = new BufRefLen( data );
-            var unzip = LzUtils.BcgZipDecompressNew( (BufLen)reader );
-            var packet = new StreamingPacket( (BufRefLen)unzip );
+            var unzip = LzUtils.BcgZipDecompressNew( data );
+            var packet = new StreamingPacket( new I2PBufferCursor( unzip ) );
 
             Logging.LogInformation( $"Program {_unpublishedDestination}: {packet}" );
         }

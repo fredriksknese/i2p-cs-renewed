@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -13,9 +13,9 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
 
         public BuildResponseRecord[] ResponseRecords;
 
-        public TunnelBuildReplyMessage( BufRef reader )
+        public TunnelBuildReplyMessage( I2PBufferCursor reader )
         {
-            var start = new BufRef( reader );
+            var start = new I2PBufferCursor( reader.BaseArray, reader.BaseArrayOffset );
             ResponseRecords = new BuildResponseRecord[8];
 
             for ( int i = 0; i < 8; ++i ) ResponseRecords[i] = new BuildResponseRecord( reader );

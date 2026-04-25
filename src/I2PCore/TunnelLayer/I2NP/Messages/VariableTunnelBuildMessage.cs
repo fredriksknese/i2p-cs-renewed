@@ -19,10 +19,10 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
 
         public List<AesEgBuildRequestRecord> Records = new();
 
-        public VariableTunnelBuildMessage( BufRef reader )
+        public VariableTunnelBuildMessage( I2PBufferCursor reader )
         {
-            var start = new BufRef( reader );
-            var records = reader.Read8();
+            var start = new I2PBufferCursor( reader.BaseArray, reader.BaseArrayOffset );
+            var records = reader.ReadByte();
 
             for ( int i = 0; i < records; ++i )
             {
@@ -35,8 +35,8 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
         private VariableTunnelBuildMessage( byte hops )
         {
             AllocateBuffer( 1 + hops * AesEgBuildRequestRecord.Length );
-            var writer = new BufRefLen( Payload );
-            writer.Write8( hops );
+            var writer = new I2PBufferCursor( Payload );
+            writer.WriteByte( hops );
             for ( int i = 0; i < hops; ++i ) Records.Add( new AesEgBuildRequestRecord( writer ) );
         }
 
@@ -45,12 +45,12 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
         {
             var hops = (byte)records.Count();
             AllocateBuffer( 1 + hops * AesEgBuildRequestRecord.Length );
-            var writer = new BufRefLen( Payload );
-            writer.Write8( hops );
+            var writer = new I2PBufferCursor( Payload );
+            writer.WriteByte( hops );
             foreach ( var rec in records )
             {
                 Records.Add( rec );
-                writer.Write( rec.Data );
+                writer.WriteBlock( rec.Data );
             }
         }
 
@@ -591,7 +591,7 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
         {
             public int BuildRequestIndex;
             public I2PSessionKey ReplyKey;
-            public BufLen ReplyIv;
+            public I2PByteBlock ReplyIv;
         }
 
         /// <summary>

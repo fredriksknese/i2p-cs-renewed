@@ -1,8 +1,9 @@
-﻿using I2PCore.Utils;
-using System;
+﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using I2PCore.Utils;
 
 namespace I2PCore.Data
 {
@@ -11,6 +12,6 @@ namespace I2PCore.Data
     /// </summary>
     public interface I2PType
     {
-        void Write( BufRefStream dest );
+        void Write( IBufferWriter<byte> dest );
     }
 }

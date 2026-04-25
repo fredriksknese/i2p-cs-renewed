@@ -37,10 +37,10 @@ namespace I2PTests
             var blockData = frame.Blocks[1].Data;
             Assert.AreEqual((byte)msg.MessageType, blockData[0]);
             
-            var reader = new BufRefLen(blockData);
-            reader.Read8(); // Skip Type
-            Assert.AreEqual(msg.MessageId, reader.ReadFlip32());
-            Assert.AreEqual((uint)((ulong)msg.Expiration / 1000), reader.ReadFlip32());
+            var reader = new I2PBufferCursor(blockData);
+            reader.ReadByte(); // Skip Type
+            Assert.AreEqual(msg.MessageId, reader.ReadUInt32BigEndian());
+            Assert.AreEqual((uint)((ulong)msg.Expiration / 1000), reader.ReadUInt32BigEndian());
 
             // Parse it back
             var parsedHeader = frame.Blocks[1].ParseAsI2NPHeader();
@@ -102,14 +102,14 @@ namespace I2PTests
 
             // Bob receives encryptedFrame
             // First 2 bytes are obfuscated length
-            var reader = new BufRef(encryptedFrame);
-            var obfuscatedLength = reader.ReadFlip16();
+            var reader = new I2PBufferCursor(encryptedFrame);
+            var obfuscatedLength = reader.ReadUInt16BigEndian();
             
             var frameLength = bobSip.DeobfuscateLength(obfuscatedLength);
             Assert.AreEqual(encryptedFrame.Length - 2, (int)frameLength);
 
-            var framePayload = reader.ReadBufRef(frameLength);
-            
+            var framePayload = new I2PBufferCursor(reader.BaseArray, reader.Position, frameLength);
+
             // This is what failed before:
             var parsedFrame = NTCP2DataFrame.Parse(framePayload, bob, frameLength);
             
@@ -131,7 +131,7 @@ namespace I2PTests
             }
 
             var riBytes = System.IO.File.ReadAllBytes(riPath);
-            var ri = new I2PRouterInfo(new BufRefLen(riBytes), false);
+            var ri = new I2PRouterInfo(new I2PBufferCursor(riBytes), false);
             
             var frame = NTCP2DataFrame.BuildWithRouterInfo(ri, true);
             

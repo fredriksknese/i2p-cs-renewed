@@ -84,8 +84,8 @@ namespace I2PCore
                 var ix = 0;
                 while ( s != null && ( ix = s.Next( ix ) ) > 0 )
                 {
-                    var reader = new BufRefLen( s.Read( ix ) );
-                    var recordtype = (StoreRecordId)reader.Read32();
+                    var reader = new I2PBufferCursor( s.Read( ix ) );
+                    var recordtype = (StoreRecordId)reader.ReadUInt32LittleEndian();
 
                     try
                     {
@@ -184,7 +184,7 @@ namespace I2PCore
 
                         if ( !onlyupdated || ( onlyupdated && one.Value.Meta.Updated ) )
                         {
-                            var rec = new BufLen[] 
+                            var rec = new I2PByteBlock[] 
                             { 
                                 BufUtils.To32Bl( (int)StoreRecordId.StoreIdRouterInfo ), 
                                 new( one.Value.Router.ToByteArray() ) 
@@ -228,8 +228,8 @@ namespace I2PCore
             var str2Ix = new Dictionary<I2PString, int>();
             foreach ( var one in lookup )
             {
-                var reader = new BufRefLen( one.Value );
-                reader.Read32();
+                var reader = new I2PBufferCursor( one.Value );
+                reader.ReadUInt32LittleEndian();
                 var key = new I2PString( reader );
                 str2Ix[key] = one.Key;
             }
@@ -238,7 +238,7 @@ namespace I2PCore
             {
                 foreach ( var one in settings )
                 {
-                    var rec = new BufLen[] { 
+                    var rec = new I2PByteBlock[] { 
                         BufUtils.To32Bl( (int)StoreRecordId.StoreIdConfig ),
                         new( one.Key.ToByteArray() ), new( one.Value.ToByteArray() )
                     };

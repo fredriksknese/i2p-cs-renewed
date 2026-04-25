@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -19,23 +20,23 @@ namespace I2P.I2CP.Messages
             Leases.AddRange( leases );
         }
 
-        public RequestLeaseSetMessage( BufRef reader )
+        public RequestLeaseSetMessage( I2PBufferCursor reader )
             : base( ProtocolMessageType.RequestLs )
         {
-            SessionId = reader.ReadFlip16();
-            var leases = reader.Read8();
+            SessionId = reader.ReadUInt16BigEndian();
+            var leases = reader.ReadByte();
             for ( int i = 0; i < leases; ++i )
             {
                 Leases.Add( new I2PLease( reader ) );
             }
         }
 
-        public override void Write( BufRefStream dest )
+        public override void Write( ArrayBufferWriter<byte> dest )
         {
             var buf = new byte[3];
-            var writer = new BufRefLen( buf );
-            writer.WriteFlip16( SessionId );
-            writer.Write8( (byte)Leases.Count );
+            var writer = new I2PBufferCursor( buf );
+            writer.WriteUInt16BigEndian( SessionId );
+            writer.WriteByte( (byte)Leases.Count );
             dest.Write( buf );
 
             for ( int i = 0; i < Leases.Count; ++i )

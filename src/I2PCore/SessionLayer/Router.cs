@@ -623,7 +623,7 @@ namespace I2PCore.SessionLayer
                     return;
                 }
 
-                var garlic = new Garlic( (BufRefLen)aesblock.Payload );
+                var garlic = new Garlic( new I2PBufferCursor( aesblock.Payload ) );
                 ProcessGarlicCloves( garlic, from );
             }
             catch ( Exception ex )
@@ -670,9 +670,10 @@ namespace I2PCore.SessionLayer
         {
             try
             {
-                var data = garlicmsg.EgData?.ToByteArray();
-                if ( data == null || data.Length < ECIES.ECIESExistingSessionMessage.MinimumSize )
+                var egdata = garlicmsg.EgData;
+                if ( egdata.IsEmpty || egdata.Length < ECIES.ECIESExistingSessionMessage.MinimumSize )
                     return false;
+                var data = egdata.ToByteArray();
 
                 var ecies = EciesRouterProcessor;
                 if ( ecies == null ) return false;
@@ -694,18 +695,18 @@ namespace I2PCore.SessionLayer
                     {
                         if ( block is ECIES.GarlicCloveBlock garlicClove )
                         {
-                            var cloveBuf = new BufRefLen( garlicClove.Data );
+                            var cloveBuf = new I2PBufferCursor( garlicClove.Data );
                             var di = GarlicCloveDelivery.CreateGarlicCloveDelivery( cloveBuf );
 
                             // ECIES Garlic Message format: type(1) + ID(4) + expiration(4) + payload
-                            var msgType = (TunnelLayer.I2NP.Messages.I2NpMessage.MessageTypes)cloveBuf.Read8();
-                            var msgId = cloveBuf.ReadFlip32();
-                            var expirationSeconds = cloveBuf.ReadFlip32();
+                            var msgType = (TunnelLayer.I2NP.Messages.I2NpMessage.MessageTypes)cloveBuf.ReadByte();
+                            var msgId = cloveBuf.ReadUInt32BigEndian();
+                            var expirationSeconds = cloveBuf.ReadUInt32BigEndian();
 
                             // I2NpUtil.GetMessage requires 16 bytes of headroom in front of the payload buffer.
-                            var payloadWithHeadroom = new byte[cloveBuf.Length + 16];
-                            cloveBuf.Peek( payloadWithHeadroom, 16, 0, cloveBuf.Length );
-                            var msg = TunnelLayer.I2NP.I2NpUtil.GetMessage( msgType, new BufRef( payloadWithHeadroom, 16 ), msgId );
+                            var payloadWithHeadroom = new byte[cloveBuf.Remaining + 16];
+                            cloveBuf.ReadBytes( payloadWithHeadroom, 16, cloveBuf.Remaining );
+                            var msg = TunnelLayer.I2NP.I2NpUtil.GetMessage( msgType, new I2PBufferCursor( payloadWithHeadroom, 16 ), msgId );
 
                             if ( msg != null )
                             {

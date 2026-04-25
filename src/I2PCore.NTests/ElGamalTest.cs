@@ -27,10 +27,10 @@ namespace I2PTests
         {
             for ( int i = 0; i < 20; ++i )
             {
-                var data = new BufLen( BufUtils.RandomBytes( 222 ) );
+                var data = new I2PByteBlock( BufUtils.RandomBytes( 222 ) );
                 var origdata = data.Clone();
 
-                var enc = new BufLen( ElGamalCrypto.Encrypt( data, Public, true ) );
+                var enc = new I2PByteBlock( ElGamalCrypto.Encrypt( data, Public, true ) );
 
                 var decryptdata = ElGamalCrypto.Decrypt( enc, Private, true );
 
@@ -45,13 +45,13 @@ namespace I2PTests
 
             for ( int i = 0; i < 20; ++i )
             {
-                var data = new BufLen( BufUtils.RandomBytes( 222 ) );
+                var data = new I2PByteBlock( BufUtils.RandomBytes( 222 ) );
                 var origdata = data.Clone();
 
-                var start = new BufRefLen( buf );
-                var writer = new BufRefLen( buf );
+                var start = new I2PBufferCursor( buf );
+                var writer = new I2PBufferCursor( buf );
                 ElGamalCrypto.Encrypt( writer, data, Public, true );
-                var enc = new BufLen( start, 0, writer - start );
+                var enc = new I2PByteBlock( start.BaseArray, start.Position, writer.DistanceFrom( start ) );
 
                 var decryptdata = ElGamalCrypto.Decrypt( enc, Private, true );
 
@@ -64,16 +64,16 @@ namespace I2PTests
         {
             for ( int i = 0; i < 20; ++i )
             {
-                var egdata = new BufLen( new byte[512] );
-                var writer = new BufRefLen( egdata );
-                var data = new BufLen( egdata, 0, 222 );
+                var egdata = new I2PByteBlock( new byte[512] );
+                var writer = new I2PBufferCursor( egdata );
+                var data = egdata.Slice( 0, 222 );
 
                 data.Randomize();
                 var origdata = data.Clone();
 
                 ElGamalCrypto.Encrypt( writer, data, Public, false );
 
-                var decryptdata = ElGamalCrypto.Decrypt( new BufLen( egdata, 0, 512 ), Private, false );
+                var decryptdata = ElGamalCrypto.Decrypt( egdata.Slice( 0, 512 ), Private, false );
 
                 Assert.IsTrue( decryptdata == origdata );
             }
@@ -237,30 +237,30 @@ namespace I2PTests
 
             var egdata = FreenetBase64.Decode( ed );
 
-            var di = new I2PDestinationInfo( new BufRefLen( myinfo ) );
+            var di = new I2PDestinationInfo( new I2PBufferCursor( myinfo ) );
 
-            var decr = ElGamalCrypto.Decrypt( new BufLen( egdata, 4, 514 ), di.PrivateKey, true );
+            var decr = ElGamalCrypto.Decrypt( new I2PByteBlock( egdata, 4, 514 ), di.PrivateKey, true );
         }
 
         [Test]
         public void TestEgCompatibilityDecode()
         {
             var priv = new I2PPrivateKey( 
-                    new BufRefLen( FreenetBase64.Decode( PrivateKey ) ), 
+                    new I2PBufferCursor( FreenetBase64.Decode( PrivateKey ) ), 
                     new I2PCertificate() );
 
             var pub = new I2PPublicKey(
-                    new BufRefLen( FreenetBase64.Decode( PublicKey ) ),
+                    new I2PBufferCursor( FreenetBase64.Decode( PublicKey ) ),
                     new I2PCertificate() );
 
             for ( int i = 0; i < Encrypted.Length; ++i )
             {
                 var decr = ElGamalCrypto.Decrypt(
-                        new BufLen( FreenetBase64.Decode( Encrypted[i] ) ), 
+                        new I2PByteBlock( FreenetBase64.Decode( Encrypted[i] ) ), 
                         priv, 
                         true );
 
-                var clear = new BufLen( Encoding.UTF8.GetBytes( Unencrypted[i] ) );
+                var clear = new I2PByteBlock( Encoding.UTF8.GetBytes( Unencrypted[i] ) );
                 Assert.IsTrue( decr == clear );
             }
         }
@@ -269,17 +269,17 @@ namespace I2PTests
         public void TestEgCompatibilityEncode()
         {
             var priv = new I2PPrivateKey(
-                    new BufRefLen( FreenetBase64.Decode( PrivateKey ) ),
+                    new I2PBufferCursor( FreenetBase64.Decode( PrivateKey ) ),
                     new I2PCertificate() );
 
             var pub = new I2PPublicKey(
-                    new BufRefLen( FreenetBase64.Decode( PublicKey ) ),
+                    new I2PBufferCursor( FreenetBase64.Decode( PublicKey ) ),
                     new I2PCertificate() );
 
             for ( int i = 0; i < Encrypted.Length; ++i )
             {
-                var clear = new BufLen( Encoding.UTF8.GetBytes( Unencrypted[i] ) );
-                var encr = new BufLen( ElGamalCrypto.Encrypt( clear, pub, true ) );
+                var clear = new I2PByteBlock( Encoding.UTF8.GetBytes( Unencrypted[i] ) );
+                var encr = new I2PByteBlock( ElGamalCrypto.Encrypt( clear, pub, true ) );
 
                 Assert.IsTrue( encr.Length == 514 );
 

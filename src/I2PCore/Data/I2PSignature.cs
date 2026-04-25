@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using Org.BouncyCastle.Math;
@@ -16,21 +17,21 @@ namespace I2PCore.Data
 {
     public class I2PSignature : I2PType
     {
-        public BufLen Sig;
+        public I2PByteBlock Sig;
 
         public I2PCertificate Certificate;
 
         public I2PSignature()
         {
             Certificate = I2PSigningKey.DefaultSigningKeyCert;
-            Sig = new BufLen( new byte[Certificate.SignatureLength] );
+            Sig = new I2PByteBlock( new byte[Certificate.SignatureLength] );
         }
 
-        public I2PSignature( BufRef buf, I2PCertificate cert )
+        public I2PSignature( I2PBufferCursor buf, I2PCertificate cert )
         {
             Certificate = cert;
 
-            Sig = buf.ReadBufLen( cert.SignatureLength );
+            Sig = buf.ReadBlock( cert.SignatureLength );
         }
 
         public static bool SupportedSignatureType( I2PSigningKey.SigningKeyTypes stype )
@@ -50,7 +51,7 @@ namespace I2PCore.Data
                 || stype == I2PSigningKey.SigningKeyTypes.MlDsa44;
         }
 
-        public static byte[] DoSign( I2PSigningPrivateKey key, params BufLen[] bufs )
+        public static byte[] DoSign( I2PSigningPrivateKey key, params I2PByteBlock[] bufs )
         {
             //Logging.LogDebug( "DoSign: " + key.Certificate.SignatureType.ToString() );
 
@@ -99,7 +100,7 @@ namespace I2PCore.Data
             }
         }
 
-        public static byte[] DoSignEdDsasha512Ed25519( IEnumerable<BufLen> bufs, I2PSigningPrivateKey key )
+        public static byte[] DoSignEdDsasha512Ed25519( IEnumerable<I2PByteBlock> bufs, I2PSigningPrivateKey key )
         {
             var signer = new Ed25519Signer();
             signer.Init( true, new Ed25519PrivateKeyParameters( key.Key.ToByteArray(), 0 ) );
@@ -108,7 +109,7 @@ namespace I2PCore.Data
             return signer.GenerateSignature();
         }
 
-        public static byte[] DoSignDsaSha1( IEnumerable<BufLen> bufs, I2PSigningPrivateKey key )
+        public static byte[] DoSignDsaSha1( IEnumerable<I2PByteBlock> bufs, I2PSigningPrivateKey key )
         {
             var sha = new Sha1Digest();
             foreach( var buf in bufs ) sha.BlockUpdate( buf.BaseArray, buf.BaseArrayOffset, buf.Length );
@@ -144,7 +145,7 @@ namespace I2PCore.Data
             return result;
         }
 
-        public static byte[] DoSignEcDsaSha256P256_old( IEnumerable<BufLen> bufs, I2PSigningPrivateKey key )
+        public static byte[] DoSignEcDsaSha256P256_old( IEnumerable<I2PByteBlock> bufs, I2PSigningPrivateKey key )
         {
             var sha = new Sha256Digest();
             foreach ( var buf in bufs ) sha.BlockUpdate( buf.BaseArray, buf.BaseArrayOffset, buf.Length );
@@ -179,7 +180,7 @@ namespace I2PCore.Data
         }
 
         public static byte[] DoSignEcDsa( 
-            IEnumerable<BufLen> bufs, 
+            IEnumerable<I2PByteBlock> bufs, 
             I2PSigningPrivateKey key, 
             IDigest digest, 
             X9ECParameters ecparam, 
@@ -215,7 +216,7 @@ namespace I2PCore.Data
             return result;
         }
 
-        public static bool DoVerify( I2PSigningPublicKey key, I2PSignature signed, params BufLen[] bufs )
+        public static bool DoVerify( I2PSigningPublicKey key, I2PSignature signed, params I2PByteBlock[] bufs )
         {
             //Logging.LogDebug( $"DoVerify: {key.Certificate.SignatureType}" );
 
@@ -264,7 +265,7 @@ namespace I2PCore.Data
             }
         }
 
-        public static bool DoVerifyEdDsasha512Ed25519( IEnumerable<BufLen> bufs, I2PSigningPublicKey key, I2PSignature signed )
+        public static bool DoVerifyEdDsasha512Ed25519( IEnumerable<I2PByteBlock> bufs, I2PSigningPublicKey key, I2PSignature signed )
         {
             var signer = new Ed25519Signer();
             signer.Init( false, new Ed25519PublicKeyParameters( key.Key.BaseArray, key.Key.BaseArrayOffset ) );
@@ -273,7 +274,7 @@ namespace I2PCore.Data
             return signer.VerifySignature( signed.Sig.ToByteArray() );
         }
 
-        public static bool DoVerifyDsaSha1( IEnumerable<BufLen> bufs, I2PSigningPublicKey key, I2PSignature signed )
+        public static bool DoVerifyDsaSha1( IEnumerable<I2PByteBlock> bufs, I2PSigningPublicKey key, I2PSignature signed )
         {
             if ( !SupportedSignatureType( signed.Certificate.SignatureType ) )
             {
@@ -305,7 +306,7 @@ namespace I2PCore.Data
         }
 
         public static bool DoVerifyEcDsa( 
-            IEnumerable<BufLen> bufs, 
+            IEnumerable<I2PByteBlock> bufs, 
             I2PSigningPublicKey key, 
             I2PSignature signed,
             IDigest digest,
@@ -339,7 +340,7 @@ namespace I2PCore.Data
         /// <summary>
         /// EdDSA-SHA512-Ed25519ph (prehash mode - SHA512 the data first, then sign the hash)
         /// </summary>
-        public static byte[] DoSignEdDsasha512Ed25519ph( IEnumerable<BufLen> bufs, I2PSigningPrivateKey key )
+        public static byte[] DoSignEdDsasha512Ed25519ph( IEnumerable<I2PByteBlock> bufs, I2PSigningPrivateKey key )
         {
             // Prehash: SHA-512 of the data
             var sha = new Sha512Digest();
@@ -354,7 +355,7 @@ namespace I2PCore.Data
             return signer.GenerateSignature();
         }
 
-        public static bool DoVerifyEdDsasha512Ed25519ph( IEnumerable<BufLen> bufs, I2PSigningPublicKey key, I2PSignature signed )
+        public static bool DoVerifyEdDsasha512Ed25519ph( IEnumerable<I2PByteBlock> bufs, I2PSigningPublicKey key, I2PSignature signed )
         {
             // Prehash: SHA-512 of the data
             var sha = new Sha512Digest();
@@ -372,7 +373,7 @@ namespace I2PCore.Data
         /// <summary>
         /// RSA signature with specified hash
         /// </summary>
-        public static byte[] DoSignRsa( IEnumerable<BufLen> bufs, I2PSigningPrivateKey key, IDigest digest )
+        public static byte[] DoSignRsa( IEnumerable<I2PByteBlock> bufs, I2PSigningPrivateKey key, IDigest digest )
         {
             // Hash the data
             foreach ( var buf in bufs ) digest.BlockUpdate( buf.BaseArray, buf.BaseArrayOffset, buf.Length );
@@ -391,7 +392,7 @@ namespace I2PCore.Data
             return signer.GenerateSignature();
         }
 
-        public static bool DoVerifyRsa( IEnumerable<BufLen> bufs, I2PSigningPublicKey key, I2PSignature signed, IDigest digest )
+        public static bool DoVerifyRsa( IEnumerable<I2PByteBlock> bufs, I2PSigningPublicKey key, I2PSignature signed, IDigest digest )
         {
             var keyBytes = key.Key.ToByteArray();
             var modulus = new BigInteger( 1, keyBytes );
@@ -408,7 +409,7 @@ namespace I2PCore.Data
         /// Verify a GOST R 34.10-2012 signature (256-bit or 512-bit).
         /// Uses BouncyCastle's ECGOST3410-2012 signer with Streebog hash.
         /// </summary>
-        public static bool DoVerifyGost( IEnumerable<BufLen> bufs, I2PSigningPublicKey key, I2PSignature signed, int bits )
+        public static bool DoVerifyGost( IEnumerable<I2PByteBlock> bufs, I2PSigningPublicKey key, I2PSignature signed, int bits )
         {
             try
             {
@@ -487,7 +488,7 @@ namespace I2PCore.Data
         /// Sign with GOST R 34.10-2012 (256-bit or 512-bit).
         /// Uses BouncyCastle's ECGOST3410 signer with Streebog hash.
         /// </summary>
-        public static byte[] DoSignGost( IEnumerable<BufLen> bufs, I2PSigningPrivateKey key, int bits )
+        public static byte[] DoSignGost( IEnumerable<I2PByteBlock> bufs, I2PSigningPrivateKey key, int bits )
         {
             var keyBytes = key.Key.ToByteArray();
             var data = bufs.SelectMany( b => b.ToByteArray() ).ToArray();
@@ -557,7 +558,7 @@ namespace I2PCore.Data
         /// ML-DSA-44 (FIPS 204) signing using BouncyCastle.
         /// Public key: 1312 bytes, Signature: 2420 bytes, Private key: 2560 bytes.
         /// </summary>
-        public static byte[] DoSignMlDsa44( IEnumerable<BufLen> bufs, I2PSigningPrivateKey key )
+        public static byte[] DoSignMlDsa44( IEnumerable<I2PByteBlock> bufs, I2PSigningPrivateKey key )
         {
             var keyBytes = key.Key.ToByteArray();
             var privKeyParams = MLDsaPrivateKeyParameters.FromEncoding(
@@ -574,7 +575,7 @@ namespace I2PCore.Data
         /// <summary>
         /// ML-DSA-44 (FIPS 204) verification using BouncyCastle.
         /// </summary>
-        public static bool DoVerifyMlDsa44( IEnumerable<BufLen> bufs, I2PSigningPublicKey key, I2PSignature signed )
+        public static bool DoVerifyMlDsa44( IEnumerable<I2PByteBlock> bufs, I2PSigningPublicKey key, I2PSignature signed )
         {
             try
             {
@@ -614,14 +615,14 @@ namespace I2PCore.Data
             return ( pubKeyParams.GetEncoded(), privKeyParams.GetEncoded() );
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
-            Sig.WriteTo( dest );
+            dest.WriteBlock( Sig );
         }
 
         public override string ToString()
         {
-            return $"I2PSignature: {FreenetBase64.Encode( Sig )}";
+            return $"I2PSignature: {FreenetBase64.Encode( new I2PByteBlock( Sig.ToByteArray() ) )}";
         }
     }
 }

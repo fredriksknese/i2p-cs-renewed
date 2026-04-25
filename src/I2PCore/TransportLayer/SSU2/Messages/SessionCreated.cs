@@ -34,7 +34,7 @@ namespace I2PCore.TransportLayer.SSU2.Messages
             };
         }
 
-        public static SessionCreated Parse(BufRef data, byte[] bobIntroKey, byte[] chainingKey, byte[] fullPacket)
+        public static SessionCreated Parse(I2PBufferCursor data, byte[] bobIntroKey, byte[] chainingKey, byte[] fullPacket)
         {
             var created = new SessionCreated();
 
@@ -49,7 +49,7 @@ namespace I2PCore.TransportLayer.SSU2.Messages
             SSU2HeaderEncryption.DecryptLongHeaderInPacket(fullPacket, 0, kHeader1, kHeader2);
 
             // Parse decrypted header from packet
-            created.Header = SSU2Header.ParseLongHeader(new BufRef(fullPacket));
+            created.Header = SSU2Header.ParseLongHeader(new I2PBufferCursor(fullPacket));
 
             // Decrypt ephemeral key Y (obfuscated with ChaCha20)
             var encryptedY = new byte[32];
@@ -98,17 +98,17 @@ namespace I2PCore.TransportLayer.SSU2.Messages
         public byte[] BuildPayload()
         {
             // Build options block for SessionCreated payload
-            var payload = new BufLen(new byte[4096]);
-            var writer = new BufRefLen(payload);
+            var payload = new I2PByteBlock(new byte[4096]);
+            var writer = new I2PBufferCursor(payload);
 
             // Timestamp (4 bytes)
-            writer.WriteFlip32(Timestamp);
+            writer.WriteUInt32BigEndian(Timestamp);
 
             // Padding length (2 bytes)
-            writer.WriteFlip16(PaddingLength);
+            writer.WriteUInt16BigEndian(PaddingLength);
 
             // Reserved (2 bytes)
-            writer.WriteFlip16(0);
+            writer.WriteUInt16BigEndian(0);
 
             return payload.ToByteArray();
         }

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -16,15 +17,15 @@ namespace I2P.I2CP.Messages
             SessionId = sessid;
         }
 
-        public DestroySessionMessage( BufRef reader )
+        public DestroySessionMessage( I2PBufferCursor reader )
             : base( ProtocolMessageType.DestroySession )
         {
-            SessionId = reader.ReadFlip16();
+            SessionId = reader.ReadUInt16BigEndian();
         }
 
-        public override void Write( BufRefStream dest )
+        public override void Write( ArrayBufferWriter<byte> dest )
         {
-            dest.Write( (BufRefLen)BufUtils.Flip16Bl( SessionId ) );
+            dest.WriteUInt16BigEndian( SessionId );
         }
     }
 }

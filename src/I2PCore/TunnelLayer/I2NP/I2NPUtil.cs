@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -10,9 +10,9 @@ namespace I2PCore.TunnelLayer.I2NP
 {
     public static class I2NpUtil
     {
-        public static I2NpMessage GetMessage( 
-                I2NpMessage.MessageTypes messagetype, 
-                BufRef reader, 
+        public static I2NpMessage GetMessage(
+                I2NpMessage.MessageTypes messagetype,
+                I2PBufferCursor reader,
                 uint? msgid = null )
         {
             I2NpMessage result = null;

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -31,9 +32,9 @@ namespace I2PCore.Data
             Read( src, skipchars );
         }
 
-        public I2PString( BufRef buf )
+        public I2PString( I2PBufferCursor buf )
         {
-            var len = buf.Read8();
+            var len = buf.ReadByte();
             Str = System.Text.Encoding.UTF8.GetString( buf.BaseArray, buf.BaseArrayOffset, len );
             buf.Seek( len );
         }
@@ -51,12 +52,12 @@ namespace I2PCore.Data
             }
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
             var bytes = System.Text.Encoding.UTF8.GetBytes( Str );
             var l = (byte)Math.Min( 255, bytes.Length );
-            dest.Write( l );
-            dest.Write( bytes, 0, l );
+            dest.WriteByte( l );
+            dest.WriteBytes( bytes.AsSpan( 0, l ) );
         }
 
         public void Read( Stream src, char[] skipchars )

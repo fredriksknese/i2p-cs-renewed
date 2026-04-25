@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Text;
 using I2PCore.Utils;
 
@@ -19,15 +20,15 @@ namespace I2PCore.Data
             TargetDate = targetDate.Date;
         }
 
-        private BufLen HashCache;
+        private I2PByteBlock HashCache;
 
-        public BufLen Hash
+        public I2PByteBlock Hash
         {
             get
             {
-                if ( HashCache != null ) return HashCache;
+                if ( HashCache.Length != 0 ) return HashCache;
 
-                HashCache = new BufLen( I2PHashSha256.GetHash( Identity.Hash, new BufLen( GenerateDtBuf( TargetDate ) ) ) );
+                HashCache = new I2PByteBlock( I2PHashSha256.GetHash( Identity.Hash, new I2PByteBlock( GenerateDtBuf( TargetDate ) ) ) );
 
                 return HashCache;
             }
@@ -38,14 +39,14 @@ namespace I2PCore.Data
             return Encoding.ASCII.GetBytes( $"{daynow:yyyyMMdd}" );
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
-            dest.Write( Hash );
+            dest.WriteBlock( Hash );
         }
 
         public override string ToString()
         {
-            var hc = HashCache != null ? FreenetBase64.Encode( new BufLen( HashCache ) ): "<null>";
+            var hc = HashCache.Length != 0 ? FreenetBase64.Encode( new I2PByteBlock( HashCache.ToByteArray() ) ): "<null>";
             return $"I2PRoutingKey: TargetDate {TargetDate}, HashCache: {hc}.";
         }
 
@@ -60,7 +61,7 @@ namespace I2PCore.Data
         /// Not between two routing keys.
         /// </summary>
         /// <returns></returns>
-        public static BufLen operator ^( I2PIdentHash left, I2PRoutingKey right )
+        public static I2PByteBlock operator ^( I2PIdentHash left, I2PRoutingKey right )
         {
             var result = new byte[32];
             var lhash = left.Hash;
@@ -69,7 +70,7 @@ namespace I2PCore.Data
             {
                 result[i] = (byte)( lhash[i] ^ rhash[i] );
             }
-            return new BufLen( result );
+            return new I2PByteBlock( result );
         }
     }
 }

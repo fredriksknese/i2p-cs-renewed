@@ -1,3 +1,4 @@
+using System.Buffers;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -256,21 +257,21 @@ namespace I2PCore.SessionLayer.ECIES
         /// </summary>
         private byte[] BuildMessageWithTags(List<SessionTag> tags, byte[] payload)
         {
-            var stream = new BufRefStream();
+            var stream = new ArrayBufferWriter<byte>();
 
             // Write tag count
-            stream.Write((byte)tags.Count);
+            stream.WriteByte((byte)tags.Count);
 
             // Write tags
             foreach (var tag in tags)
             {
-                stream.Write(tag.ToByteArray());
+                stream.WriteBytes(tag.ToByteArray());
             }
 
             // Write payload
-            stream.Write(payload);
+            stream.WriteBytes(payload);
 
-            return stream.ToByteArray();
+            return stream.WrittenSpan.ToArray();
         }
 
         /// <summary>
@@ -317,13 +318,13 @@ namespace I2PCore.SessionLayer.ECIES
                             {
                                 var hashBytes = new byte[32];
                                 Array.Copy(cloveBlock.Data, 1, hashBytes, 0, 32);
-                                routerHash = new I2PIdentHash(new BufRef(hashBytes));
+                                routerHash = new I2PIdentHash(new I2PBufferCursor(hashBytes));
                             }
                             else if (deliveryType == 3 && cloveBlock.Data.Length >= 37)
                             {
                                 var hashBytes = new byte[32];
                                 Array.Copy(cloveBlock.Data, 1, hashBytes, 0, 32);
-                                routerHash = new I2PIdentHash(new BufRef(hashBytes));
+                                routerHash = new I2PIdentHash(new I2PBufferCursor(hashBytes));
                             }
                         }
                     }

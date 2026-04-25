@@ -189,7 +189,7 @@ namespace I2PCore.Client
                 foreach ( var kvp in Hosts )
                 {
                     var destBytes = kvp.Value.ToByteArray();
-                    var b64 = FreenetBase64.Encode( new BufLen( destBytes ) );
+                    var b64 = FreenetBase64.Encode( new I2PByteBlock( destBytes ) );
                     sb.AppendLine( $"{kvp.Key}={b64}" );
                 }
 
@@ -536,7 +536,7 @@ namespace I2PCore.Client
             try
             {
                 var decoded = FreenetBase64.Decode( b64Data );
-                var buf = new BufRef( decoded );
+                var buf = new I2PBufferCursor( decoded );
                 var dest = new I2PDestination( buf );
                 Hosts[hostname] = dest;
                 return true;

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.IO;
 using I2PCore.Utils;
 
@@ -14,12 +15,12 @@ namespace I2PCore.Data
             get
             {
                 if ( Payload.Length < 4 ) return I2PSigningKey.SigningKeyTypes.Invalid;
-                return (I2PSigningKey.SigningKeyTypes)Payload.PeekFlip16( 0 );
+                return (I2PSigningKey.SigningKeyTypes)Payload.ReadUInt16BigEndian( 0 );
             }
             protected set
             {
                 if ( Payload.Length < 4 ) throw new InvalidDataException( "Cert payload not 4 bytes for Key cert!" );
-                Payload.PokeFlip16( (ushort)value, 0 );
+                Payload.WriteUInt16BigEndian( (ushort)value, 0 );
             }
         }
 
@@ -28,33 +29,33 @@ namespace I2PCore.Data
             get
             {
                 if ( Payload.Length < 4 ) return I2PKeyType.KeyTypes.Invalid;
-                return (I2PSigningKey.KeyTypes)Payload.PeekFlip16( 2 );
+                return (I2PSigningKey.KeyTypes)Payload.ReadUInt16BigEndian( 2 );
             }
             set
             {
                 if ( Payload.Length < 4 ) throw new InvalidDataException( "Cert payload not 4 bytes for Key cert!" );
-                Payload.PokeFlip16( (ushort)value, 2 );
+                Payload.WriteUInt16BigEndian( (ushort)value, 2 );
             }
         }
 
         private int NotImplementedPublicKeyLength;
 
-        public ushort PayloadLength { get { return Data.PeekFlip16( 1 ); } protected set { Data.PokeFlip16( value, 1 ); } }
-        public BufLen Payload { get { return new BufLen( Data, 3, PayloadLength ); } }
-        public BufLen PayloadExtraKeySpace 
+        public ushort PayloadLength { get { return Data.ReadUInt16BigEndian( 1 ); } protected set { Data.WriteUInt16BigEndian( value, 1 ); } }
+        public I2PByteBlock Payload { get { return new I2PByteBlock( Data.BaseArray, Data.BaseArrayOffset + 3, PayloadLength ); } }
+        public I2PByteBlock PayloadExtraKeySpace 
         { 
             get 
             {
-                if ( PayloadLength < 4 ) return null;
-                return new BufLen( Data, 7, PayloadLength - 4 ); 
+                if ( PayloadLength < 4 ) return default;
+                return new I2PByteBlock( Data.BaseArray, Data.BaseArrayOffset + 7, PayloadLength - 4 );
             } 
         }
 
-        private BufLen Data;
+        private I2PByteBlock Data;
 
         public I2PCertificate()
         {
-            Data = new BufLen( new byte[3] );
+            Data = new I2PByteBlock( new byte[3] );
             CType = CertTypes.Null;
         }
 
@@ -86,13 +87,13 @@ namespace I2PCore.Data
             switch ( signkeytype )
             {
                 case I2PSigningKey.SigningKeyTypes.DsaSha1:
-                    Data = new BufLen( new byte[3] );
+                    Data = new I2PByteBlock( new byte[3] );
                     PayloadLength = pllen;
                     CType = CertTypes.Null;
                     break;
 
                 default:
-                    Data = new BufLen( new byte[3 + pllen] );
+                    Data = new I2PByteBlock( new byte[3 + pllen] );
                     PayloadLength = pllen;
                     CType = CertTypes.Key;
                     KeySignatureType = signkeytype;
@@ -102,7 +103,7 @@ namespace I2PCore.Data
 
         public I2PCertificate( I2PPublicKey.KeyTypes keytype, int keylen = -1 )
         {
-            Data = new BufLen( new byte[7] { (byte)CertTypes.Key, 0, 4, 0, 0, 0, 0 } );
+            Data = new I2PByteBlock( new byte[7] { (byte)CertTypes.Key, 0, 4, 0, 0, 0, 0 } );
 
             switch ( keytype )
             {
@@ -125,10 +126,10 @@ namespace I2PCore.Data
             }
         }
 
-        public I2PCertificate( BufRef buf )
+        public I2PCertificate( I2PBufferCursor buf )
         {
-            Data = new BufLen( buf, 0, 3 ); // Get CertLength
-            Data = buf.ReadBufLen( CertLength );
+            Data = new I2PByteBlock( buf.BaseArray, buf.BaseArrayOffset, 3 ); // Get CertLength
+            Data = buf.ReadBlock( CertLength );
         }
 
         public I2PSigningKey.SigningKeyTypes SignatureType
@@ -142,7 +143,7 @@ namespace I2PCore.Data
 
                     case CertTypes.Key:
                         if ( Payload.Length < 4 ) throw new InvalidDataException( "Cert payload not 4 bytes for Key cert!" );
-                        return (I2PSigningKey.SigningKeyTypes)Payload.PeekFlip16( 0 );
+                        return (I2PSigningKey.SigningKeyTypes)Payload.ReadUInt16BigEndian( 0 );
 
                     default:
                         Logging.LogWarning( $"I2PCertificate: Unknown cert type {CType} for SignatureType" );
@@ -162,7 +163,7 @@ namespace I2PCore.Data
 
                     case CertTypes.Key:
                         if ( Payload.Length < 4 ) throw new InvalidDataException( "Cert payload not 4 bytes for Key cert!" );
-                        return (I2PKeyType.KeyTypes)Payload.PeekFlip16( 2 );
+                        return (I2PKeyType.KeyTypes)Payload.ReadUInt16BigEndian( 2 );
 
                     default:
                         Logging.LogWarning( $"I2PCertificate: Unknown cert type {CType} for PublicKeyType" );
@@ -256,9 +257,9 @@ namespace I2PCore.Data
             }
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
-            Data.WriteTo( dest );
+            dest.WriteBlock( Data );
         }
 
         public override string ToString()

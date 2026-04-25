@@ -71,28 +71,28 @@ namespace I2PCore.TransportLayer.NTCP2
         public byte[] ToByteArray()
         {
             // Max unencrypted data in a ChaChaPoly frame is 65535 - 16 = 65519 bytes
-            var result = new BufLen(new byte[65519]);
-            var writer = new BufRefLen(result);
+            var result = new I2PByteBlock(new byte[65519]);
+            var writer = new I2PBufferCursor(result);
 
             // Write blocks
             foreach (var block in Blocks)
             {
-                if (3 + block.Data.Length > writer.Length)
+                if (3 + block.Data.Length > writer.Remaining)
                 {
                     // Block too large for current frame.
                     // Should be handled by splitting/multiple frames.
                     // For now we just log a warning.
-                    I2PCore.Utils.Logging.LogWarning($"NTCP2DataFrame: Block of size {block.Data.Length} cannot fit in remaining {writer.Length} bytes.");
+                    I2PCore.Utils.Logging.LogWarning($"NTCP2DataFrame: Block of size {block.Data.Length} cannot fit in remaining {writer.Remaining} bytes.");
                     break;
                 }
 
-                writer.Write8((byte)block.BlockType);
-                writer.WriteFlip16((ushort)block.Data.Length);
-                writer.Write(block.Data);
+                writer.WriteByte((byte)block.BlockType);
+                writer.WriteUInt16BigEndian((ushort)block.Data.Length);
+                writer.WriteBytes(block.Data);
             }
 
-            var len = writer.BaseArrayOffset - result.BaseArrayOffset;
-            return result.BaseArray.Copy(result.BaseArrayOffset, len);
+            var len = writer.Position;
+            return result.ToByteArray().Copy(0, len);
         }
 
         public byte[] BuildEncryptedFrame(NoiseXK noiseState, NTCP2SipHash sipHash)
@@ -108,23 +108,23 @@ namespace I2PCore.TransportLayer.NTCP2
 
             I2PCore.Utils.Logging.LogDebug($"NTCP2DataFrame: plaintext={payload.Length}B, encrypted={encrypted.Length}B, frameLen={frameLength}, obfLen=0x{obfuscatedLength:X4}");
 
-            var result = new BufLen(new byte[65535 + 2 + 16]); // Max frame + len + MAC
-            var writer = new BufRefLen(result);
+            var result = new I2PByteBlock(new byte[65535 + 2 + 16]); // Max frame + len + MAC
+            var writer = new I2PBufferCursor(result);
 
-            writer.WriteFlip16(obfuscatedLength);
-            writer.Write(encrypted);
+            writer.WriteUInt16BigEndian(obfuscatedLength);
+            writer.WriteBytes(encrypted);
 
-            var len = writer.BaseArrayOffset - result.BaseArrayOffset;
-            return result.BaseArray.Copy(result.BaseArrayOffset, len);
+            var len = writer.Position;
+            return result.ToByteArray().Copy(0, len);
         }
 
-        public static NTCP2DataFrame Parse(BufRef reader, NoiseXK noiseState, ushort frameLength)
+        public static NTCP2DataFrame Parse(I2PBufferCursor reader, NoiseXK noiseState, ushort frameLength)
         {
             var frame = new NTCP2DataFrame();
             frame.Length = frameLength;
 
             // Read encrypted payload
-            var encryptedPayload = reader.Read(frameLength);
+            var encryptedPayload = reader.ReadBytes(frameLength);
 
             // Decrypt
             var decrypted = noiseState.DecryptData(encryptedPayload);
@@ -147,20 +147,20 @@ namespace I2PCore.TransportLayer.NTCP2
         /// </summary>
         private static void ParseAndValidateBlocks(byte[] decrypted, NTCP2DataFrame frame)
         {
-            var blockReader = new BufRef(decrypted);
+            var blockReader = new I2PBufferCursor(decrypted);
             bool paddingSeen = false;
             bool terminationSeen = false;
 
-            while (blockReader.BaseArrayOffset < decrypted.Length)
+            while (blockReader.Remaining > 0)
             {
-                int remaining = decrypted.Length - blockReader.BaseArrayOffset;
+                int remaining = blockReader.Remaining;
                 if (remaining < 3)
                     throw new Exception("Invalid block: insufficient data for header");
 
-                var blockType = (NTCP2BlockType)blockReader.Read8();
-                var blockLen = blockReader.ReadFlip16();
+                var blockType = (NTCP2BlockType)blockReader.ReadByte();
+                var blockLen = blockReader.ReadUInt16BigEndian();
 
-                remaining = decrypted.Length - blockReader.BaseArrayOffset;
+                remaining = blockReader.Remaining;
                 if (remaining < blockLen)
                     throw new Exception($"Invalid block: size {blockLen} exceeds remaining data");
 
@@ -171,7 +171,7 @@ namespace I2PCore.TransportLayer.NTCP2
                 if (terminationSeen && blockType != NTCP2BlockType.Padding)
                     throw new Exception("Only Padding allowed after Termination block");
 
-                var blockData = blockReader.Read(blockLen);
+                var blockData = blockReader.ReadBytes(blockLen);
 
                 frame.Blocks.Add(new NTCP2BlockWrapper
                 {
@@ -203,23 +203,23 @@ namespace I2PCore.TransportLayer.NTCP2
 
         public Ii2NpHeader ParseAsI2NPHeader()
         {
-            var reader = new BufRefLen(Data);
+            var reader = new I2PBufferCursor(Data);
             
             // Standard NTCP2 I2NP block (Type 3) has 9 bytes header:
             // MessageType(1), MessageID(4), Expiration(4)
-            var msgType = (I2NpMessage.MessageTypes)reader.Read8();
-            var msgId = reader.ReadFlip32();
-            var expirationSeconds = reader.ReadFlip32();
+            var msgType = (I2NpMessage.MessageTypes)reader.ReadByte();
+            var msgId = reader.ReadUInt32BigEndian();
+            var expirationSeconds = reader.ReadUInt32BigEndian();
             var expiration = new I2PDate(expirationSeconds * 1000UL); // seconds to ms
 
             // Remaining data is the message payload.
             // I2NP message objects expect 16 bytes of padding BEFORE the payload
             // to store their I2NPHeader16, so we must copy it to a new buffer.
-            var payloadLen = reader.Length;
+            var payloadLen = reader.Remaining;
             var newBuf = new byte[payloadLen + I2NpMessage.I2NpMaxHeaderSize];
             Array.Copy(Data, Data.Length - payloadLen, newBuf, I2NpMessage.I2NpMaxHeaderSize, payloadLen);
             
-            var payload = new BufRefLen(new BufLen(newBuf, I2NpMessage.I2NpMaxHeaderSize, payloadLen));
+            var payload = new I2PBufferCursor(new I2PByteBlock(newBuf, I2NpMessage.I2NpMaxHeaderSize, payloadLen));
 
             // Construct the actual message object from payload
             var msg = I2NpUtil.GetMessage(msgType, payload, msgId);

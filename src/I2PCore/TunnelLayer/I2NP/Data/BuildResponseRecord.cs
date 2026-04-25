@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -14,14 +15,14 @@ namespace I2PCore.TunnelLayer.I2NP.Data
         public const RequestResponse DefaultErrorReply = RequestResponse.Bandwidth;
 
         public int Length { get => 528; }
-        private BufLen Data;
+        private I2PByteBlock Data;
 
-        public BuildResponseRecord( BufRef buf )
+        public BuildResponseRecord( I2PBufferCursor buf )
         {
-            Data = buf.ReadBufLen( Length );
+            Data = buf.ReadBlock( Length );
         }
 
-        public BuildResponseRecord( BufLen src )
+        public BuildResponseRecord( I2PByteBlock src )
         {
             if ( src.Length != Length ) throw new ArgumentException( "BuildResponseRecord needs a 528 byte record!" );
             Data = src;
@@ -46,19 +47,19 @@ namespace I2PCore.TunnelLayer.I2NP.Data
             set { Data[527] = (byte)value; }
         }
 
-        public BufLen Payload
+        public I2PByteBlock Payload
         {
-            get { return new BufLen( Data, 0, Length ); }
+            get { return Data.Slice( 0, Length ); }
         }
 
-        public BufLen Hash
+        public I2PByteBlock Hash
         {
-            get { return new BufLen( Data, 0, 32 ); }
+            get { return Data.Slice( 0, 32 ); }
         }
 
-        public BufLen HashedArea
+        public I2PByteBlock HashedArea
         {
-            get { return new BufLen( Data, 32, 496 ); }
+            get { return Data.Slice( 32, 496 ); }
         }
 
         public bool CheckHash()
@@ -70,7 +71,7 @@ namespace I2PCore.TunnelLayer.I2NP.Data
         public void UpdateHash()
         {
             var hash = I2PHashSha256.GetHash( HashedArea );
-            Hash.Poke( new BufLen( hash ), 0 );
+            Hash.CopyFrom( new ReadOnlySpan<byte>( hash ), 0 );
         }
 
         public bool IsDestination( I2PIdentHash comp )
@@ -78,14 +79,14 @@ namespace I2PCore.TunnelLayer.I2NP.Data
             return comp.Hash16 == Data;
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
-            Data.WriteTo( dest );
+            dest.WriteBlock( Data );
         }
 
         public override string ToString()
         {
-            return Data == null 
+            return Data.Length == 0
                 ? "BuildResponseRecord Content: (null)"
                 : $"BuildResponseRecord Content: Reply: {Reply}";
         }

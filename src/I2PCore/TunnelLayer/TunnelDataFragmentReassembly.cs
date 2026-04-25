@@ -101,7 +101,7 @@ namespace I2PCore.TunnelLayer
             foreach ( var msg in tdmsgs )
             {
                 var hash = I2PHashSha256.GetHash( msg.TunnelDataPayload, msg.Iv );
-                var eq = BufUtils.Equal( msg.Checksum.PeekB( 0, 4 ), 0, hash, 0, 4 );
+                var eq = BufUtils.Equal( msg.Checksum.PeekBytes( 0, 4 ), 0, hash, 0, 4 );
                 if ( !eq )
                 {
                     Logging.LogDebug( $"TunnelDataFragmentReassembly: SHA256 check failed in TunnelData." );
@@ -109,9 +109,9 @@ namespace I2PCore.TunnelLayer
                     continue;
                 }
 
-                var reader = (BufRefLen)msg.TunnelDataPayload;
+                var reader = new I2PBufferCursor( msg.TunnelDataPayload );
 
-                while ( reader.Length > 0 )
+                while ( reader.Remaining > 0 )
                 {
                     var frag = new TunnelDataFragment( reader );
 
@@ -151,17 +151,18 @@ namespace I2PCore.TunnelLayer
             var lastfound = fragments.Count > 1 && fragments[fragments.Count - 1].LastFragment;
             if ( lastfound && !fragments.Any( f => f == null ) )
             {
-                var s = new BufRefStream();
+                var s = new System.Buffers.ArrayBufferWriter<byte>();
                 for ( int i = 0; i < fragments.Count; ++i )
                 {
-                    s.Write( fragments[i].Payload );
+                    var pl = fragments[i].Payload;
+                    s.WriteBytes( pl.ReadBytes( pl.Remaining ) );
                 }
-                AddTunnelMessage( result, fragments[0], new BufRefLen( s.ToByteArray() ) );
+                AddTunnelMessage( result, fragments[0], new I2PBufferCursor( s.WrittenSpan.ToArray() ) );
                 MessageFragments.TryRemove( msgid, out _ );
             }
         }
 
-        private static void AddTunnelMessage( List<TunnelMessage> result, TunnelDataFragment initialfragment, BufRefLen buf )
+        private static void AddTunnelMessage( List<TunnelMessage> result, TunnelDataFragment initialfragment, I2PBufferCursor buf )
         {
             switch ( initialfragment.Delivery )
             {
@@ -174,14 +175,14 @@ namespace I2PCore.TunnelLayer
                 case TunnelMessage.DeliveryTypes.Router:
                     result.Add( new TunnelMessageRouter( 
                         I2NpMessage.ReadHeader16( buf ).Message,
-                        new I2PIdentHash( (BufRefLen)initialfragment.ToHash ) ) );
+                        new I2PIdentHash( new I2PBufferCursor( initialfragment.ToHash ) ) ) );
                     break;
 
                 case TunnelMessage.DeliveryTypes.Tunnel:
                     result.Add( 
                         new TunnelMessageTunnel( 
                             I2NpMessage.ReadHeader16( buf ).Message,
-                            new I2PIdentHash( (BufRefLen)initialfragment.ToHash ),
+                            new I2PIdentHash( new I2PBufferCursor( initialfragment.ToHash ) ),
                             initialfragment.Tunnel ) );
                     break;
             }

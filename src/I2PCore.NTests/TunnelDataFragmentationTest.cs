@@ -44,7 +44,7 @@ namespace I2PTests
         [Test]
         public void MakeAndReadFragmentLarge()
         {
-            var arec = new DataMessage( new BufLen( BufUtils.RandomBytes( 2048 ) ) );
+            var arec = new DataMessage( new I2PByteBlock( BufUtils.RandomBytes( 2048 ) ) );
 
             var msg = new TunnelMessageRouter(
                 arec,
@@ -74,7 +74,7 @@ namespace I2PTests
             
             for ( int i = 0; i < 5; ++i )
             {
-                var adatarec = new DataMessage( new BufLen( BufUtils.RandomBytes( 12 ) ) );
+                var adatarec = new DataMessage( new I2PByteBlock( BufUtils.RandomBytes( 12 ) ) );
 
                 var amsg = new TunnelMessageRouter(
                     adatarec,
@@ -100,7 +100,7 @@ namespace I2PTests
             var origmsgs = new List<TunnelMessage>();
             for ( int i = 0; i < 5; ++i )
             {
-                var adatarec = new DataMessage( new BufLen( BufUtils.RandomBytes( 2048 ) ) );
+                var adatarec = new DataMessage( new I2PByteBlock( BufUtils.RandomBytes( 2048 ) ) );
 
                 var amsg = new TunnelMessageRouter(
                     adatarec,
@@ -130,7 +130,7 @@ namespace I2PTests
 
             for ( int i = 0; i < 5; ++i )
             {
-                var adatarec = new DataMessage( new BufLen( BufUtils.RandomBytes( 2048 ) ) );
+                var adatarec = new DataMessage( new I2PByteBlock( BufUtils.RandomBytes( 2048 ) ) );
 
                 var amsg = new TunnelMessageRouter(
                     adatarec,
@@ -177,7 +177,7 @@ namespace I2PTests
                 switch ( BufUtils.RandomInt( 3 ) )
                 {
                     case 0:
-                        var adatarec = new DataMessage( new BufLen( BufUtils.RandomBytes( 2048 ) ) );
+                        var adatarec = new DataMessage( new I2PByteBlock( BufUtils.RandomBytes( 2048 ) ) );
 
                         origmsgs.Add( new TunnelMessageTunnel(
                             adatarec,
@@ -198,7 +198,7 @@ namespace I2PTests
 
                     case 2:
                         var adatarec2 = new DataMessage(
-                            new BufLen(
+                            new I2PByteBlock(
                                 BufUtils.RandomBytes( 2048 + BufUtils.RandomInt( 1024 ) ) ) );
 
                         origmsgs.Add( new TunnelMessageLocal( adatarec2 ) );
@@ -245,7 +245,7 @@ namespace I2PTests
                 {
                     case 0:
                         var adatarec = new DataMessage( 
-                            new BufLen( 
+                            new I2PByteBlock( 
                                 BufUtils.RandomBytes( 2048 + BufUtils.RandomInt( 1024 ) ) ) );
 
                         origmsgs.Add( new TunnelMessageLocal( adatarec ) );
@@ -264,7 +264,7 @@ namespace I2PTests
 
                     case 2:
                         var adatarec2 = new DataMessage( 
-                            new BufLen( 
+                            new I2PByteBlock( 
                                 BufUtils.RandomBytes( 2048 + BufUtils.RandomInt( 1024 ) ) ) );
 
                         origmsgs.Add( new TunnelMessageTunnel( adatarec2,
@@ -280,7 +280,7 @@ namespace I2PTests
             foreach ( var msg in msgs )
             {
                 recvlist.Add( (TunnelDataMessage)I2NpMessage.ReadHeader16( 
-                    new BufRefLen( msg.CreateHeader16.HeaderAndPayload ) ).Message );
+                    new I2PBufferCursor( msg.CreateHeader16.HeaderAndPayload ) ).Message );
             }
 
             var mkmsg = new TunnelDataFragmentReassembly();

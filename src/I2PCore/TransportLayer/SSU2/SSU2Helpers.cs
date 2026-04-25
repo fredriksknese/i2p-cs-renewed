@@ -49,16 +49,16 @@ namespace I2PCore.TransportLayer.SSU2
             {
                 // No fragmentation needed
                 var fragment = new byte[headerSize + staticKeySize + routerInfoBytes.Length + aeadOverhead];
-                var writer = new BufRefLen(fragment);
+                var writer = new I2PBufferCursor(fragment);
 
                 // Write header
-                writer.Write(header.ToByteArray());
+                writer.WriteBytes(header.ToByteArray());
 
                 // Write encrypted static key (Part 1)
-                writer.Write(encryptedStaticKey);
+                writer.WriteBytes(encryptedStaticKey);
 
                 // Write RouterInfo (Part 2 - will be encrypted by caller)
-                writer.Write(routerInfoBytes);
+                writer.WriteBytes(routerInfoBytes);
 
                 fragments.Add(fragment);
             }
@@ -76,7 +76,7 @@ namespace I2PCore.TransportLayer.SSU2
 
                     var fragmentSize = headerSize + (isFirstFragment ? staticKeySize : 0) + chunkSize + aeadOverhead;
                     var fragment = new byte[fragmentSize];
-                    var writer = new BufRefLen(fragment);
+                    var writer = new I2PBufferCursor(fragment);
 
                     // Modify header for fragmentation
                     var fragmentHeader = new SSU2Header
@@ -92,18 +92,18 @@ namespace I2PCore.TransportLayer.SSU2
                     };
 
                     // Write fragment header
-                    writer.Write(fragmentHeader.ToByteArray());
+                    writer.WriteBytes(fragmentHeader.ToByteArray());
 
                     // First fragment includes encrypted static key
                     if (isFirstFragment)
                     {
-                        writer.Write(encryptedStaticKey);
+                        writer.WriteBytes(encryptedStaticKey);
                     }
 
                     // Write RouterInfo chunk
                     var chunk = new byte[chunkSize];
                     Array.Copy(routerInfoBytes, offset, chunk, 0, chunkSize);
-                    writer.Write(chunk);
+                    writer.WriteBytes(chunk);
 
                     fragments.Add(fragment);
 

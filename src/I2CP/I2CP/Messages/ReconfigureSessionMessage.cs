@@ -1,4 +1,5 @@
 ﻿using I2PCore.Data;
+using System.Buffers;
 using I2PCore.Utils;
 
 namespace I2P.I2CP.Messages
@@ -13,15 +14,15 @@ namespace I2P.I2CP.Messages
             Config = cfg;
         }
 
-        public ReconfigureSessionMessage( BufRef reader ) : base( ProtocolMessageType.ReconfigSession )
+        public ReconfigureSessionMessage( I2PBufferCursor reader ) : base( ProtocolMessageType.ReconfigSession )
         {
-            SessionId = reader.ReadFlip16();
+            SessionId = reader.ReadUInt16BigEndian();
             Config = new I2PSessionConfig( reader );
         }
 
-        public override void Write( BufRefStream dest )
+        public override void Write( ArrayBufferWriter<byte> dest )
         {
-            dest.Write( BufUtils.Flip16B( SessionId ) );
+            dest.WriteUInt16BigEndian( SessionId );
             Config.Write( dest );
         }
 

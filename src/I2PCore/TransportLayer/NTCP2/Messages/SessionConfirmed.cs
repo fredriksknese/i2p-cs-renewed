@@ -32,19 +32,19 @@ namespace I2PCore.TransportLayer.NTCP2.Messages
         /// <summary>
         /// Parse SessionConfirmed using NoiseXK state (Bob's side)
         /// </summary>
-        public static SessionConfirmed Parse(BufRef data, int part2Length, NoiseXK noiseState)
+        public static SessionConfirmed Parse(I2PBufferCursor data, int part2Length, NoiseXK noiseState)
         {
             var confirmed = new SessionConfirmed();
 
             // Read part 1: encrypted static key (48 bytes including MAC)
-            var encryptedStatic = data.ReadBufLen(PART1_SIZE).ToByteArray();
+            var encryptedStatic = data.ReadBlock(PART1_SIZE).ToByteArray();
 
             // Decrypt using Noise protocol (k from message 2, nonce = 1)
             // This also validates the static key and updates the handshake hash
             confirmed.StaticKey = noiseState.ProcessMessage3Part1(encryptedStatic);
 
             // Read part 2: encrypted RouterInfo + optional blocks
-            var encryptedPart2 = data.ReadBufLen(part2Length).ToByteArray();
+            var encryptedPart2 = data.ReadBlock(part2Length).ToByteArray();
 
             // Decrypt using Noise protocol (new k from "se" DH, nonce = 0)
             var decryptedPayload = noiseState.ProcessMessage3Part2(encryptedPart2);
@@ -62,20 +62,20 @@ namespace I2PCore.TransportLayer.NTCP2.Messages
         /// </summary>
         private static void ParseBlocks(byte[] payload, SessionConfirmed confirmed)
         {
-            var reader = new BufRef(payload);
+            var reader = new I2PBufferCursor(payload);
             bool routerInfoFound = false;
             bool optionsFound = false;
 
-            while (reader.BaseArrayOffset < payload.Length)
+            while (reader.Remaining > 0)
             {
-                int remaining = payload.Length - reader.BaseArrayOffset;
+                int remaining = reader.Remaining;
                 if (remaining < 3)
                     throw new Exception("Invalid block: not enough data for header");
 
-                byte blockType = reader.Read8();
-                ushort blockSize = reader.ReadFlip16();
+                byte blockType = reader.ReadByte();
+                ushort blockSize = reader.ReadUInt16BigEndian();
 
-                remaining = payload.Length - reader.BaseArrayOffset;
+                remaining = reader.Remaining;
                 if (remaining < blockSize)
                     throw new Exception($"Invalid block: size {blockSize} exceeds remaining data {remaining}");
 
@@ -89,8 +89,8 @@ namespace I2PCore.TransportLayer.NTCP2.Messages
 
                         // Skip flags byte
                         reader.Seek(1);
-                        var riData = reader.ReadBufLen(blockSize - 1);
-                        var riReader = new BufRef(riData.ToByteArray());
+                        var riData = reader.ReadBlock(blockSize - 1);
+                        var riReader = new I2PBufferCursor(riData.ToByteArray());
                         confirmed.RouterInfo = new I2PRouterInfo(riReader, true);
                         routerInfoFound = true;
                         break;
@@ -99,18 +99,18 @@ namespace I2PCore.TransportLayer.NTCP2.Messages
                         if (optionsFound)
                             throw new Exception("Multiple Options blocks not allowed");
 
-                        var optionsData = reader.ReadBufLen(blockSize);
+                        var optionsData = reader.ReadBlock(blockSize);
                         confirmed.Options = new NTCP2OptionsBlock();
-                        confirmed.Options.Parse(new BufRefLen(optionsData.ToByteArray()));
+                        confirmed.Options.Parse(new I2PBufferCursor(optionsData.ToByteArray()));
                         optionsFound = true;
                         break;
 
                     case 254: // Padding block (must be last)
-                        var paddingData = reader.ReadBufLen(blockSize);
+                        var paddingData = reader.ReadBlock(blockSize);
                         confirmed.Padding = paddingData.ToByteArray();
 
                         // Padding must be last block
-                        if (reader.BaseArrayOffset < payload.Length)
+                        if (reader.Remaining > 0)
                             throw new Exception("Padding block must be the last block");
                         break;
 
@@ -147,30 +147,30 @@ namespace I2PCore.TransportLayer.NTCP2.Messages
         /// </summary>
         private static byte[] BuildPart2Payload(I2PRouterInfo routerInfo, NTCP2OptionsBlock options, byte[] padding)
         {
-            var result = new BufLen(new byte[8192]);  // Larger buffer for RouterInfo
-            var writer = new BufRefLen(result);
+            var result = new I2PByteBlock(new byte[8192]);  // Larger buffer for RouterInfo
+            var writer = new I2PBufferCursor(result);
 
             // Block 2: RouterInfo (required, must be first)
-            writer.Write8(2);  // block type
+            writer.WriteByte(2);  // block type
             var riBytes = routerInfo.ToByteArray();
-            writer.WriteFlip16((ushort)(riBytes.Length + 1));  // size includes flags
-            writer.Write8(0);  // flags: bit 0 = 0 (local store), bit 1-7 unused
-            writer.Write(riBytes);
+            writer.WriteUInt16BigEndian((ushort)(riBytes.Length + 1));  // size includes flags
+            writer.WriteByte(0);  // flags: bit 0 = 0 (local store), bit 1-7 unused
+            writer.WriteBytes(riBytes);
 
             // Block 1: Options (optional)
             if (options != null)
             {
                 var optionsBytes = options.Serialize();
                 // optionsBytes already includes type and size
-                writer.Write(optionsBytes);
+                writer.WriteBytes(optionsBytes);
             }
 
             // Block 254: Padding (optional, must be last)
             if (padding != null && padding.Length > 0)
             {
-                writer.Write8(254);
-                writer.WriteFlip16((ushort)padding.Length);
-                writer.Write(padding);
+                writer.WriteByte(254);
+                writer.WriteUInt16BigEndian((ushort)padding.Length);
+                writer.WriteBytes(padding);
             }
 
             return result.ToByteArray();
@@ -181,21 +181,21 @@ namespace I2PCore.TransportLayer.NTCP2.Messages
         /// </summary>
         public static void ValidateBlockOrdering(byte[] payload)
         {
-            var reader = new BufRef(payload);
+            var reader = new I2PBufferCursor(payload);
             bool routerInfoSeen = false;
             bool optionsSeen = false;
             bool paddingSeen = false;
 
-            while (reader.BaseArrayOffset < payload.Length)
+            while (reader.Remaining > 0)
             {
-                int remaining = payload.Length - reader.BaseArrayOffset;
+                int remaining = reader.Remaining;
                 if (remaining < 3)
                     throw new Exception("Block ordering validation: insufficient data");
 
-                byte blockType = reader.Read8();
-                ushort blockSize = reader.ReadFlip16();
+                byte blockType = reader.ReadByte();
+                ushort blockSize = reader.ReadUInt16BigEndian();
 
-                remaining = payload.Length - reader.BaseArrayOffset;
+                remaining = reader.Remaining;
                 if (remaining < blockSize)
                     throw new Exception("Block ordering validation: invalid block size");
 
@@ -234,7 +234,7 @@ namespace I2PCore.TransportLayer.NTCP2.Messages
                 reader.Seek(blockSize);
 
                 // If we saw padding, ensure it's the last block
-                if (paddingSeen && reader.BaseArrayOffset < payload.Length)
+                if (paddingSeen && reader.Remaining > 0)
                     throw new Exception("Padding block must be last");
             }
 

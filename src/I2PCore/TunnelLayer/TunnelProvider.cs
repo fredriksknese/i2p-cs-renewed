@@ -83,8 +83,9 @@ namespace I2PCore.TunnelLayer
         {
             // I2NP Garlic payload format: ECIES_garlic(tag(8) + ciphertext)
             // The EgData property correctly handles skipping the legacy 4-byte count if present.
-            var data = garlicmsg.EgData?.ToByteArray();
-            if (data == null || data.Length < 8) return false;
+            var egdata = garlicmsg.EgData;
+            if (egdata.IsEmpty || egdata.Length < 8) return false;
+            var data = egdata.ToByteArray();
 
             // First 8 bytes of ECIES garlic data is the session tag
             var tagValue = BitConverter.ToUInt64(data, 0);
@@ -163,27 +164,27 @@ namespace I2PCore.TunnelLayer
                     // DeliveryInstructions + I2NPMessage (NTCP2 format: type(1) + ID(4) + expiration(4) + payload)
                     try
                     {
-                        var cloveBuf = new BufRefLen(new BufLen(decrypted, offset, blockLen));
+                        var cloveBuf = new I2PBufferCursor(decrypted, offset, blockLen);
                         var di = GarlicCloveDelivery.CreateGarlicCloveDelivery(cloveBuf);
 
                         // ECIES Garlic Message format (fromRawByteArrayNTCP2 in Java):
                         // type(1) + ID(4) + expiration(4) + payload
-                        var msgType = (I2NP.Messages.I2NpMessage.MessageTypes)cloveBuf.Read8();
-                        var msgId = cloveBuf.ReadFlip32();
-                        var expirationSeconds = cloveBuf.ReadFlip32();
+                        var msgType = (I2NP.Messages.I2NpMessage.MessageTypes)cloveBuf.ReadByte();
+                        var msgId = cloveBuf.ReadUInt32BigEndian();
+                        var expirationSeconds = cloveBuf.ReadUInt32BigEndian();
                         var expirationDate = new I2PDate((ulong)expirationSeconds * 1000);
 
                         Logging.LogInformation($"TunnelProvider: Garlic clove: type={msgType}, ID={msgId:X8}, expiration={expirationDate}");
 
-                        if (cloveBuf.Length > 0)
+                        if (cloveBuf.Remaining > 0)
                         {
                             // I2NpMessage needs 16 bytes of header space BEFORE the payload.
                             // Decrypted garlic data doesn't have this space, so we must copy it.
-                            var payloadData = cloveBuf.Read(cloveBuf.Length);
+                            var payloadData = cloveBuf.ReadBytes(cloveBuf.Remaining);
                             var copy = new byte[payloadData.Length + I2NP.Messages.I2NpMessage.I2NpMaxHeaderSize];
                             Array.Copy(payloadData, 0, copy, I2NP.Messages.I2NpMessage.I2NpMaxHeaderSize, payloadData.Length);
                             
-                            var msg = I2NP.I2NpUtil.GetMessage(msgType, new BufRef(copy, I2NP.Messages.I2NpMessage.I2NpMaxHeaderSize), msgId);
+                            var msg = I2NP.I2NpUtil.GetMessage(msgType, new I2PBufferCursor(copy, I2NP.Messages.I2NpMessage.I2NpMaxHeaderSize), msgId);
                             if (msg != null)
                             {
                                 msg.Expiration = expirationDate;
@@ -225,21 +226,21 @@ namespace I2PCore.TunnelLayer
             // Clove format per ECIES spec (readBytesRatchet):
             //   DeliveryInstructions(1 byte for local) + type(1) + msgID(4) + expiration_secs(4) + payload
 
-            var cloveStream = new BufRefStream();
+            var cloveStream = new System.Buffers.ArrayBufferWriter<byte>();
             // DeliveryInstructions: Local (flag byte 0x00, no extra fields)
-            cloveStream.Write( (byte)0 );
+            cloveStream.WriteByte( (byte)0 );
 
             // I2NP message in ECIES format: type(1) + id(4) + expiration_secs(4) + payload
-            cloveStream.Write( (byte)msg.MessageType );
-            cloveStream.Write( BufUtils.Flip32Bl( msg.MessageId ) );
+            cloveStream.WriteByte( (byte)msg.MessageType );
+            cloveStream.WriteUInt32BigEndian( msg.MessageId );
             var expirationSecs = (uint)( DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 60 );
-            cloveStream.Write( BufUtils.Flip32Bl( expirationSecs ) );
-            cloveStream.Write( msg.Payload );
+            cloveStream.WriteUInt32BigEndian( expirationSecs );
+            cloveStream.WriteBlock( msg.Payload );
 
             var blocks = new List<SessionLayer.ECIES.Block>
             {
                 new DateTimeBlock { Timestamp = (uint)( DateTimeOffset.UtcNow.ToUnixTimeSeconds() ) },
-                new GarlicCloveBlock { Data = cloveStream.ToByteArray() },
+                new GarlicCloveBlock { Data = cloveStream.WrittenSpan.ToArray() },
                 new PaddingBlock { Data = BufUtils.RandomBytes( 16 + BufUtils.RandomInt( 32 ) ) }
             };
 
@@ -247,6 +248,7 @@ namespace I2PCore.TunnelLayer
 
             // AEAD encrypt: ChaChaPoly(key, nonce=0, AD=tagBytes, plaintext)
             var tagBytes = BitConverter.GetBytes( BufUtils.Flip64( garlicTag ) );
+            // Note: cloveStream.WrittenSpan used above via ToArray()
             var nonce = new byte[12];
             var encrypted = ChaCha20Poly1305.Encrypt( garlicKey, nonce, plaintext, tagBytes );
 
@@ -448,7 +450,7 @@ namespace I2PCore.TunnelLayer
 
                 // Test with BufLen.Peek extraction (same as ECIESTunnelDecrypt uses)
                 var peekNoise = new byte[202];
-                stbmRecord.Peek( peekNoise, 0, 16, 202 );
+                stbmRecord.Peek( peekNoise, 16, 0, 202 );
                 bool peekPreserved = noiseMessage.SequenceEqual( peekNoise );
                 Logging.LogCritical( $"[SELF-TEST] NoiseN: Peek-extracted noise preserved={peekPreserved}" );
 
@@ -847,15 +849,15 @@ namespace I2PCore.TunnelLayer
                             try
                             {
                                 // Decrypted payload: Block format containing a GarlicCloveBlock
-                                var cloveStream = new BufRefStream();
-                                cloveStream.Write( (byte)0 ); // Delivery instructions: Local
+                                var cloveStream = new System.Buffers.ArrayBufferWriter<byte>();
+                                cloveStream.WriteByte( (byte)0 ); // Delivery instructions: Local
                                 
                                 // I2NP message in NTCP2 format (Type + ID + Expiration + Body)
-                                cloveStream.Write( (byte)tunnelbuild.MessageType );
-                                cloveStream.Write( BufUtils.Flip32Bl( tunnelbuild.MessageId ) );
+                                cloveStream.WriteByte( (byte)tunnelbuild.MessageType );
+                                cloveStream.WriteUInt32BigEndian( tunnelbuild.MessageId );
                                 var expirationSeconds = (uint)Math.Round( ( (DateTime)tunnelbuild.Expiration - I2PDate.RefDate ).TotalSeconds );
-                                cloveStream.Write( BufUtils.Flip32Bl( expirationSeconds ) );
-                                cloveStream.Write( tunnelbuild.Payload );
+                                cloveStream.WriteUInt32BigEndian( expirationSeconds );
+                                cloveStream.WriteBlock( tunnelbuild.Payload );
 
                                 // ECIES Router-to-router Garlic message format (Proposal 144 blocks).
                                 // The SKM.SendMessage will handle wrapping this clove data into standard ECIES blocks 
@@ -863,7 +865,7 @@ namespace I2PCore.TunnelLayer
                                 var garlicPayload = ecies.SendMessage( 
                                     tunnel.Destination, 
                                     x25519pk, 
-                                    cloveStream.ToByteArray() );
+                                    cloveStream.WrittenSpan.ToArray() );
                                 
                                 finalMsg = new GarlicMessage( garlicPayload );
                                 Logging.LogDebug( $"TunnelProvider: Garlic wrapped inbound build request for {tunnel.TunnelDebugTrace} to gateway {tunnel.Destination.Id32Short}" );
@@ -1126,7 +1128,7 @@ namespace I2PCore.TunnelLayer
                     {
                         foreach ( var tunnel in tunnels )
                         {
-                            var innerMsg = I2NpMessage.ReadHeader16( (BufRefLen)tg.GatewayMessage );
+                            var innerMsg = I2NpMessage.ReadHeader16( new I2PBufferCursor( tg.GatewayMessage ) );
                             Logging.LogInformation( $"TunnelProvider: TunnelGateway inner message: {innerMsg.MessageType} via tunnel {tunnel}" );
 
                             // Dispatch inner message based on type:
@@ -1160,7 +1162,7 @@ namespace I2PCore.TunnelLayer
                     {
                         // TunnelGateway tunnel ID 0 = deliver inner message directly to this router.
                         // Java I2P/i2pd use this for ECIES inbound tunnel build replies (replyTunnel=0).
-                        var innerMsg0 = I2NpMessage.ReadHeader16( (BufRefLen)tg.GatewayMessage );
+                        var innerMsg0 = I2NpMessage.ReadHeader16( new I2PBufferCursor( tg.GatewayMessage ) );
                         Logging.LogInformation( $"TunnelProvider: TunnelGateway(0) inner message: {innerMsg0.MessageType}" );
                         HandleIncomingMessage( innerMsg0, null );
                     }
@@ -1413,8 +1415,8 @@ namespace I2PCore.TunnelLayer
                     brrec.NextIdent = request.NextRouterHash;
                     brrec.NextTunnel = request.NextTunnelId;
                     // Write layer/IV keys into the record's data buffer at the correct offsets
-                    brrec.LayerKey.Poke( new BufLen( layerKey ), 0 );
-                    brrec.IvKey.Poke( new BufLen( ivKey ), 0 );
+                    brrec.LayerKey.CopyFrom( new I2PByteBlock( layerKey ), 0 );
+                    brrec.IvKey.CopyFrom( new I2PByteBlock( ivKey ), 0 );
 
                     InboundTunnel tunnel;
                     if ( isGateway )
@@ -1593,7 +1595,7 @@ namespace I2PCore.TunnelLayer
                 var recordcopies = new List<AesEgBuildRequestRecord>();
                 foreach ( var one in decrypt.Records )
                 {
-                    recordcopies.Add( new AesEgBuildRequestRecord( new BufRef( one.Data.Clone() ) ) );
+                    recordcopies.Add( new AesEgBuildRequestRecord( new I2PBufferCursor( one.Data.Clone() ) ) );
                 }
 
                 for ( int i = setup.Hops.Count - 1; i >= 0; --i )
@@ -1611,7 +1613,7 @@ namespace I2PCore.TunnelLayer
                         recordcopies[setup.Hops[j].ReplyProcessing.BuildRequestIndex].Process( cipher );
                     }
 
-                    var newrec = new BuildResponseRecord( new BufRefLen( rec.Data ) );
+                    var newrec = new BuildResponseRecord( rec.Data );
 
                     decrypted.Add( newrec );
 

@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -429,7 +430,7 @@ namespace I2PCore.Client
                 try
                 {
                     var destBytes = FreenetBase64.Decode(base64);
-                    return new I2PDestination(new BufRef(destBytes));
+                    return new I2PDestination(new I2PBufferCursor(destBytes));
                 }
                 catch (Exception ex)
                 {
@@ -494,9 +495,9 @@ namespace I2PCore.Client
                         // Cache the resolved destination in the address book for future lookups
                         try
                         {
-                            var destStream = new BufRefStream();
+                            var destStream = new ArrayBufferWriter<byte>();
                             result.Write(destStream);
-                            var destBase64 = FreenetBase64.Encode(new BufLen(destStream.ToByteArray()));
+                            var destBase64 = FreenetBase64.Encode(new I2PByteBlock(destStream.WrittenSpan.ToArray()));
                             _addressBook[hostname.ToLowerInvariant()] = destBase64;
                             Logging.LogInformation($"HTTPProxy: Cached resolved destination for {hostname}");
                         }

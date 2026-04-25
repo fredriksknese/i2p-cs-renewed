@@ -31,8 +31,8 @@ namespace I2PCore.TunnelLayer
         internal I2PTunnelId ResponseTunnelId;
         internal uint ResponseMessageId;
 
-        private BufLen IvKey;
-        private BufLen LayerKey;
+        private I2PByteBlock IvKey;
+        private I2PByteBlock LayerKey;
 
         internal BandwidthLimiter Limiter;
 
@@ -45,7 +45,7 @@ namespace I2PCore.TunnelLayer
             ResponseTunnelId = new I2PTunnelId( brrec.NextTunnel );
             ResponseMessageId = brrec.SendMessageId;
 
-            NextHop = new I2PIdentHash( new BufRefLen( brrec.NextIdent.Hash.Clone() ) );
+            NextHop = new I2PIdentHash( new I2PBufferCursor( brrec.NextIdent.Hash.Clone() ) );
             IvKey = brrec.IvKey.Clone();
             LayerKey = brrec.LayerKey.Clone();
         }

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -55,25 +56,25 @@ namespace I2P.I2CP.Messages
             ClientNonce = clientnonce;
         }
 
-    public MessageStatusMessage( BufRef reader )
+    public MessageStatusMessage( I2PBufferCursor reader )
             : base( ProtocolMessageType.MessageStatus )
         {
-            SessionId = reader.ReadFlip16();
-            MessageId = reader.ReadFlip32();
-            MessageStatus = (MessageStatatuses)reader.Read8();
-            AvailableMessageSize = reader.ReadFlip32();
-            ClientNonce = reader.ReadFlip32();
+            SessionId = reader.ReadUInt16BigEndian();
+            MessageId = reader.ReadUInt32BigEndian();
+            MessageStatus = (MessageStatatuses)reader.ReadByte();
+            AvailableMessageSize = reader.ReadUInt32BigEndian();
+            ClientNonce = reader.ReadUInt32BigEndian();
         }
 
-        public override void Write( BufRefStream dest )
+        public override void Write( ArrayBufferWriter<byte> dest )
         {
             var header = new byte[15];
-            var writer = new BufRefLen( header );
-            writer.WriteFlip16( SessionId );
-            writer.WriteFlip32( MessageId );
-            writer.Write8( (byte)MessageStatus );
-            writer.WriteFlip32( AvailableMessageSize );
-            writer.WriteFlip32( ClientNonce );
+            var writer = new I2PBufferCursor( header );
+            writer.WriteUInt16BigEndian( SessionId );
+            writer.WriteUInt32BigEndian( MessageId );
+            writer.WriteByte( (byte)MessageStatus );
+            writer.WriteUInt32BigEndian( AvailableMessageSize );
+            writer.WriteUInt32BigEndian( ClientNonce );
             dest.Write( header );
         }
     }

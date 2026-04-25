@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Text;
 using I2PCore.Crypto;
 using I2PCore.TunnelLayer.I2NP.Messages;
@@ -35,7 +36,7 @@ namespace I2PCore.Data
         public ushort ExpiresSeconds { get; set; }
         public EncryptedLeaseSetFlags Flags { get; set; }
         public I2POfflineSignature OfflineSignature { get; set; }
-        public BufLen EncryptedData { get; set; }
+        public I2PByteBlock EncryptedData { get; set; }
         public I2PSignature Signature { get; set; }
 
         // Cached decrypted lease set (if decrypted)
@@ -49,7 +50,7 @@ namespace I2PCore.Data
             I2PDateShort published,
             ushort expiresSeconds,
             EncryptedLeaseSetFlags flags,
-            BufLen encryptedData,
+            I2PByteBlock encryptedData,
             I2PSignature signature,
             I2POfflineSignature offlineSignature = null)
         {
@@ -63,32 +64,32 @@ namespace I2PCore.Data
             Signature = signature;
         }
 
-        private static readonly BufLen FiveBl = BufUtils.To8Bl(5);
+        private static readonly I2PByteBlock FiveBl = BufUtils.To8Bl(5);
 
         /// <summary>
         /// Parse EncryptedLeaseSet from buffer
         /// </summary>
-        public I2PEncryptedLeaseSet(BufRef reader)
+        public I2PEncryptedLeaseSet(I2PBufferCursor reader)
         {
-            var start = new BufRef(reader);
+            var startPos = reader.Position;
 
-            BlindedSigType = (I2PSigningKey.SigningKeyTypes)reader.ReadFlip16();
+            BlindedSigType = (I2PSigningKey.SigningKeyTypes)reader.ReadUInt16BigEndian();
             var blindedCert = new I2PCertificate(BlindedSigType);
             BlindedPublicKey = new I2PSigningPublicKey(reader, blindedCert);
 
             Published = new I2PDateShort(reader);
-            ExpiresSeconds = reader.ReadFlip16();
-            Flags = (EncryptedLeaseSetFlags)reader.ReadFlip16();
+            ExpiresSeconds = reader.ReadUInt16BigEndian();
+            Flags = (EncryptedLeaseSetFlags)reader.ReadUInt16BigEndian();
 
             if (Flags.HasFlag(EncryptedLeaseSetFlags.OfflineKey))
             {
                 OfflineSignature = new I2POfflineSignature(reader, blindedCert);
             }
 
-            var encryptedDataLen = reader.ReadFlip16();
-            EncryptedData = reader.ReadBufLen(encryptedDataLen);
+            var encryptedDataLen = reader.ReadUInt16BigEndian();
+            EncryptedData = reader.ReadBlock(encryptedDataLen);
 
-            var body = new BufLen(start, 0, reader - start);
+            var body = reader.BlockSince( startPos );
             
             var sigCert = OfflineSignature?.TransientPublicKey.Certificate ?? blindedCert;
             Signature = new I2PSignature(reader, sigCert);
@@ -104,21 +105,21 @@ namespace I2PCore.Data
             }
         }
 
-        public void Write(BufRefStream dest)
+        public void Write(IBufferWriter<byte> dest)
         {
-            dest.Write(BufUtils.Flip16Bl((ushort)BlindedSigType));
+            dest.WriteUInt16BigEndian((ushort)BlindedSigType);
             BlindedPublicKey.Write(dest);
             Published.Write(dest);
-            dest.Write(BufUtils.Flip16Bl(ExpiresSeconds));
-            dest.Write(BufUtils.Flip16Bl((ushort)Flags));
+            dest.WriteUInt16BigEndian(ExpiresSeconds);
+            dest.WriteUInt16BigEndian((ushort)Flags);
 
             if (Flags.HasFlag(EncryptedLeaseSetFlags.OfflineKey))
             {
                 OfflineSignature?.Write(dest);
             }
 
-            dest.Write(BufUtils.Flip16Bl((ushort)EncryptedData.Length));
-            dest.Write(EncryptedData);
+            dest.WriteUInt16BigEndian((ushort)EncryptedData.Length);
+            dest.WriteBlock(EncryptedData);
             Signature.Write(dest);
         }
 
@@ -238,7 +239,7 @@ namespace I2PCore.Data
                 byte storeType = innerPlaintext[0];
                 if (storeType == 3 || storeType == 7) // StandardLeaseSet2 or MetaLeaseSet2
                 {
-                    var innerReader = new BufRef(innerPlaintext, 1);
+                    var innerReader = new I2PBufferCursor(innerPlaintext, 1);
                     var ls2 = new I2PLeaseSet2(innerReader);
                     DecryptedLeaseSet = ls2;
                     leaseSet = ls2;
@@ -260,7 +261,7 @@ namespace I2PCore.Data
         /// <summary>
         /// Legacy overload - decryption requires a BlindedPublicKey, not raw key material.
         /// </summary>
-        public bool TryDecrypt(BufLen privateKey, out ILeaseSet leaseSet)
+        public bool TryDecrypt(I2PByteBlock privateKey, out ILeaseSet leaseSet)
         {
             leaseSet = null;
             Logging.LogWarning("I2PEncryptedLeaseSet: Use TryDecrypt(BlindedPublicKey) overload");
@@ -467,15 +468,15 @@ namespace I2PCore.Data
         {
             return $"I2PEncryptedLeaseSet: BlindedKey {BlindedSigType}, " +
                 $"Published {Published}, Expires {Expire - DateTime.UtcNow}, " +
-                $"EncryptedSize {EncryptedData?.Length ?? 0} bytes, " +
+                $"EncryptedSize {EncryptedData.Length} bytes, " +
                 $"Decrypted: {DecryptedLeaseSet != null}";
         }
 
         byte[] ILeaseSet.ToByteArray()
         {
-            var stream = new BufRefStream();
+            var stream = new ArrayBufferWriter<byte>();
             Write(stream);
-            return stream.ToByteArray();
+            return stream.WrittenSpan.ToArray();
         }
     }
 }

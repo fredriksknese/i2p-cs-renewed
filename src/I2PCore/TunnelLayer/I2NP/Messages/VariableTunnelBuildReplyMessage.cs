@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -13,12 +13,12 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
 
         public List<BuildResponseRecord> ResponseRecords;
 
-        public VariableTunnelBuildReplyMessage( BufRef reader )
+        public VariableTunnelBuildReplyMessage( I2PBufferCursor reader )
         {
-            var start = new BufRef( reader );
+            var start = new I2PBufferCursor( reader.BaseArray, reader.BaseArrayOffset );
             ResponseRecords = new List<BuildResponseRecord>();
 
-            byte count = reader.Read8();
+            byte count = reader.ReadByte();
             for ( int i = 0; i < count; ++i ) ResponseRecords.Add( new BuildResponseRecord( reader ) );
             SetBuffer( start, reader );
         }
@@ -31,9 +31,9 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
             MessageId = msgid;
 
             // TODO: Remove mem copy
-            var writer = new BufRefLen( Payload );
-            writer.Write8( (byte)recs.Count() );
-            foreach ( var rec in ResponseRecords ) writer.Write( rec.Payload );
+            var writer = new I2PBufferCursor( Payload );
+            writer.WriteByte( (byte)recs.Count() );
+            foreach ( var rec in ResponseRecords ) writer.WriteBlock( rec.Payload );
         }
 
         public override string ToString()

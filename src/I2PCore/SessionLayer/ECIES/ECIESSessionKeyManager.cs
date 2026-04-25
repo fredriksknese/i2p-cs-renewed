@@ -128,7 +128,7 @@ namespace I2PCore.SessionLayer.ECIES
 
                 using var sha = SHA256.Create();
                 var hashBytes = sha.ComputeHash( remoteStaticKey );
-                var remoteHash = new I2PIdentHash( new BufRef( hashBytes ) );
+                var remoteHash = new I2PIdentHash( new I2PBufferCursor( hashBytes ) );
 
                 var session = _inboundSessions.GetOrAdd( remoteHash, _ =>
                 {
@@ -152,7 +152,7 @@ namespace I2PCore.SessionLayer.ECIES
 
                 using var sha = SHA256.Create();
                 var hashBytes = sha.ComputeHash( remoteStaticKey );
-                var remoteHash = new I2PIdentHash( new BufRef( hashBytes ) );
+                var remoteHash = new I2PIdentHash( new I2PBufferCursor( hashBytes ) );
 
                 var session = _inboundSessions.GetOrAdd( remoteHash, _ =>
                 {
@@ -336,7 +336,7 @@ namespace I2PCore.SessionLayer.ECIES
                 // Create hash from remote static key
                 using var sha = SHA256.Create();
                 var hashBytes = sha.ComputeHash(remoteStaticKey);
-                var remoteHash = new I2PIdentHash(new BufRef(hashBytes));
+                var remoteHash = new I2PIdentHash(new I2PBufferCursor(hashBytes));
 
                 return new ProcessedDestinationMessage
                 {

@@ -278,7 +278,7 @@ namespace I2PCore.Client
         {
             if ( DestinationInfo == null ) return null;
             var destBytes = DestinationInfo.Destination.ToByteArray();
-            return FreenetBase64.Encode( new BufLen( destBytes ) );
+            return FreenetBase64.Encode( new I2PByteBlock( destBytes ) );
         }
     }
 
@@ -873,7 +873,7 @@ namespace I2PCore.Client
                 var ri = NetDb.Inst[hash];
                 if ( ri != null )
                 {
-                    var destB64 = FreenetBase64.Encode( new BufLen( ri.Identity.ToByteArray() ) );
+                    var destB64 = FreenetBase64.Encode( new I2PByteBlock( ri.Identity.ToByteArray() ) );
                     await Reply( $"OK {destB64}" );
                     return;
                 }
@@ -900,7 +900,7 @@ namespace I2PCore.Client
                 var ri = NetDb.Inst[hash];
                 if ( ri != null )
                 {
-                    var destB64 = FreenetBase64.Encode( new BufLen( ri.Identity.ToByteArray() ) );
+                    var destB64 = FreenetBase64.Encode( new I2PByteBlock( ri.Identity.ToByteArray() ) );
                     await Reply( $"OK {destB64}" );
                     return;
                 }

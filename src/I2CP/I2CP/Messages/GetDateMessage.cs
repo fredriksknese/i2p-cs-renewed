@@ -1,4 +1,5 @@
 ﻿using I2PCore.Data;
+using System.Buffers;
 using I2PCore.Utils;
 
 namespace I2P.I2CP.Messages
@@ -15,19 +16,19 @@ namespace I2P.I2CP.Messages
             Mapping = map;
         }
 
-        public GetDateMessage( BufRefLen reader )
+        public GetDateMessage( I2PBufferCursor reader )
             : base( ProtocolMessageType.GetDate )
         {
             Version = new I2PString( reader );
 
             // As of release 0.9.11, the authentication [Mapping] may be included, with the keys i2cp.username and i2cp.password.
-            if ( reader.Length > 0 )
+            if ( reader.Remaining > 0 )
             {
                 Mapping = new I2PMapping( reader );
             }
         }
 
-        public override void Write( BufRefStream dest )
+        public override void Write( ArrayBufferWriter<byte> dest )
         {
             Version.Write( dest );
 

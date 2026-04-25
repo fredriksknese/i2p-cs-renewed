@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -11,48 +12,48 @@ namespace I2PCore.TunnelLayer.I2NP.Data
     {
         public const int Length = 222;
 
-        public BufLen Data;
+        public I2PByteBlock Data;
 
         private uint ReducedHash;
 
         public BuildRequestRecord()
         {
-            Data = new BufLen( new byte[Length] );
+            Data = new I2PByteBlock( new byte[Length] );
             ReducedHash = CreateReducedHash();
         }
 
-        public BuildRequestRecord( BufRef buf )
+        public BuildRequestRecord( I2PBufferCursor buf )
         {
-            Data = buf.ReadBufLen( Length );
+            Data = buf.ReadBlock( Length );
             ReducedHash = CreateReducedHash();
         }
 
-        public I2PTunnelId ReceiveTunnel { get { return new I2PTunnelId( Data.PeekFlip32( 0 ) ); } set { Data.PokeFlip32( value, 0 ); } }
-        public I2PIdentHash OurIdent { get { return new I2PIdentHash( new BufRefLen( Data, 4, 32 ) ); } set { Data.Poke( value.Hash, 4, 32 ); } }
-        public I2PTunnelId NextTunnel { get { return new I2PTunnelId( Data.PeekFlip32( 36 ) ); } set { Data.PokeFlip32( value, 36 ); } }
-        public I2PIdentHash NextIdent { get { return new I2PIdentHash( new BufRefLen( Data, 40, 32 ) ); } set { Data.Poke( value.Hash, 40 ); } }
-        public BufLen LayerKey { get { return new BufLen( Data, 72, 32 ); } }
-        public BufLen IvKey { get { return new BufLen( Data, 104, 32 ); } }
-        public I2PSessionKey ReplyKey { get { return new I2PSessionKey( new BufRefLen( Data, 136, 32 ) ); } set { Data.Poke( value.Key, 136 ); } }
-        public BufLen ReplyKeyBuf { get { return new BufLen( Data, 136, 32 ); } }
-        public BufLen ReplyIv { get { return new BufLen( Data, 168, 16 ); } }
-        public byte Flag { get { return Data.Peek8( 184 ); } set { Data.Poke8( value, 184 ); } }
+        public I2PTunnelId ReceiveTunnel { get { return new I2PTunnelId( Data.ReadUInt32BigEndian( 0 ) ); } set { Data.WriteUInt32BigEndian( value, 0 ); } }
+        public I2PIdentHash OurIdent { get { return new I2PIdentHash( new I2PBufferCursor( Data.BaseArray, Data.BaseArrayOffset + 4, 32 ) ); } set { Data.CopyFrom( value.Hash, 4 ); } }
+        public I2PTunnelId NextTunnel { get { return new I2PTunnelId( Data.ReadUInt32BigEndian( 36 ) ); } set { Data.WriteUInt32BigEndian( value, 36 ); } }
+        public I2PIdentHash NextIdent { get { return new I2PIdentHash( new I2PBufferCursor( Data.BaseArray, Data.BaseArrayOffset + 40, 32 ) ); } set { Data.CopyFrom( value.Hash, 40 ); } }
+        public I2PByteBlock LayerKey { get { return Data.Slice( 72, 32 ); } }
+        public I2PByteBlock IvKey { get { return Data.Slice( 104, 32 ); } }
+        public I2PSessionKey ReplyKey { get { return new I2PSessionKey( new I2PBufferCursor( Data.BaseArray, Data.BaseArrayOffset + 136, 32 ) ); } set { Data.CopyFrom( value.Key, 136 ); } }
+        public I2PByteBlock ReplyKeyBuf { get { return Data.Slice( 136, 32 ); } }
+        public I2PByteBlock ReplyIv { get { return Data.Slice( 168, 16 ); } }
+        public byte Flag { get { return Data.ReadByte( 184 ); } set { Data.WriteByte( value, 184 ); } }
 
-        public uint RequestTimeVal { get { return Data.PeekFlip32( 185 ); } set { Data.PokeFlip32( value, 185 ); } }
-        public DateTime RequestTime 
-        { 
-            get 
-            { 
-                return I2PDate.RefDate.AddHours( RequestTimeVal ); 
-            } 
-            set 
-            { 
+        public uint RequestTimeVal { get { return Data.ReadUInt32BigEndian( 185 ); } set { Data.WriteUInt32BigEndian( value, 185 ); } }
+        public DateTime RequestTime
+        {
+            get
+            {
+                return I2PDate.RefDate.AddHours( RequestTimeVal );
+            }
+            set
+            {
                 RequestTimeVal = (uint)Math.Truncate( ( value - I2PDate.RefDate ).TotalHours );
-            } 
+            }
         }
 
-        public uint SendMessageId { get { return Data.PeekFlip32( 189 ); } set { Data.PokeFlip32( value, 189 ); } }
-        public BufLen Padding { get { return new BufLen( Data, 193, 29 ); } }
+        public uint SendMessageId { get { return Data.ReadUInt32BigEndian( 189 ); } set { Data.WriteUInt32BigEndian( value, 189 ); } }
+        public I2PByteBlock Padding { get { return Data.Slice( 193, 29 ); } }
 
         /// <summary>
         /// Is inbound gateway.
@@ -138,9 +139,9 @@ namespace I2PCore.TunnelLayer.I2NP.Data
             return (uint)Data.GetHashCode();
         }
 
-        void I2PType.Write( BufRefStream dest )
+        void I2PType.Write( IBufferWriter<byte> dest )
         {
-            Data.WriteTo( dest );
+            dest.WriteBlock( Data );
         }
     }
 }

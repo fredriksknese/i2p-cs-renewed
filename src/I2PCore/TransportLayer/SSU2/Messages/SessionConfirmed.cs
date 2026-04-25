@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.IO;
 using I2PCore.Data;
 using I2PCore.Utils;
@@ -40,7 +41,7 @@ namespace I2PCore.TransportLayer.SSU2.Messages
             };
         }
 
-        public static SessionConfirmed Parse(BufRef data)
+        public static SessionConfirmed Parse(I2PBufferCursor data)
         {
             var confirmed = new SessionConfirmed();
 
@@ -48,28 +49,28 @@ namespace I2PCore.TransportLayer.SSU2.Messages
             confirmed.Header = SSU2Header.ParseShortHeader(data);
 
             // Read encrypted static key frame (48 bytes: 32 key + 16 MAC)
-            confirmed.EncryptedStaticKey = data.ReadBufLen(48).ToByteArray();
+            confirmed.EncryptedStaticKey = data.ReadBlock(48).ToByteArray();
 
             // Read encrypted payload frame (rest of packet)
-            var remaining = data.BaseArray.Length - data.BaseArrayOffset;
-            confirmed.EncryptedPayload = data.ReadBufLen(remaining).ToByteArray();
+            var remaining = data.Remaining;
+            confirmed.EncryptedPayload = data.ReadBlock(remaining).ToByteArray();
 
             return confirmed;
         }
 
         public byte[] ToByteArray(byte[] encryptedPart1, byte[] encryptedPart2)
         {
-            var result = new BufLen(new byte[4096]);
-            var writer = new BufRefLen(result);
+            var result = new I2PByteBlock(new byte[4096]);
+            var writer = new I2PBufferCursor(result);
 
             // Write header
-            writer.Write(Header.ToByteArray());
+            writer.WriteBytes(Header.ToByteArray());
 
             // Write encrypted static key (Part 1 from Noise)
-            writer.Write(encryptedPart1);
+            writer.WriteBytes(encryptedPart1);
 
             // Write encrypted payload (Part 2 from Noise)
-            writer.Write(encryptedPart2);
+            writer.WriteBytes(encryptedPart2);
 
             return result.ToByteArray();
         }
@@ -77,16 +78,16 @@ namespace I2PCore.TransportLayer.SSU2.Messages
         public byte[] BuildPart2Payload()
         {
             // Build Part 2 payload: RouterInfo block + optional padding block
-            var result = new BufLen(new byte[4096]);
-            var writer = new BufRefLen(result);
+            var result = new I2PByteBlock(new byte[4096]);
+            var writer = new I2PBufferCursor(result);
 
             // Write RouterInfo block (SSU2 spec lines 2697-2777)
             if (RouterInfo != null)
             {
                 // Serialize RouterInfo
-                var riStream = new BufRefStream();
+                var riStream = new ArrayBufferWriter<byte>();
                 RouterInfo.Write(riStream);
-                var riBytes = riStream.ToArray();
+                var riBytes = riStream.WrittenSpan.ToArray();
 
                 // Try gzip compression if it would save space (spec lines 2741-2750)
                 // Compression recommended if it allows fitting in single packet
@@ -97,7 +98,7 @@ namespace I2PCore.TransportLayer.SSU2.Messages
                 {
                     try
                     {
-                        var compressedBuf = LzUtils.BcgZipCompressNew(new BufLen(riBytes));
+                        var compressedBuf = LzUtils.BcgZipCompressNew(new I2PByteBlock(riBytes));
                         var compressed = compressedBuf.ToByteArray();
                         if (compressed.Length < riBytes.Length)
                         {
@@ -118,19 +119,19 @@ namespace I2PCore.TransportLayer.SSU2.Messages
                 // - Flags (1 byte): bit 0 = flood, bit 1 = gzipped
                 // - Frag (1 byte): always 0x01 (fragment 0, total 1)
 
-                writer.Write8(2);  // Block type = RouterInfo
-                writer.WriteFlip16((ushort)(2 + finalRiBytes.Length));  // Size = 2 + RI data
-                writer.Write8(flags);  // Flags: bit 1 = gzipped if compressed
-                writer.Write8(0x01);  // Frag: 0x01 = fragment 0 of 1
-                writer.Write(finalRiBytes);  // RouterInfo data (compressed or not)
+                writer.WriteByte(2);  // Block type = RouterInfo
+                writer.WriteUInt16BigEndian((ushort)(2 + finalRiBytes.Length));  // Size = 2 + RI data
+                writer.WriteByte(flags);  // Flags: bit 1 = gzipped if compressed
+                writer.WriteByte(0x01);  // Frag: 0x01 = fragment 0 of 1
+                writer.WriteBytes(finalRiBytes);  // RouterInfo data (compressed or not)
             }
 
             // Add padding block if specified (SSU2 spec lines 2650-2664)
             if (Padding != null && Padding.Length > 0)
             {
-                writer.Write8(254);  // Block type = Padding
-                writer.WriteFlip16((ushort)Padding.Length);
-                writer.Write(Padding);
+                writer.WriteByte(254);  // Block type = Padding
+                writer.WriteUInt16BigEndian((ushort)Padding.Length);
+                writer.WriteBytes(Padding);
             }
 
             return result.ToByteArray();
@@ -139,19 +140,19 @@ namespace I2PCore.TransportLayer.SSU2.Messages
         public void ParsePart2Payload(byte[] payload)
         {
             // Parse decrypted Part 2 payload - contains blocks
-            var reader = new BufRef(payload);
+            var reader = new I2PBufferCursor(payload);
 
-            while (reader.BaseArrayOffset < payload.Length)
+            while (reader.Remaining > 0)
             {
-                int remaining = payload.Length - reader.BaseArrayOffset;
+                int remaining = reader.Remaining;
                 if (remaining < 3)
                 {
                     // Not enough data for block header
                     break;
                 }
 
-                byte blockType = reader.Read8();
-                ushort blockSize = reader.ReadFlip16();
+                byte blockType = reader.ReadByte();
+                ushort blockSize = reader.ReadUInt16BigEndian();
 
                 if (blockSize > remaining - 3)
                 {
@@ -164,11 +165,11 @@ namespace I2PCore.TransportLayer.SSU2.Messages
                         try
                         {
                             // Parse flags and frag
-                            byte flags = reader.Read8();
-                            byte frag = reader.Read8();
+                            byte flags = reader.ReadByte();
+                            byte frag = reader.ReadByte();
 
                             // Read RouterInfo data (blockSize - 2 for flags/frag)
-                            var riData = reader.ReadBufLen(blockSize - 2);
+                            var riData = reader.ReadBlock(blockSize - 2);
 
                             // Check if gzipped (flag bit 1)
                             bool isGzipped = (flags & 0x02) != 0;
@@ -177,16 +178,16 @@ namespace I2PCore.TransportLayer.SSU2.Messages
                             {
                                 // Decompress with gzip (spec lines 2741-2750)
                                 var compressedData = riData.ToByteArray();
-                                var decompressedData = LzUtils.BcgZipDecompressNew(new BufLen(compressedData));
+                                var decompressedData = LzUtils.BcgZipDecompressNew(new I2PByteBlock(compressedData));
 
                                 // Parse decompressed RouterInfo
-                                var riReader = new BufRef(decompressedData);
+                                var riReader = new I2PBufferCursor(decompressedData);
                                 RouterInfo = new I2PRouterInfo(riReader, false);
                             }
                             else
                             {
-                                // Convert BufLen to BufRef for I2PRouterInfo constructor
-                                var riReader = new BufRef(riData.ToByteArray());
+                                // Parse RouterInfo from block data
+                                var riReader = new I2PBufferCursor(riData.ToByteArray());
                                 RouterInfo = new I2PRouterInfo(riReader, false);
                             }
                         }
@@ -197,12 +198,12 @@ namespace I2PCore.TransportLayer.SSU2.Messages
                         break;
 
                     case 254:  // Padding block
-                        Padding = reader.ReadBufLen(blockSize).ToByteArray();
+                        Padding = reader.ReadBlock(blockSize).ToByteArray();
                         break;
 
                     default:
                         // Unknown block type - skip
-                        reader.ReadBufLen(blockSize);
+                        reader.ReadBlock(blockSize);
                         Logging.LogDebug($"SessionConfirmed: Unknown block type {blockType}, skipping {blockSize} bytes");
                         break;
                 }

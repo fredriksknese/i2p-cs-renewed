@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -40,16 +41,16 @@ namespace I2PCore.Data
             Data = copy ? src.Data.Copy( 0, src.Data.Length ) : src.Data;
         }
 
-        public I2PRawData( BufRef reader, int size )
+        public I2PRawData( I2PBufferCursor reader, int size )
         {
             Data = new byte[size];
             Array.Copy( reader.BaseArray, reader.BaseArrayOffset, Data, 0, size );
             reader.Seek( size );
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
-            dest.Write( Data );
+            dest.WriteBytes( Data );
         }
 
         public override string ToString()

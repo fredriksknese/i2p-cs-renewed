@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -12,30 +13,30 @@ namespace I2P.I2CP.Messages
     {
         public ushort SessionId;
         public I2PDestination Destination;
-        public BufLen Payload;
+        public I2PByteBlock Payload;
         public uint Nonce;
 
         // Ignored
-        private BufLen Flags;
+        private I2PByteBlock Flags;
         private DateTime Expiration;
 
-        public SendMessageExpiresMessage( BufRefLen reader )
+        public SendMessageExpiresMessage( I2PBufferCursor reader )
             : base( ProtocolMessageType.SendMessageExpires )
         {
-            SessionId = reader.ReadFlip16();
+            SessionId = reader.ReadUInt16BigEndian();
             Destination = new I2PDestination( reader );
-            var len = reader.ReadFlip32();
-            Payload = reader.ReadBufLen( (int)len );
-            Nonce = reader.ReadFlip32();
+            var len = reader.ReadUInt32BigEndian();
+            Payload = reader.ReadBlock( (int)len );
+            Nonce = reader.ReadUInt32BigEndian();
         }
 
-        public override void Write( BufRefStream dest )
+        public override void Write( ArrayBufferWriter<byte> dest )
         {
-            dest.Write( BufUtils.Flip16B( SessionId ) );
+            dest.WriteUInt16BigEndian( SessionId );
             Destination.Write( dest );
-            dest.Write( BufUtils.Flip32B( (uint)Payload.Length ) );
-            dest.Write( Payload );
-            dest.Write( BufUtils.Flip32B( Nonce ) );
+            dest.WriteUInt32BigEndian( (uint)Payload.Length );
+            dest.WriteBlock( Payload );
+            dest.WriteUInt32BigEndian( Nonce );
         }
     }
 }

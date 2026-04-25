@@ -114,7 +114,7 @@ namespace I2PTests
             Assert.AreEqual( SSU2Constants.SHORT_HEADER_SIZE, bytes.Length,
                 "Short header should be 16 bytes" );
 
-            var parsed = SSU2Header.ParseShortHeader( new BufRefLen( bytes ) );
+            var parsed = SSU2Header.ParseShortHeader( new I2PBufferCursor( bytes ) );
             Assert.AreEqual( original.DestinationConnectionId, parsed.DestinationConnectionId );
             Assert.AreEqual( original.PacketNumber, parsed.PacketNumber );
             Assert.AreEqual( original.Type, parsed.Type );
@@ -144,7 +144,7 @@ namespace I2PTests
             Assert.AreEqual( SSU2Constants.LONG_HEADER_SIZE, bytes.Length,
                 "Long header should be 32 bytes" );
 
-            var parsed = SSU2Header.ParseLongHeader( new BufRefLen( bytes ) );
+            var parsed = SSU2Header.ParseLongHeader( new I2PBufferCursor( bytes ) );
             Assert.AreEqual( original.DestinationConnectionId, parsed.DestinationConnectionId );
             Assert.AreEqual( original.PacketNumber, parsed.PacketNumber );
             Assert.AreEqual( original.Type, parsed.Type );
@@ -399,7 +399,7 @@ namespace I2PTests
             Assert.IsNotNull( bytes );
             Assert.IsTrue( bytes.Length > 0 );
 
-            var parsed = SSU2AckBlock.Parse( new BufRef( bytes ) );
+            var parsed = SSU2AckBlock.Parse( new I2PBufferCursor( bytes ) );
             Assert.IsNotNull( parsed );
             Assert.AreEqual( original.AckRanges.Count, parsed.AckRanges.Count,
                 "Parsed ACK block should have same number of ranges" );

@@ -57,34 +57,34 @@ namespace I2PCore.TransportLayer.SSU2.Messages
 
         public bool IsLongHeader { get; set; }
 
-        public static SSU2Header ParseShortHeader(BufRef data)
+        public static SSU2Header ParseShortHeader(I2PBufferCursor data)
         {
             var header = new SSU2Header
             {
                 IsLongHeader = false,
-                DestinationConnectionId = data.ReadFlip64(),
-                PacketNumber = data.ReadFlip32(),  // FIXED: 4 bytes
-                Type = data.Read8(),
+                DestinationConnectionId = data.ReadUInt64BigEndian(),
+                PacketNumber = data.ReadUInt32BigEndian(),  // FIXED: 4 bytes
+                Type = data.ReadByte(),
             };
-            header.Flags0 = data.Read8();
-            header.Flags1 = data.Read8();
-            header.Flags2 = data.Read8();
+            header.Flags0 = data.ReadByte();
+            header.Flags1 = data.ReadByte();
+            header.Flags2 = data.ReadByte();
             return header;
         }
 
-        public static SSU2Header ParseLongHeader(BufRef data)
+        public static SSU2Header ParseLongHeader(I2PBufferCursor data)
         {
             var header = new SSU2Header
             {
                 IsLongHeader = true,
-                DestinationConnectionId = data.ReadFlip64(),
-                PacketNumber = data.ReadFlip32(),  // FIXED: 4 bytes
-                Type = data.Read8(),
-                Version = data.Read8(),
-                NetId = data.Read8(),
-                Flag = data.Read8(),
-                SourceConnectionId = data.ReadFlip64(),
-                Token = data.ReadFlip64()  // FIXED: 8 bytes
+                DestinationConnectionId = data.ReadUInt64BigEndian(),
+                PacketNumber = data.ReadUInt32BigEndian(),  // FIXED: 4 bytes
+                Type = data.ReadByte(),
+                Version = data.ReadByte(),
+                NetId = data.ReadByte(),
+                Flag = data.ReadByte(),
+                SourceConnectionId = data.ReadUInt64BigEndian(),
+                Token = data.ReadUInt64BigEndian()  // FIXED: 8 bytes
             };
             
             return header;
@@ -94,30 +94,30 @@ namespace I2PCore.TransportLayer.SSU2.Messages
         {
             var size = IsLongHeader ? LONG_HEADER_SIZE : SHORT_HEADER_SIZE;
             var result = new byte[size];
-            var writer = new BufRefLen(result);
+            var writer = new I2PBufferCursor(result);
 
-            writer.WriteFlip64(DestinationConnectionId);
-            writer.WriteFlip32(PacketNumber);  // FIXED: 4 bytes
+            writer.WriteUInt64BigEndian(DestinationConnectionId);
+            writer.WriteUInt32BigEndian(PacketNumber);  // FIXED: 4 bytes
 
             if (IsLongHeader)
             {
-                writer.Write8(Type);
-                writer.Write8(Version);
-                writer.Write8(NetId);
-                writer.Write8(Flag);
-                writer.WriteFlip64(SourceConnectionId);
-                writer.WriteFlip64(Token);  // FIXED: 8 bytes
+                writer.WriteByte(Type);
+                writer.WriteByte(Version);
+                writer.WriteByte(NetId);
+                writer.WriteByte(Flag);
+                writer.WriteUInt64BigEndian(SourceConnectionId);
+                writer.WriteUInt64BigEndian(Token);  // FIXED: 8 bytes
             }
             else
             {
-                writer.Write8(Type);
+                writer.WriteByte(Type);
                 // 3 bytes flags/reserved
                 // flags[0] encodes fragment info for SessionConfirmed:
                 //   lower nibble = total number of fragments
                 //   upper nibble = fragment number (0-indexed)
-                writer.Write8(Flags0);
-                writer.Write8(Flags1);
-                writer.Write8(Flags2);
+                writer.WriteByte(Flags0);
+                writer.WriteByte(Flags1);
+                writer.WriteByte(Flags2);
             }
 
             return result;

@@ -165,8 +165,8 @@ namespace I2PCore.TunnelLayer
             var origData = BufUtils.RandomBytes(1008);
 
             // Copy to working buffers
-            var ivBuf = new BufLen((byte[])origIv.Clone());
-            var dataBuf = new BufLen((byte[])origData.Clone());
+            var ivBuf = new I2PByteBlock((byte[])origIv.Clone());
+            var dataBuf = new I2PByteBlock((byte[])origData.Clone());
 
             // Pre-decrypt (gateway side)
             var cipher = new CbcBlockCipher(new AesEngine());

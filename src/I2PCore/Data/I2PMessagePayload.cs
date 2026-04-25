@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -53,13 +54,13 @@ namespace I2PCore.Data
             }
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
-            dest.Write( BufUtils.Flip16B( SessionId ) );
-            dest.Write( BufUtils.Flip32B( MessageId ) );
+            dest.WriteUInt16BigEndian( SessionId );
+            dest.WriteUInt32BigEndian( MessageId );
             if ( Payload != null )
             {
-                dest.Write( Payload );
+                dest.WriteBytes( Payload );
             }
         }
     }

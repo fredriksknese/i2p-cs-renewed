@@ -1,3 +1,4 @@
+using System.Buffers;
 using System;
 using System.IO;
 using System.Linq;
@@ -38,9 +39,9 @@ namespace I2PTests.IntegrationTests.Infrastructure
             var filepath = Path.Combine( subDir, filename );
 
             // Serialize the RouterInfo
-            var brs = new BufRefStream();
+            var brs = new ArrayBufferWriter<byte>();
             ri.Write( brs );
-            File.WriteAllBytes( filepath, brs.ToByteArray() );
+            File.WriteAllBytes( filepath, brs.WrittenSpan.ToArray() );
 
             Logging.LogInformation(
                 $"Exported RouterInfo {ri.Identity.IdentHash.Id32Short:x8} to {filepath}" );
@@ -57,9 +58,9 @@ namespace I2PTests.IntegrationTests.Infrastructure
             if ( !string.IsNullOrEmpty( dir ) )
                 Directory.CreateDirectory( dir );
 
-            var brs = new BufRefStream();
+            var brs = new ArrayBufferWriter<byte>();
             ri.Write( brs );
-            File.WriteAllBytes( filepath, brs.ToByteArray() );
+            File.WriteAllBytes( filepath, brs.WrittenSpan.ToArray() );
 
             Logging.LogInformation(
                 $"Exported RouterInfo {ri.Identity.IdentHash.Id32Short:x8} to {filepath}" );
@@ -76,7 +77,7 @@ namespace I2PTests.IntegrationTests.Infrastructure
                 throw new FileNotFoundException( $"RouterInfo file not found: {filepath}" );
 
             var data = File.ReadAllBytes( filepath );
-            var reader = new BufRefLen( data );
+            var reader = new I2PBufferCursor( data );
             var ri = new I2PRouterInfo( reader, false );
 
             Logging.LogInformation(

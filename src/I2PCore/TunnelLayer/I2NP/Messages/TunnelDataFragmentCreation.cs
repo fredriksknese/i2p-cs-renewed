@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -10,10 +10,10 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
     {
         protected TunnelDataMessage TdInstance;
         protected TunnelMessage SourceMessage;
-        protected BufLen SourceMessageData;
+        protected I2PByteBlock SourceMessageData;
         protected bool Fragmented;
 
-        public TunnelDataFragmentCreation( TunnelDataMessage td, TunnelMessage srcmsg, BufLen tmdata, bool fragmented )
+        public TunnelDataFragmentCreation( TunnelDataMessage td, TunnelMessage srcmsg, I2PByteBlock tmdata, bool fragmented )
         {
             TdInstance = td;
             SourceMessage = srcmsg;
@@ -21,32 +21,32 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
             Fragmented = fragmented;
         }
 
-        public virtual void Append( BufRef writer )
+        public virtual void Append( I2PBufferCursor writer )
         {
             switch ( SourceMessage.Delivery )
             {
                 case TunnelMessage.DeliveryTypes.Local:
-                    writer.Write8( (byte)( (byte)TunnelMessage.DeliveryTypes.Local | ( Fragmented ? 0x08 : 0 ) ) );
-                    if ( Fragmented ) writer.WriteFlip32( SourceMessage.Message.MessageId );
-                    writer.WriteFlip16( (ushort)SourceMessageData.Length );
-                    writer.Write( SourceMessageData );
+                    writer.WriteByte( (byte)( (byte)TunnelMessage.DeliveryTypes.Local | ( Fragmented ? 0x08 : 0 ) ) );
+                    if ( Fragmented ) writer.WriteUInt32BigEndian( SourceMessage.Message.MessageId );
+                    writer.WriteUInt16BigEndian( (ushort)SourceMessageData.Length );
+                    writer.WriteBlock( SourceMessageData );
                     break;
 
                 case TunnelMessage.DeliveryTypes.Router:
-                    writer.Write8( (byte)( (byte)TunnelMessage.DeliveryTypes.Router | ( Fragmented ? 0x08 : 0 ) ) );
-                    writer.Write( ((TunnelMessageRouter)SourceMessage).Destination.Hash );
-                    if ( Fragmented ) writer.WriteFlip32( SourceMessage.Message.MessageId );
-                    writer.WriteFlip16( (ushort)SourceMessageData.Length );
-                    writer.Write( SourceMessageData );
+                    writer.WriteByte( (byte)( (byte)TunnelMessage.DeliveryTypes.Router | ( Fragmented ? 0x08 : 0 ) ) );
+                    writer.WriteBlock( ((TunnelMessageRouter)SourceMessage).Destination.Hash );
+                    if ( Fragmented ) writer.WriteUInt32BigEndian( SourceMessage.Message.MessageId );
+                    writer.WriteUInt16BigEndian( (ushort)SourceMessageData.Length );
+                    writer.WriteBlock( SourceMessageData );
                     break;
 
                 case TunnelMessage.DeliveryTypes.Tunnel:
-                    writer.Write8( (byte)( (byte)TunnelMessage.DeliveryTypes.Tunnel | ( Fragmented ? 0x08 : 0 ) ) );
-                    writer.WriteFlip32( ( (TunnelMessageTunnel)SourceMessage ).Tunnel );
-                    writer.Write( ( (TunnelMessageTunnel)SourceMessage ).Destination.Hash );
-                    if ( Fragmented ) writer.WriteFlip32( SourceMessage.Message.MessageId );
-                    writer.WriteFlip16( (ushort)SourceMessageData.Length );
-                    writer.Write( SourceMessageData );
+                    writer.WriteByte( (byte)( (byte)TunnelMessage.DeliveryTypes.Tunnel | ( Fragmented ? 0x08 : 0 ) ) );
+                    writer.WriteUInt32BigEndian( ( (TunnelMessageTunnel)SourceMessage ).Tunnel );
+                    writer.WriteBlock( ( (TunnelMessageTunnel)SourceMessage ).Destination.Hash );
+                    if ( Fragmented ) writer.WriteUInt32BigEndian( SourceMessage.Message.MessageId );
+                    writer.WriteUInt16BigEndian( (ushort)SourceMessageData.Length );
+                    writer.WriteBlock( SourceMessageData );
                     break;
 
                 default:
@@ -60,19 +60,19 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
     {
         private readonly int FragmentNumber;
         private readonly bool LastFragment;
-        public TunnelDataFragmentFollowOn( TunnelDataMessage td, TunnelMessage srcmsg, BufLen tmdata, int fragnr, bool lastfrag )
+        public TunnelDataFragmentFollowOn( TunnelDataMessage td, TunnelMessage srcmsg, I2PByteBlock tmdata, int fragnr, bool lastfrag )
             : base( td, srcmsg, tmdata, true )
         {
             FragmentNumber = fragnr;
             LastFragment = lastfrag;
         }
 
-        public override void Append( BufRef writer )
+        public override void Append( I2PBufferCursor writer )
         {
-            writer.Write8( (byte)( 0x80 | ( FragmentNumber << 1 ) | ( LastFragment ? 0x01 : 0x00 ) ) );
-            writer.WriteFlip32( SourceMessage.Message.MessageId );
-            writer.WriteFlip16( (ushort)SourceMessageData.Length );
-            writer.Write( SourceMessageData );
+            writer.WriteByte( (byte)( 0x80 | ( FragmentNumber << 1 ) | ( LastFragment ? 0x01 : 0x00 ) ) );
+            writer.WriteUInt32BigEndian( SourceMessage.Message.MessageId );
+            writer.WriteUInt16BigEndian( (ushort)SourceMessageData.Length );
+            writer.WriteBlock( SourceMessageData );
         }
     }
 }

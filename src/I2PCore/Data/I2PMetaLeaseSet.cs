@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using I2PCore.TunnelLayer.I2NP.Messages;
@@ -53,33 +54,33 @@ namespace I2PCore.Data
             PrivateSigningKey = sprivkey;
         }
 
-        private static readonly BufLen SevenBl = BufUtils.To8Bl(7);
+        private static readonly I2PByteBlock SevenBl = BufUtils.To8Bl(7);
 
         /// <summary>
         /// Parse MetaLeaseSet from buffer
         /// </summary>
-        public I2PMetaLeaseSet(BufRef reader)
+        public I2PMetaLeaseSet(I2PBufferCursor reader)
         {
-            var start = new BufRef(reader);
+            var startPos = reader.Position;
 
             Header = new I2PLeaseSet2Header(reader);
             Options = new I2PMapping(reader);
 
-            var leaseCount = reader.Read8();
+            var leaseCount = reader.ReadByte();
             MetaLeases = new List<I2PMetaLease>();
             for (int i = 0; i < leaseCount; ++i)
             {
                 MetaLeases.Add(new I2PMetaLease(reader));
             }
 
-            var revocationCount = reader.Read8();
+            var revocationCount = reader.ReadByte();
             Revocations = new List<I2PIdentHash>();
             for (int i = 0; i < revocationCount; ++i)
             {
                 Revocations.Add(new I2PIdentHash(reader));
             }
 
-            var body = new BufLen(start, 0, reader - start);
+            var body = reader.BlockSince( startPos );
             Signature = new I2PSignature(reader, Header.Destination.Certificate);
 
             // Verify signature
@@ -93,36 +94,36 @@ namespace I2PCore.Data
             }
         }
 
-        public void Write(BufRefStream dest)
+        public void Write(IBufferWriter<byte> dest)
         {
-            var ar = WriteBody().ToByteArray();
+            var ar = WriteBody().WrittenSpan.ToArray();
 
             if (Signature is null)
             {
                 Signature = new I2PSignature(
-                    new BufRefLen(
-                        I2PSignature.DoSign(PrivateSigningKey, SevenBl, new BufLen(ar))),
+                    new I2PBufferCursor(
+                        I2PSignature.DoSign(PrivateSigningKey, SevenBl, new I2PByteBlock(ar))),
                     PrivateSigningKey.Certificate);
             }
 
-            dest.Write(ar);
+            dest.WriteBytes(ar);
             Signature.Write(dest);
         }
 
-        private BufRefStream WriteBody()
+        private ArrayBufferWriter<byte> WriteBody()
         {
-            var lbuf = new BufRefStream();
+            var lbuf = new ArrayBufferWriter<byte>();
 
             Header.Write(lbuf);
             Options.Write(lbuf);
 
-            lbuf.Write((byte)MetaLeases.Count);
+            lbuf.WriteByte((byte)MetaLeases.Count);
             foreach (var lease in MetaLeases)
             {
                 lease.Write(lbuf);
             }
 
-            lbuf.Write((byte)Revocations.Count);
+            lbuf.WriteByte((byte)Revocations.Count);
             foreach (var revocation in Revocations)
             {
                 revocation.Write(lbuf);
@@ -172,9 +173,9 @@ namespace I2PCore.Data
 
         byte[] ILeaseSet.ToByteArray()
         {
-            var stream = new BufRefStream();
+            var stream = new ArrayBufferWriter<byte>();
             Write(stream);
-            return stream.ToByteArray();
+            return stream.WrittenSpan.ToArray();
         }
     }
 }

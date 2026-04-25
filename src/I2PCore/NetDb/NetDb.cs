@@ -1,3 +1,4 @@
+using System.Buffers;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -322,9 +323,9 @@ namespace I2PCore
                 var dumpDir = System.IO.Path.Combine( SessionLayer.RouterContext.RouterPath, "debug" );
                 System.IO.Directory.CreateDirectory( dumpDir );
 
-                var riStream = new BufRefStream();
+                var riStream = new ArrayBufferWriter<byte>();
                 info.Write( riStream );
-                var riBytes = riStream.ToArray();
+                var riBytes = riStream.WrittenSpan.ToArray();
 
                 var hash = info.Identity.IdentHash.Id32Short;
                 var dumpPath = System.IO.Path.Combine( dumpDir, $"peer_routerinfo_{hash}.dat" );
@@ -356,7 +357,7 @@ namespace I2PCore
         public bool AddRouterInfo( Stream s )
         {
             var buf = StreamUtils.Read( s );
-            var ri = new I2PRouterInfo( new BufRef( buf ), false );
+            var ri = new I2PRouterInfo( new I2PBufferCursor( buf ), false );
 
             return AddRouterInfo( ri );
         }

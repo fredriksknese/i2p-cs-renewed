@@ -1,3 +1,4 @@
+using System.Buffers;
 using System;
 using System.Collections.Generic;
 using I2PCore.Crypto;
@@ -118,11 +119,11 @@ namespace I2PCore.SessionLayer.ECIES
         /// </summary>
         public byte[] ToByteArray()
         {
-            var stream = new BufRefStream();
-            stream.Write(EphemeralPublicKey);
-            stream.Write(EncryptedPayload);
-            stream.Write(MAC);
-            return stream.ToByteArray();
+            var stream = new ArrayBufferWriter<byte>();
+            stream.WriteBytes(EphemeralPublicKey);
+            stream.WriteBytes(EncryptedPayload);
+            stream.WriteBytes(MAC);
+            return stream.WrittenSpan.ToArray();
         }
 
         /// <summary>
@@ -130,24 +131,24 @@ namespace I2PCore.SessionLayer.ECIES
         /// </summary>
         private static byte[] BuildMessageData(List<SessionTag> tags, byte[] payload)
         {
-            var stream = new BufRefStream();
+            var stream = new ArrayBufferWriter<byte>();
 
             // Write tag count (1 byte)
-            stream.Write((byte)(tags?.Count ?? 0));
+            stream.WriteByte((byte)(tags?.Count ?? 0));
 
             // Write tags (16 bytes each)
             if (tags != null)
             {
                 foreach (var tag in tags)
                 {
-                    stream.Write(tag.ToByteArray());
+                    stream.WriteBytes(tag.ToByteArray());
                 }
             }
 
             // Write payload
-            stream.Write(payload);
+            stream.WriteBytes(payload);
 
-            return stream.ToByteArray();
+            return stream.WrittenSpan.ToArray();
         }
 
         /// <summary>
@@ -155,22 +156,22 @@ namespace I2PCore.SessionLayer.ECIES
         /// </summary>
         private static (List<SessionTag> tags, byte[] payload) ExtractTagsAndPayload(byte[] data)
         {
-            var reader = new BufRef(data);
+            var reader = new I2PBufferCursor(data);
 
             // Read tag count
-            var tagCount = reader.Read8();
+            var tagCount = reader.ReadByte();
 
             // Read tags
             var tags = new List<SessionTag>();
             for (int i = 0; i < tagCount; i++)
             {
-                var tagBytes = reader.Read(8);
+                var tagBytes = reader.ReadBytes(8);
                 tags.Add(new SessionTag(tagBytes));
             }
 
             // Read remaining payload
             var payloadLength = data.Length - (1 + tagCount * 8);
-            var payload = reader.Read(payloadLength);
+            var payload = reader.ReadBytes(payloadLength);
 
             return (tags, payload);
         }
@@ -275,11 +276,11 @@ namespace I2PCore.SessionLayer.ECIES
         /// </summary>
         public byte[] ToByteArray()
         {
-            var stream = new BufRefStream();
-            stream.Write(Tag.ToByteArray());
-            stream.Write(EncryptedPayload);
-            stream.Write(MAC);
-            return stream.ToByteArray();
+            var stream = new ArrayBufferWriter<byte>();
+            stream.WriteBytes(Tag.ToByteArray());
+            stream.WriteBytes(EncryptedPayload);
+            stream.WriteBytes(MAC);
+            return stream.WrittenSpan.ToArray();
         }
 
         /// <summary>

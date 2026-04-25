@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using I2PCore.Utils;
 using I2PCore.TunnelLayer.I2NP.Messages;
 
@@ -49,32 +50,32 @@ namespace I2PCore.Data
         /// <summary>
         /// Parse MetaLease from buffer
         /// </summary>
-        public I2PMetaLease(BufRef reader)
+        public I2PMetaLease(I2PBufferCursor reader)
         {
             TunnelGw = new I2PIdentHash(reader);
             
             // Read 3 bytes of flags (24 bits)
             uint flagsValue = 0;
-            flagsValue |= (uint)reader.Read8() << 16;
-            flagsValue |= (uint)reader.Read8() << 8;
-            flagsValue |= (uint)reader.Read8();
+            flagsValue |= (uint)reader.ReadByte() << 16;
+            flagsValue |= (uint)reader.ReadByte() << 8;
+            flagsValue |= (uint)reader.ReadByte();
             Flags = (MetaLeaseFlags)flagsValue;
 
-            Cost = reader.Read8();
+            Cost = reader.ReadByte();
             EndDate = new I2PDateShort(reader);
         }
 
-        public void Write(BufRefStream dest)
+        public void Write(IBufferWriter<byte> dest)
         {
             TunnelGw.Write(dest);
             
             // Write 3 bytes of flags
             uint flagsValue = (uint)Flags;
-            dest.Write((byte)((flagsValue >> 16) & 0xFF));
-            dest.Write((byte)((flagsValue >> 8) & 0xFF));
-            dest.Write((byte)(flagsValue & 0xFF));
+            dest.WriteByte((byte)((flagsValue >> 16) & 0xFF));
+            dest.WriteByte((byte)((flagsValue >> 8) & 0xFF));
+            dest.WriteByte((byte)(flagsValue & 0xFF));
 
-            dest.Write(Cost);
+            dest.WriteByte(Cost);
             EndDate.Write(dest);
         }
 

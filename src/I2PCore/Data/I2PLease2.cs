@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using I2PCore.Utils;
 
 namespace I2PCore.Data
@@ -27,7 +28,7 @@ namespace I2PCore.Data
                     + TimeSpan.FromSeconds( DefaultLeaseLifetimeSeconds ) );
         }
 
-        public I2PLease2( BufRef reader )
+        public I2PLease2( I2PBufferCursor reader )
         {
             TunnelGw = new I2PIdentHash( reader );
             TunnelId = new I2PTunnelId( reader );
@@ -35,7 +36,7 @@ namespace I2PCore.Data
             EndDate = new I2PDateShort( reader );
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
             TunnelGw.Write( dest );
             TunnelId.Write( dest );

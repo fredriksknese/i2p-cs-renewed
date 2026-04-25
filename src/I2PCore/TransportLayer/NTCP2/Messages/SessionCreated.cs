@@ -27,24 +27,24 @@ namespace I2PCore.TransportLayer.NTCP2.Messages
         public const int ENCRYPTED_PAYLOAD_SIZE = 32;
         public const int MIN_SIZE = 64;
 
-        public static SessionCreated Parse(BufRef data, byte[] bobRouterHash, byte[] aesState)
+        public static SessionCreated Parse(I2PBufferCursor data, byte[] bobRouterHash, byte[] aesState)
         {
             var created = new SessionCreated();
 
             // Read AES-encrypted Y (using AES state from message 1)
-            var encryptedY = data.ReadBufLen(ENCRYPTED_KEY_SIZE);
+            var encryptedY = data.ReadBlock(ENCRYPTED_KEY_SIZE);
             created.EphemeralKey = DecryptEphemeralKey(encryptedY, bobRouterHash, aesState);
 
             // Read ChaCha20-Poly1305 encrypted payload
-            var encryptedPayload = data.ReadBufLen(ENCRYPTED_PAYLOAD_SIZE);
+            var encryptedPayload = data.ReadBlock(ENCRYPTED_PAYLOAD_SIZE);
             
             // TODO: Decrypt using Noise protocol
             
             // Read padding if present
-            var remaining = data.BaseArray.Length - data.BaseArrayOffset;
+            var remaining = data.Remaining;
             if (remaining > 0)
             {
-                created.Padding = data.ReadBufLen(remaining).ToByteArray();
+                created.Padding = data.ReadBlock(remaining).ToByteArray();
             }
 
             return created;
@@ -52,24 +52,24 @@ namespace I2PCore.TransportLayer.NTCP2.Messages
 
         public byte[] ToByteArray(byte[] bobRouterHash, byte[] aesState)
         {
-            var result = new BufLen(new byte[4096]);
-            var writer = new BufRefLen(result);
+            var result = new I2PByteBlock(new byte[4096]);
+            var writer = new I2PBufferCursor(result);
 
             // Encrypt ephemeral key Y with AES-256-CBC
             var encryptedY = EncryptEphemeralKey(EphemeralKey, bobRouterHash, aesState);
-            writer.Write(encryptedY);
+            writer.WriteBytes(encryptedY);
 
             // Build options block
             var options = BuildOptionsBlock();
             
             // Encrypt options with ChaCha20-Poly1305 (Noise)
             var encryptedOptions = EncryptOptions(options);
-            writer.Write(encryptedOptions);
+            writer.WriteBytes(encryptedOptions);
 
             // Add padding
             if (Padding != null && Padding.Length > 0)
             {
-                writer.Write(Padding);
+                writer.WriteBytes(Padding);
             }
 
             return result.ToByteArray();
@@ -78,13 +78,13 @@ namespace I2PCore.TransportLayer.NTCP2.Messages
         private byte[] BuildOptionsBlock()
         {
             var options = new byte[16];
-            var writer = new BufRefLen(options);
+            var writer = new I2PBufferCursor(options);
 
-            writer.WriteFlip16(0);  // Reserved
-            writer.WriteFlip16(PaddingLength);
-            writer.WriteFlip32(0);  // Reserved
-            writer.WriteFlip32(TimestampB);
-            writer.WriteFlip32(0);  // Reserved
+            writer.WriteUInt16BigEndian(0);  // Reserved
+            writer.WriteUInt16BigEndian(PaddingLength);
+            writer.WriteUInt32BigEndian(0);  // Reserved
+            writer.WriteUInt32BigEndian(TimestampB);
+            writer.WriteUInt32BigEndian(0);  // Reserved
 
             return options;
         }
@@ -96,7 +96,7 @@ namespace I2PCore.TransportLayer.NTCP2.Messages
             return AESObfuscation.Encrypt(key, routerHash, aesState);
         }
 
-        private static byte[] DecryptEphemeralKey(BufLen encryptedKey, byte[] routerHash, byte[] aesState)
+        private static byte[] DecryptEphemeralKey(I2PByteBlock encryptedKey, byte[] routerHash, byte[] aesState)
         {
             // AES-256-CBC decryption
             return AESObfuscation.Decrypt(encryptedKey.ToByteArray(), routerHash, aesState);

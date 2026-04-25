@@ -267,7 +267,7 @@ namespace I2PCore.SessionLayer.Streaming
 
             byte[] signature;
             if (_signingKey != null)
-                signature = I2PSignature.DoSign(_signingKey, new BufLen(toSign));
+                signature = I2PSignature.DoSign(_signingKey, new I2PByteBlock(toSign));
             else
                 signature = new byte[signatureSize];
 

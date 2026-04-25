@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using I2PCore.Data;
 using I2PCore.Utils;
@@ -26,7 +27,7 @@ namespace I2PCore.TransportLayer.NTCP2
     {
         public abstract NTCP2BlockType BlockType { get; }
         public abstract byte[] Serialize();
-        public abstract void Parse(BufRefLen data);
+        public abstract void Parse(I2PBufferCursor data);
     }
 
     /// <summary>
@@ -57,9 +58,9 @@ namespace I2PCore.TransportLayer.NTCP2
             return result;
         }
 
-        public override void Parse(BufRefLen data)
+        public override void Parse(I2PBufferCursor data)
         {
-            Timestamp = data.ReadFlip32();
+            Timestamp = data.ReadUInt32BigEndian();
         }
     }
 
@@ -105,22 +106,22 @@ namespace I2PCore.TransportLayer.NTCP2
             return result;
         }
 
-        public override void Parse(BufRefLen data)
+        public override void Parse(I2PBufferCursor data)
         {
-            if (data.Length < 11)
-                throw new Exception($"Invalid Options block size: {data.Length} (minimum 11 bytes)");
+            if (data.Remaining < 11)
+                throw new Exception($"Invalid Options block size: {data.Remaining} (minimum 11 bytes)");
 
-            if (data.Length == 11)
+            if (data.Remaining == 11)
             {
                 // Likely go-i2p format: Version(1) + PaddingMin(1) + PaddingMax(1) + DummyMin(2) + DummyMax(2) + DelayMin(2) + DelayMax(2)
                 Logging.LogDebug("NTCP2OptionsBlock: Received 11-byte options block (likely go-i2p format)");
-                data.Read8(); // Version
-                TMin = data.Read8();
-                TMax = data.Read8();
-                TDummy = data.ReadFlip16();
-                RDummy = data.ReadFlip16();
-                TDelay = data.ReadFlip16();
-                RDelay = data.ReadFlip16();
+                data.ReadByte(); // Version
+                TMin = data.ReadByte();
+                TMax = data.ReadByte();
+                TDummy = data.ReadUInt16BigEndian();
+                RDummy = data.ReadUInt16BigEndian();
+                TDelay = data.ReadUInt16BigEndian();
+                RDelay = data.ReadUInt16BigEndian();
                 
                 // Set default RMin/RMax (no padding)
                 RMin = 0;
@@ -129,20 +130,20 @@ namespace I2PCore.TransportLayer.NTCP2
             else
             {
                 // NTCP2 spec format (12 bytes): TMin(1), TMax(1), RMin(1), RMax(1), TDummy(2), RDummy(2), TDelay(2), RDelay(2)
-                TMin = data.Read8();
-                TMax = data.Read8();
-                RMin = data.Read8();
-                RMax = data.Read8();
-                TDummy = data.ReadFlip16();
-                RDummy = data.ReadFlip16();
-                TDelay = data.ReadFlip16();
-                RDelay = data.ReadFlip16();
+                TMin = data.ReadByte();
+                TMax = data.ReadByte();
+                RMin = data.ReadByte();
+                RMax = data.ReadByte();
+                TDummy = data.ReadUInt16BigEndian();
+                RDummy = data.ReadUInt16BigEndian();
+                TDelay = data.ReadUInt16BigEndian();
+                RDelay = data.ReadUInt16BigEndian();
             }
 
             // Ignore more_options for now (spec says TBD)
-            if (data.Length > 0)
+            if (data.Remaining > 0)
             {
-                data.ReadBufLen(data.Length);
+                data.ReadBlock(data.Remaining);
             }
         }
     }
@@ -160,9 +161,9 @@ namespace I2PCore.TransportLayer.NTCP2
         public override byte[] Serialize()
         {
             // Serialize RouterInfo
-            var riStream = new BufRefStream();
+            var riStream = new ArrayBufferWriter<byte>();
             RouterInfo.Write(riStream);
-            var riBytes = riStream.ToArray();
+            var riBytes = riStream.WrittenSpan.ToArray();
 
             var result = new byte[1 + riBytes.Length];
             result[0] = Flags;
@@ -171,14 +172,14 @@ namespace I2PCore.TransportLayer.NTCP2
             return result;
         }
 
-        public override void Parse(BufRefLen data)
+        public override void Parse(I2PBufferCursor data)
         {
-            if (data.Length < 1)
-                throw new Exception($"Invalid RouterInfo block size: {data.Length}");
+            if (data.Remaining < 1)
+                throw new Exception($"Invalid RouterInfo block size: {data.Remaining}");
 
-            Flags = data.Read8();
-            var riData = data.ReadBufRef(data.Length - 1);
-            RouterInfo = new I2PRouterInfo(new BufRefLen(riData), false);
+            Flags = data.ReadByte();
+            var riData = data.ReadBlock(data.Remaining - 1);
+            RouterInfo = new I2PRouterInfo(new I2PBufferCursor(riData), false);
         }
     }
 
@@ -208,15 +209,15 @@ namespace I2PCore.TransportLayer.NTCP2
             return result;
         }
 
-        public override void Parse(BufRefLen data)
+        public override void Parse(I2PBufferCursor data)
         {
-            if (data.Length < 9)
-                throw new Exception($"Invalid I2NP block size: {data.Length}");
+            if (data.Remaining < 9)
+                throw new Exception($"Invalid I2NP block size: {data.Remaining}");
 
-            MessageType = data.Read8();
-            MessageId = data.ReadFlip32();
-            Expiration = data.ReadFlip32();
-            Message = data.ReadBufLen(data.Length - 9).ToByteArray();
+            MessageType = data.ReadByte();
+            MessageId = data.ReadUInt32BigEndian();
+            Expiration = data.ReadUInt32BigEndian();
+            Message = data.ReadBlock(data.Remaining - 9).ToByteArray();
         }
     }
 
@@ -250,20 +251,20 @@ namespace I2PCore.TransportLayer.NTCP2
             return result;
         }
 
-        public override void Parse(BufRefLen data)
+        public override void Parse(I2PBufferCursor data)
         {
-            if (data.Length < 9)
-                throw new Exception($"Invalid Termination block size: {data.Length}");
+            if (data.Remaining < 9)
+                throw new Exception($"Invalid Termination block size: {data.Remaining}");
 
             // Valid packets received (8 bytes, big endian)
-            ValidPacketsReceived = data.ReadFlip64();
+            ValidPacketsReceived = data.ReadUInt64BigEndian();
 
             // Reason (1 byte)
-            Reason = (NTCP2TerminationReason)data.Read8();
+            Reason = (NTCP2TerminationReason)data.ReadByte();
 
-            if (data.Length > 0)
+            if (data.Remaining > 0)
             {
-                AdditionalData = data.ReadBufLen(data.Length).ToByteArray();
+                AdditionalData = data.ReadBlock(data.Remaining).ToByteArray();
             }
         }
     }
@@ -312,9 +313,9 @@ namespace I2PCore.TransportLayer.NTCP2
             return result;
         }
 
-        public override void Parse(BufRefLen data)
+        public override void Parse(I2PBufferCursor data)
         {
-            Length = data.Length;
+            Length = data.Remaining;
             data.Seek(Length);  // Skip padding data
         }
     }

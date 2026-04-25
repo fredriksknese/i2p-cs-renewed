@@ -352,8 +352,8 @@ namespace I2PTests.ScaledNetwork
             // We need the SHA-256 hash of the destination to look it up
             var destBytes = I2PCore.Utils.FreenetBase64.Decode( destBase64 );
             var destHash = new I2PIdentHash(
-                new BufRef( new BufLen(
-                    I2PHashSha256.GetHash( destBytes, 0, destBytes.Length ) ) ) );
+                new I2PBufferCursor(
+                    I2PHashSha256.GetHash( destBytes, 0, destBytes.Length ) ) );
 
             Logging.LogInformation( $"Looking up LeaseSet for {destHash.Id32Short}..." );
 
@@ -520,8 +520,8 @@ namespace I2PTests.ScaledNetwork
             // Step 3: Verify the receiver's LeaseSet is discoverable
             var recvDestBytes = I2PCore.Utils.FreenetBase64.Decode( recvDest );
             var recvHash = new I2PIdentHash(
-                new BufRef( new BufLen(
-                    I2PHashSha256.GetHash( recvDestBytes, 0, recvDestBytes.Length ) ) ) );
+                new I2PBufferCursor(
+                    I2PHashSha256.GetHash( recvDestBytes, 0, recvDestBytes.Length ) ) );
 
             bool lsFound = false;
             for ( int i = 0; i < 10; ++i )

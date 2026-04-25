@@ -27,8 +27,8 @@ namespace I2PCore.TunnelLayer
 
         internal I2PTunnelId SendTunnelId;
 
-        private BufLen IvKey;
-        private BufLen LayerKey;
+        private I2PByteBlock IvKey;
+        private I2PByteBlock LayerKey;
 
         public override bool Established { get => true; set => base.Established = value; }
 
@@ -40,7 +40,7 @@ namespace I2PCore.TunnelLayer
             Limiter = new BandwidthLimiter( Bandwidth.SendBandwidth, TunnelSettings.TransitTunnelBitrateLimit );
 
             ReceiveTunnelId = new I2PTunnelId( brrec.ReceiveTunnel );
-            NextHop = new I2PIdentHash( new BufRefLen( brrec.NextIdent.Hash.Clone() ) );
+            NextHop = new I2PIdentHash( new I2PBufferCursor( brrec.NextIdent.Hash.Clone() ) );
             SendTunnelId = new I2PTunnelId( brrec.NextTunnel );
 
             IvKey = brrec.IvKey.Clone();

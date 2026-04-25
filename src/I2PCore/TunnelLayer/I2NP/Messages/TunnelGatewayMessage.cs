@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -12,10 +12,10 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
     {
         public override MessageTypes MessageType { get { return MessageTypes.TunnelGateway; } }
 
-        public TunnelGatewayMessage( BufRef reader )
+        public TunnelGatewayMessage( I2PBufferCursor reader )
         {
-            var start = new BufRef( reader );
-            reader.Seek( 6 + reader.PeekFlip16( 4 ) );
+            var start = new I2PBufferCursor( reader.BaseArray, reader.BaseArrayOffset );
+            reader.Seek( 6 + reader.PeekUInt16BigEndian( 4 ) );
             SetBuffer( start, reader );
         }
 
@@ -27,18 +27,18 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
             TunnelId = outtunnel;
             GatewayMessageLength = (ushort)msg.Length;
             // TODO: Remove mem copy
-            Payload.Poke( msg, 6 );
+            Payload.CopyFrom( msg, 6 );
         }
 
         public uint TunnelId
         {
             get
             {
-                return Payload.PeekFlip32( 0 );
+                return Payload.ReadUInt32BigEndian( 0 );
             }
             set
             {
-                Payload.PokeFlip32( value, 0 );
+                Payload.WriteUInt32BigEndian( value, 0 );
             }
         }
 
@@ -46,19 +46,19 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
         {
             get
             {
-                return Payload.PeekFlip16( 4 );
+                return Payload.ReadUInt16BigEndian( 4 );
             }
             set
             {
-                Payload.PokeFlip16( value, 4 );
+                Payload.WriteUInt16BigEndian( value, 4 );
             }
         }
 
-        public BufLen GatewayMessage
+        public I2PByteBlock GatewayMessage
         {
             get
             {
-                return new BufLen( Payload, 6, GatewayMessageLength );
+                return Payload.Slice( 6, GatewayMessageLength );
             }
         }
 
@@ -66,7 +66,7 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
         {
             get
             {
-                return (I2NpMessage.MessageTypes)GatewayMessage.Peek8( 0 );
+                return (I2NpMessage.MessageTypes)GatewayMessage.ReadByte( 0 );
             }
         }
 

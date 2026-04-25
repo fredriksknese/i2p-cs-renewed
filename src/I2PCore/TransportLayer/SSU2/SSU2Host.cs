@@ -419,7 +419,7 @@ namespace I2PCore.TransportLayer.SSU2
                     return;
                 }
 
-                var reader = new BufRef(packetData);
+                var reader = new I2PBufferCursor(packetData);
                 var header = SSU2Header.ParseLongHeader(reader);
 
                 // Only accept SessionRequest or PeerTest for new incoming packets
@@ -478,7 +478,7 @@ namespace I2PCore.TransportLayer.SSU2
                 SSU2HeaderEncryption.DecryptLongHeaderComplete(decryptedHeader, 0, myIntroKey, myIntroKey);
 
                 // 2. Parse header
-                var header = SSU2Header.ParseLongHeader(new BufRef(decryptedHeader));
+                var header = SSU2Header.ParseLongHeader(new I2PBufferCursor(decryptedHeader));
                 if (header.Type != SSU2Header.TYPE_PEER_TEST)
                 {
                     Logging.LogDebug($"SSU2Host: PeerTest packet decryption failed from {remoteEP} (wrong type)");
@@ -666,8 +666,8 @@ namespace I2PCore.TransportLayer.SSU2
             // caps = capabilities string
             // CRITICAL: Use I2P Base64 encoding (FreenetBase64), not standard .NET Base64!
             // I2P Base64 uses '-' and '~' instead of '+' and '/'
-            addr.Options["s"] = FreenetBase64.Encode(new BufLen(StaticPublicKey));
-            addr.Options["i"] = FreenetBase64.Encode(new BufLen(StaticPublicKey)); // intro key = static key
+            addr.Options["s"] = FreenetBase64.Encode(new I2PByteBlock(StaticPublicKey));
+            addr.Options["i"] = FreenetBase64.Encode(new I2PByteBlock(StaticPublicKey)); // intro key = static key
             addr.Options["v"] = "2";
 
             // If firewalled, include introducers

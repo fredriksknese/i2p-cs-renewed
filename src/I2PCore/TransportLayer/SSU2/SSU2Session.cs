@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Linq;
 using System.Net;
 using I2PCore.Crypto;
@@ -474,7 +475,7 @@ namespace I2PCore.TransportLayer.SSU2
 
         private byte[] BuildRequestPayload()
         {
-            var stream = new BufRefStream();
+            var stream = new ArrayBufferWriter<byte>();
 
             // Timestamp (4 bytes)
             var ts = (uint)DateTime.UtcNow.Subtract(new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
@@ -490,12 +491,12 @@ namespace I2PCore.TransportLayer.SSU2
             if (IsPQSession && LocalKemPublicKey != null)
             {
                 // PQ version byte (1 byte): 3 = ML-KEM-768
-                stream.Write((byte)PQVersion);
+                stream.WriteByte((byte)PQVersion);
                 // ML-KEM-768 encapsulation key (1184 bytes)
                 stream.Write(LocalKemPublicKey);
             }
 
-            return stream.ToByteArray();
+            return stream.WrittenSpan.ToArray();
         }
 
         private byte[] BuildDataPacket(I2NpMessage msg)
@@ -519,12 +520,12 @@ namespace I2PCore.TransportLayer.SSU2
         {
             try
             {
-                var reader = new BufRef(packetData);
+                var reader = new I2PBufferCursor(packetData);
 
                 // Peek at header type
-                var tempReader = new BufRef(reader);
+                var tempReader = new I2PBufferCursor(packetData);
                 tempReader.Seek(16); // Skip to type byte in long header
-                var type = tempReader.Read8();
+                var type = tempReader.ReadByte();
 
                 switch (type)
                 {
@@ -591,7 +592,7 @@ namespace I2PCore.TransportLayer.SSU2
             SSU2HeaderEncryption.DecryptLongHeaderInPacket(packetData, 0, kHeader1, kHeader2);
 
             // Parse header (now decrypted in packetData)
-            var headerReader = new BufRef(packetData);
+            var headerReader = new I2PBufferCursor(packetData);
             var header = SSU2Header.ParseLongHeader(headerReader);
 
             // Validate version and network ID
@@ -645,9 +646,9 @@ namespace I2PCore.TransportLayer.SSU2
             }
 
             // Parse payload
-            var payloadReader = new BufRef(payload);
-            var timestamp = payloadReader.ReadFlip32();
-            var paddingLen = payloadReader.ReadFlip16();
+            var payloadReader = new I2PBufferCursor(payload);
+            var timestamp = payloadReader.ReadUInt32BigEndian();
+            var paddingLen = payloadReader.ReadUInt16BigEndian();
 
             // Validate timestamp (clock skew check)
             var now = (uint)DateTime.UtcNow.Subtract(new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
@@ -664,8 +665,8 @@ namespace I2PCore.TransportLayer.SSU2
             var remainingAfterHeader = payload.Length - 8 - paddingLen;
             if (remainingAfterHeader > 1)
             {
-                var pqReader = new BufRef(payload, 8);
-                var remotePQVersion = pqReader.Read8();
+                var pqReader = new I2PBufferCursor(payload, 8);
+                var remotePQVersion = pqReader.ReadByte();
                 if (remotePQVersion >= 1 && remotePQVersion <= 3)
                 {
                     var kemPubKeyLen = remotePQVersion switch
@@ -676,7 +677,7 @@ namespace I2PCore.TransportLayer.SSU2
 
                     if (kemPubKeyLen > 0 && remainingAfterHeader >= 1 + kemPubKeyLen)
                     {
-                        RemoteKemPublicKey = pqReader.ReadBufLen(kemPubKeyLen).ToByteArray();
+                        RemoteKemPublicKey = pqReader.ReadBlock(kemPubKeyLen).ToByteArray();
                         IsPQSession = true;
                         PQVersion = remotePQVersion;
                         Logging.LogDebug($"{DebugId}: PQ session request with ML-KEM-{remotePQVersion switch { 3 => "768", _ => "?" }}");
@@ -725,7 +726,7 @@ namespace I2PCore.TransportLayer.SSU2
             SSU2HeaderEncryption.DecryptLongHeaderInPacket(packetData, 0, kHeader1, kHeader2);
 
             // Parse header (now decrypted in packetData)
-            var headerReader = new BufRef(packetData);
+            var headerReader = new I2PBufferCursor(packetData);
             var header = SSU2Header.ParseLongHeader(headerReader);
 
             // Validate connection IDs
@@ -763,9 +764,9 @@ namespace I2PCore.TransportLayer.SSU2
             }
 
             // Parse payload
-            var payloadReader = new BufRef(payload);
-            var timestamp = payloadReader.ReadFlip32();
-            var paddingLen = payloadReader.ReadFlip16();
+            var payloadReader = new I2PBufferCursor(payload);
+            var timestamp = payloadReader.ReadUInt32BigEndian();
+            var paddingLen = payloadReader.ReadUInt16BigEndian();
 
             // Validate timestamp (clock skew check)
             var now = (uint)DateTime.UtcNow.Subtract(new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
@@ -778,8 +779,8 @@ namespace I2PCore.TransportLayer.SSU2
             }
 
             // Skip reserved bytes (2 bytes)
-            payloadReader.Read8();
-            payloadReader.Read8();
+            payloadReader.ReadByte();
+            payloadReader.ReadByte();
 
             // Check for PQ KEM ciphertext in remaining payload
             // If we sent a PQ session request, the response should include
@@ -789,8 +790,8 @@ namespace I2PCore.TransportLayer.SSU2
             {
                 // Skip past any blocks to find PQ data
                 // PQ response format: pqVersion(1) + kemCiphertext(1088 for ML-KEM-768)
-                var pqReader = new BufRef(payload, 8);
-                var remotePQVersion = pqReader.Read8();
+                var pqReader = new I2PBufferCursor(payload, 8);
+                var remotePQVersion = pqReader.ReadByte();
                 if (remotePQVersion == PQVersion && remainingPayloadLen >= 1089)
                 {
                     var kemCiphertextLen = PQVersion switch
@@ -801,7 +802,7 @@ namespace I2PCore.TransportLayer.SSU2
 
                     if (kemCiphertextLen > 0)
                     {
-                        var kemCiphertext = pqReader.ReadBufLen(kemCiphertextLen).ToByteArray();
+                        var kemCiphertext = pqReader.ReadBlock(kemCiphertextLen).ToByteArray();
                         var kemSharedSecret = I2PCore.Crypto.MLKEM.MLKEM768.Decapsulate(kemCiphertext, LocalKemSecretKey);
 
                         // Mix KEM shared secret into Noise chaining key for post-quantum security
@@ -815,7 +816,7 @@ namespace I2PCore.TransportLayer.SSU2
             var blocksLen = payload.Length - 8 - paddingLen; // 8 = 4 timestamp + 2 padding len + 2 reserved
             if (blocksLen > 0)
             {
-                var blocksData = new BufRefLen(payloadReader, 0, blocksLen);
+                var blocksData = new I2PBufferCursor(payloadReader.ReadBytes(blocksLen));
                 ParseSessionCreatedBlocks(blocksData);
             }
 
@@ -861,7 +862,7 @@ namespace I2PCore.TransportLayer.SSU2
             Crypto.SSU2HeaderEncryption.DecryptShortHeaderInPacket(packetCopy, 0, kHeader1, kHeader2);
 
             // Parse decrypted short header
-            var headerReader = new BufRef(packetCopy);
+            var headerReader = new I2PBufferCursor(packetCopy);
             var header = SSU2Header.ParseShortHeader(headerReader);
 
             // Validate connection IDs
@@ -1074,7 +1075,7 @@ namespace I2PCore.TransportLayer.SSU2
                     case SSU2BlockType.I2NP:
                     {
                         // Complete I2NP message in single block
-                        var i2npReader = new BufRefLen(block.Data);
+                        var i2npReader = new I2PBufferCursor(block.Data);
                         var header = I2NpMessage.ReadHeader16(i2npReader);
                         DataBlockReceived?.Invoke(this, header);
                         break;
@@ -1084,7 +1085,7 @@ namespace I2PCore.TransportLayer.SSU2
                         var completeMsg = FragmentHandler.HandleFirstFragment(block.Data);
                         if (completeMsg != null)
                         {
-                            var i2npReader = new BufRefLen(completeMsg);
+                            var i2npReader = new I2PBufferCursor(completeMsg);
                             var header = I2NpMessage.ReadHeader16(i2npReader);
                             DataBlockReceived?.Invoke(this, header);
                         }
@@ -1095,7 +1096,7 @@ namespace I2PCore.TransportLayer.SSU2
                         var completeMsg = FragmentHandler.HandleFollowOnFragment(block.Data);
                         if (completeMsg != null)
                         {
-                            var i2npReader = new BufRefLen(completeMsg);
+                            var i2npReader = new I2PBufferCursor(completeMsg);
                             var header = I2NpMessage.ReadHeader16(i2npReader);
                             DataBlockReceived?.Invoke(this, header);
                         }
@@ -1147,7 +1148,7 @@ namespace I2PCore.TransportLayer.SSU2
                         // RouterInfo block received during data phase (peer info update)
                         try
                         {
-                            var riReader = new BufRef(block.Data);
+                            var riReader = new I2PBufferCursor(block.Data);
                             var ri = new I2PRouterInfo(riReader, true);
                             Logging.LogDebug($"{DebugId}: Received RouterInfo block for {ri.Identity.IdentHash}");
                             NetDb.Inst.AddRouterInfo(ri);
@@ -1171,9 +1172,9 @@ namespace I2PCore.TransportLayer.SSU2
                         // Format: 4 bytes expiration (seconds since epoch) + 8 bytes token
                         if (block.Data.Length >= 12)
                         {
-                            var reader2 = new BufRefLen(block.Data);
-                            var tokenExpiry = reader2.ReadFlip32();
-                            var token = reader2.ReadFlip64();
+                            var reader2 = new I2PBufferCursor(block.Data);
+                            var tokenExpiry = reader2.ReadUInt32BigEndian();
+                            var token = reader2.ReadUInt64BigEndian();
                             Logging.LogDebug($"{DebugId}: Received new token, expires {tokenExpiry}");
                         }
                         break;
@@ -1238,12 +1239,12 @@ namespace I2PCore.TransportLayer.SSU2
 
         private (byte[] ephemeralKey, byte[] encryptedPayload) ExtractMessage1Parts(byte[] packetData)
         {
-            var reader = new BufRef(packetData);
+            var reader = new I2PBufferCursor(packetData);
             reader.Seek(32); // Skip long header
 
-            var ephemeralKey = reader.ReadBufLen(32).ToByteArray();
-            var remaining = reader.BaseArray.Length - reader.BaseArrayOffset;
-            var encryptedPayload = reader.ReadBufLen(remaining).ToByteArray();
+            var ephemeralKey = reader.ReadBlock(32).ToByteArray();
+            var remaining = reader.Remaining;
+            var encryptedPayload = reader.ReadBlock(remaining).ToByteArray();
 
             return (ephemeralKey, encryptedPayload);
         }
@@ -1283,11 +1284,11 @@ namespace I2PCore.TransportLayer.SSU2
                 attempts++;
 
                 // Build a fresh payload stream if we are retrying
-                var payloadStream = new BufRefStream();
+                var payloadStream = new ArrayBufferWriter<byte>();
                 var ts = (uint)DateTime.UtcNow.Subtract(new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
-                payloadStream.Write(BufUtils.Flip32B(ts));
-                payloadStream.Write(BufUtils.Flip16B((ushort)0));  // Padding length
-                payloadStream.Write(BufUtils.Flip16B((ushort)0));  // Reserved
+                payloadStream.WriteUInt32BigEndian(ts);
+                payloadStream.WriteUInt16BigEndian((ushort)0);  // Padding length
+                payloadStream.WriteUInt16BigEndian((ushort)0);  // Reserved
 
                 // If PQ session, encapsulate KEM. 
                 // NOTE: We MUST re-encapsulate if we retry the whole message creation, 
@@ -1323,7 +1324,7 @@ namespace I2PCore.TransportLayer.SSU2
 
                         if (kemCiphertext != null && kemSharedSecret != null)
                         {
-                            payloadStream.Write((byte)PQVersion);
+                            payloadStream.WriteByte((byte)PQVersion);
                             payloadStream.Write(kemCiphertext);
 
                             // Mix KEM shared secret into Noise chaining key (Bob side)
@@ -1332,7 +1333,7 @@ namespace I2PCore.TransportLayer.SSU2
                         }
                     }
 
-                    var payload = payloadStream.ToByteArray();
+                    var payload = payloadStream.WrittenSpan.ToArray();
 
                     // Create message 2
                     var (_, encryptedPayload) = NoiseState.CreateMessage2WithHeaderAndCurrentKeys(headerBytes, payload);
@@ -1501,33 +1502,33 @@ namespace I2PCore.TransportLayer.SSU2
             ConnectionEstablished?.Invoke(this, RemoteRouterInfo?.Identity?.IdentHash);
         }
 
-        private void ParseSessionCreatedBlocks(BufRefLen blocksData)
+        private void ParseSessionCreatedBlocks(I2PBufferCursor blocksData)
         {
             // Parse blocks from SessionCreated payload
             // Most important is the Address block which tells us our external IP
             var reader = blocksData;
 
-            while (reader.Length > 0)
+            while (reader.Remaining > 0)
             {
-                if (reader.Length < 3) break; // Need at least type + 2-byte size
+                if (reader.Remaining < 3) break; // Need at least type + 2-byte size
 
-                var blockType = (SSU2BlockType)reader.Read8();
-                var blockSize = reader.ReadFlip16();
+                var blockType = (SSU2BlockType)reader.ReadByte();
+                var blockSize = reader.ReadUInt16BigEndian();
 
-                if (reader.Length < blockSize)
+                if (reader.Remaining < blockSize)
                 {
-                    Logging.LogWarning($"{DebugId}: Invalid block size {blockSize}, remaining {reader.Length}");
+                    Logging.LogWarning($"{DebugId}: Invalid block size {blockSize}, remaining {reader.Remaining}");
                     break;
                 }
 
-                var blockData = reader.ReadBufLen(blockSize);
+                var blockData = reader.ReadBlock(blockSize);
 
                 switch (blockType)
                 {
                     case SSU2BlockType.Address:
                         // Parse Address block - peer is telling us our external IP
                         var addressBlock = new AddressBlock();
-                        addressBlock.Parse(new BufRef(blockData));
+                        addressBlock.Parse(new I2PBufferCursor(blockData));
                         
                         // Report to host for IP detection
                         var ipAddress = new IPAddress(addressBlock.IPAddress);

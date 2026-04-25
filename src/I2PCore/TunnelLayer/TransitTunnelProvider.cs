@@ -190,7 +190,7 @@ namespace I2PCore.TunnelLayer
             I2PIdentHash from )
         {
             // Validate NextHop RouterInfo exists in our NetDb before accepting
-            var nextHop = new I2PIdentHash( new BufRefLen( decrypt.Decrypted.NextIdent.Hash.Clone() ) );
+            var nextHop = new I2PIdentHash( new I2PBufferCursor( decrypt.Decrypted.NextIdent.Hash.Clone() ) );
             if ( !NetDb.Inst.Contains( nextHop ) )
             {
                 Logging.LogDebug( $"HandleGatewayTunnelRequest: Dropping - NextHop {nextHop.Id32Short} not in NetDb" );
@@ -289,7 +289,7 @@ namespace I2PCore.TunnelLayer
             I2PIdentHash from )
         {
             // Validate NextHop RouterInfo exists in our NetDb before accepting
-            var nextHop = new I2PIdentHash( new BufRefLen( decrypt.Decrypted.NextIdent.Hash.Clone() ) );
+            var nextHop = new I2PIdentHash( new I2PBufferCursor( decrypt.Decrypted.NextIdent.Hash.Clone() ) );
             if ( !NetDb.Inst.Contains( nextHop ) )
             {
                 Logging.LogDebug( $"HandleTransitTunnelRequest: Dropping - NextHop {nextHop.Id32Short} not in NetDb" );

@@ -78,7 +78,7 @@ namespace I2PCore.Data
             try
             {
                 // Verify: the family signature signs (familyName + routerIdentHash)
-                var identHash = routerInfo.Identity?.IdentHash?.Hash?.ToByteArray();
+                var identHash = routerInfo.Identity?.IdentHash?.Hash.ToByteArray();
                 if (identHash == null) return false;
 
                 var familyBytes = System.Text.Encoding.UTF8.GetBytes(familyNameStr);

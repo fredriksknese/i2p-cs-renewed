@@ -285,7 +285,7 @@ namespace I2PCore.Client
                     ( identHash, data ) =>
                     {
                         // Wrap raw datagram bytes in an I2NP DataMessage for transport
-                        var msg = new TunnelLayer.I2NP.Messages.DataMessage( new BufRef( data ) );
+                        var msg = new TunnelLayer.I2NP.Messages.DataMessage( new I2PByteBlock( data ) );
                         TransportProvider.Send( identHash, msg );
                     } );
 
@@ -652,7 +652,7 @@ namespace I2PCore.Client
             _boundSessionId = sessionId;
 
             var destBase64 = destInfo.Destination.ToByteArray();
-            var destB64Str = FreenetBase64.Encode( new BufLen( destBase64 ) );
+            var destB64Str = FreenetBase64.Encode( new I2PByteBlock( destBase64 ) );
 
             var privKeyBase64 = destInfo.ToBase64();
 
@@ -859,7 +859,7 @@ namespace I2PCore.Client
             try
             {
                 var destBytes = FreenetBase64.Decode( destBase64 );
-                remoteDest = new I2PDestination( new BufRef( destBytes ) );
+                remoteDest = new I2PDestination( new I2PBufferCursor( destBytes ) );
             }
             catch ( Exception ex )
             {
@@ -1221,7 +1221,7 @@ namespace I2PCore.Client
                 }
 
                 var destBytes = session.Destination.Destination.ToByteArray();
-                var destB64 = FreenetBase64.Encode( new BufLen( destBytes ) );
+                var destB64 = FreenetBase64.Encode( new I2PByteBlock( destBytes ) );
                 await SendReplyAsync( $"NAMING REPLY RESULT=OK NAME=ME VALUE={destB64}" );
                 return;
             }
@@ -1251,7 +1251,7 @@ namespace I2PCore.Client
                         if ( lookupDone.Wait( TimeSpan.FromSeconds( 30 ) ) && foundLs != null )
                         {
                             var destBytes = foundLs.Destination.ToByteArray();
-                            var destB64 = FreenetBase64.Encode( new BufLen( destBytes ) );
+                            var destB64 = FreenetBase64.Encode( new I2PByteBlock( destBytes ) );
                             await SendReplyAsync(
                                 $"NAMING REPLY RESULT=OK NAME={name} VALUE={destB64}" );
                         }
@@ -1323,7 +1323,7 @@ namespace I2PCore.Client
                 return;
             }
 
-            var pubBase64 = FreenetBase64.Encode( new BufLen( destInfo.Destination.ToByteArray() ) );
+            var pubBase64 = FreenetBase64.Encode( new I2PByteBlock( destInfo.Destination.ToByteArray() ) );
             var privBase64 = destInfo.ToBase64();
 
             await SendReplyAsync( $"DEST REPLY PUB={pubBase64} PRIV={privBase64}" );
@@ -1534,7 +1534,7 @@ namespace I2PCore.Client
             try
             {
                 var destBytes = FreenetBase64.Decode( destStr );
-                var dest = new I2PDestination( new BufRef( destBytes ) );
+                var dest = new I2PDestination( new I2PBufferCursor( destBytes ) );
                 var destHash = new I2PIdentHash( dest );
 
                 session.Datagram.SendRepliableDatagram( destHash, payload, fromPort, toPort );
@@ -1618,7 +1618,7 @@ namespace I2PCore.Client
             try
             {
                 var destBytes = FreenetBase64.Decode( destStr );
-                var dest = new I2PDestination( new BufRef( destBytes ) );
+                var dest = new I2PDestination( new I2PBufferCursor( destBytes ) );
                 var destHash = new I2PIdentHash( dest );
 
                 session.Datagram.SendRawDatagram( destHash, payload, fromPort, toPort );

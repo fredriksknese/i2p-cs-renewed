@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -18,13 +19,13 @@ namespace I2P.I2CP.Messages
             Ident = hash;
         }
 
-        public DestLookupMessage( BufRefLen reader )
+        public DestLookupMessage( I2PBufferCursor reader )
             : base( ProtocolMessageType.DestLookup )
         {
             Ident = new I2PIdentHash( reader );
         }
 
-        public override void Write( BufRefStream dest )
+        public override void Write( ArrayBufferWriter<byte> dest )
         {
             Ident.Write( dest );
         }

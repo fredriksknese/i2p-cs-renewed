@@ -240,7 +240,7 @@ namespace I2CP.I2CP.States
         private void SendMessageToDestination( 
                 I2PDestination dest, 
                 ushort sessid, 
-                BufLen payload, 
+                I2PByteBlock payload, 
                 uint nonce )
         {
             var s3 = Session.SessionIds[sessid];

@@ -33,16 +33,16 @@ namespace I2PCore.TransportLayer.NTCP2.Messages
         public const int MIN_SIZE = 64;  // X + payload
         public const int MAX_SIZE_NTCP_COMPAT = 287;  // For dual NTCP/NTCP2 ports
 
-        public static SessionRequest Parse(BufRef data, byte[] bobRouterHash, byte[] bobIV, NoiseXK noise)
+        public static SessionRequest Parse(I2PBufferCursor data, byte[] bobRouterHash, byte[] bobIV, NoiseXK noise)
         {
             var request = new SessionRequest();
 
             // Read AES-encrypted X
-            var encryptedX = data.ReadBufLen(ENCRYPTED_KEY_SIZE);
+            var encryptedX = data.ReadBlock(ENCRYPTED_KEY_SIZE);
             request.EphemeralKey = DecryptEphemeralKey(encryptedX, bobRouterHash, bobIV);
 
             // Read ChaCha20-Poly1305 encrypted payload
-            var encryptedPayload = data.ReadBufLen(ENCRYPTED_PAYLOAD_SIZE);
+            var encryptedPayload = data.ReadBlock(ENCRYPTED_PAYLOAD_SIZE);
             
             // Decrypt using Noise protocol (Message 1: e, es)
             var payload = noise.ProcessMessage1(request.EphemeralKey, encryptedPayload.ToByteArray());
@@ -56,10 +56,10 @@ namespace I2PCore.TransportLayer.NTCP2.Messages
             request.TimestampA = options.TimestampA;
             
             // Read padding if present
-            var remaining = data.BaseArray.Length - data.BaseArrayOffset;
+            var remaining = data.Remaining;
             if (remaining > 0)
             {
-                request.Padding = data.ReadBufLen(remaining).ToByteArray();
+                request.Padding = data.ReadBlock(remaining).ToByteArray();
                 
                 // CRITICAL: MixHash padding for authentication in message 2
                 // Per NTCP2 spec line 420
@@ -74,37 +74,37 @@ namespace I2PCore.TransportLayer.NTCP2.Messages
             if (options.Length < 16)
                 throw new Exception("Invalid options block size");
 
-            var reader = new BufRef(options);
-            var networkId = reader.Read8();
-            var version = reader.Read8();
-            var paddingLength = reader.ReadFlip16();
-            var message3Part2Length = reader.ReadFlip16();
-            reader.ReadFlip16(); // Reserved
-            var timestampA = reader.ReadFlip32();
+            var reader = new I2PBufferCursor(options);
+            var networkId = reader.ReadByte();
+            var version = reader.ReadByte();
+            var paddingLength = reader.ReadUInt16BigEndian();
+            var message3Part2Length = reader.ReadUInt16BigEndian();
+            reader.ReadUInt16BigEndian(); // Reserved
+            var timestampA = reader.ReadUInt32BigEndian();
 
             return (networkId, version, paddingLength, message3Part2Length, timestampA);
         }
 
         public byte[] ToByteArray(byte[] bobRouterHash, byte[] bobIV)
         {
-            var result = new BufLen(new byte[4096]);
-            var writer = new BufRefLen(result);
+            var result = new I2PByteBlock(new byte[4096]);
+            var writer = new I2PBufferCursor(result);
 
             // Encrypt ephemeral key with AES-256-CBC
             var encryptedX = EncryptEphemeralKey(EphemeralKey, bobRouterHash, bobIV);
-            writer.Write(encryptedX);
+            writer.WriteBytes(encryptedX);
 
             // Build options block
             var options = BuildOptionsBlock();
             
             // Encrypt options with ChaCha20-Poly1305 (Noise)
             var encryptedOptions = EncryptOptions(options);
-            writer.Write(encryptedOptions);
+            writer.WriteBytes(encryptedOptions);
 
             // Add padding
             if (Padding != null && Padding.Length > 0)
             {
-                writer.Write(Padding);
+                writer.WriteBytes(Padding);
             }
 
             return result.ToByteArray();
@@ -113,15 +113,15 @@ namespace I2PCore.TransportLayer.NTCP2.Messages
         private byte[] BuildOptionsBlock()
         {
             var options = new byte[16];
-            var writer = new BufRefLen(options);
+            var writer = new I2PBufferCursor(options);
 
-            writer.Write8(NetworkId);
-            writer.Write8(Version);
-            writer.WriteFlip16(PaddingLength);
-            writer.WriteFlip16(Message3Part2Length);
-            writer.WriteFlip16(0);  // Reserved
-            writer.WriteFlip32(TimestampA);
-            writer.WriteFlip32(0);  // Reserved
+            writer.WriteByte(NetworkId);
+            writer.WriteByte(Version);
+            writer.WriteUInt16BigEndian(PaddingLength);
+            writer.WriteUInt16BigEndian(Message3Part2Length);
+            writer.WriteUInt16BigEndian(0);  // Reserved
+            writer.WriteUInt32BigEndian(TimestampA);
+            writer.WriteUInt32BigEndian(0);  // Reserved
 
             return options;
         }
@@ -134,7 +134,7 @@ namespace I2PCore.TransportLayer.NTCP2.Messages
             return AESObfuscation.Encrypt(key, routerHash, iv);
         }
 
-        private static byte[] DecryptEphemeralKey(BufLen encryptedKey, byte[] routerHash, byte[] iv)
+        private static byte[] DecryptEphemeralKey(I2PByteBlock encryptedKey, byte[] routerHash, byte[] iv)
         {
             // AES-256-CBC decryption
             return AESObfuscation.Decrypt(encryptedKey.ToByteArray(), routerHash, iv);

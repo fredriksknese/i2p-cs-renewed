@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -30,19 +31,19 @@ namespace I2PCore.Data
             Id = src.Id;
         }
 
-        public I2PTunnelId( BufRef buf )
+        public I2PTunnelId( I2PBufferCursor buf )
         {
-            Id = buf.ReadFlip32();
+            Id = buf.ReadUInt32BigEndian();
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
-            dest.Write( BufUtils.Flip32Bl( Id ) );
+            dest.WriteUInt32BigEndian( Id );
         }
 
-        public void Write( BufRef dest )
+        public void Write( I2PBufferCursor dest )
         {
-            dest.WriteFlip32( Id );
+            dest.WriteUInt32BigEndian( Id );
         }
 
         public override string ToString()

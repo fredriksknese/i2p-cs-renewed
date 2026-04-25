@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -9,7 +10,7 @@ namespace I2PCore.Data
 {
     public abstract class I2PKeyType: I2PType
     {
-        public BufLen Key;
+        public I2PByteBlock Key;
 
         public enum KeyTypes : ushort
         {
@@ -47,15 +48,15 @@ namespace I2PCore.Data
             Certificate = cert;
         }
 
-        protected I2PKeyType( BufRef buf, I2PCertificate cert )
+        protected I2PKeyType( I2PBufferCursor buf, I2PCertificate cert )
         {
             Certificate = cert;
-            Key = buf.ReadBufLen( KeySizeBytes );
+            Key = buf.ReadBlock( KeySizeBytes );
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
-            dest.Write( ToByteArray() );
+            dest.WriteBytes( ToByteArray() );
         }
 
         public byte[] ToByteArray()

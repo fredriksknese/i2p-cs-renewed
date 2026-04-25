@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -15,11 +16,11 @@ namespace I2PCore.TunnelLayer.I2NP.Data
         public I2PDate Expiration;
         public I2NpMessage Message;
 
-        public GarlicClove( BufRefLen reader )
+        public GarlicClove( I2PBufferCursor reader )
         {
             Delivery = GarlicCloveDelivery.CreateGarlicCloveDelivery( reader );
             Message = I2NpMessage.ReadHeader16( reader ).Message;
-            CloveId = reader.ReadFlip32();
+            CloveId = reader.ReadUInt32BigEndian();
             Expiration = new I2PDate( reader );
             reader.Seek( 3 ); // Cert
         }
@@ -42,12 +43,12 @@ namespace I2PCore.TunnelLayer.I2NP.Data
 
         private static readonly byte[] ThreeZero = new byte[] { 0, 0, 0 };
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
             Delivery.Write( dest );
-            dest.Write( (BufRefLen)BufUtils.Flip32Bl( CloveId ) );
+            dest.WriteUInt32BigEndian( CloveId );
             Expiration.Write( dest );
-            dest.Write( ThreeZero );
+            dest.WriteBytes( ThreeZero );
         }
 
         public override string ToString()

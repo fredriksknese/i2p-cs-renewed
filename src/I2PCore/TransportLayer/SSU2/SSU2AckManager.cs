@@ -299,15 +299,15 @@ namespace I2PCore.TransportLayer.SSU2
         /// <summary>
         /// Parse ACK block from bytes
         /// </summary>
-        public static SSU2AckBlock Parse(BufRef data)
+        public static SSU2AckBlock Parse(I2PBufferCursor data)
         {
-            var ackCount = data.Read8();
+            var ackCount = data.ReadByte();
             var ranges = new List<AckRange>();
 
             for (int i = 0; i < ackCount; i++)
             {
-                var through = data.ReadFlip32();
-                var acks = data.Read8();
+                var through = data.ReadUInt32BigEndian();
+                var acks = data.ReadByte();
 
                 // "through" is the end, "acks" is count-1
                 var end = through;

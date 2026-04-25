@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using I2PCore.TunnelLayer.I2NP.Messages;
@@ -44,19 +45,19 @@ namespace I2PCore.Data
             if ( sprivkey != null )
             {
                 Signature = new I2PSignature(
-                    new BufRefLen(
+                    new I2PBufferCursor(
                         CreateSignature( sprivkey ) ),
                     sprivkey.Certificate );
             }
         }
 
-        public I2PLeaseSet( BufRef reader )
+        public I2PLeaseSet( I2PBufferCursor reader )
         {
             Destination = new I2PDestination( reader );
             PublicKey = new I2PPublicKey( reader, I2PKeyType.DefaultAsymetricKeyCert );
             PublicSigningKey = new I2PSigningPublicKey( reader, Destination.Certificate );
 
-            int leasecount = reader.Read8();
+            int leasecount = reader.ReadByte();
             for ( int i = 0; i < leasecount; ++i )
             {
                 LeasesField.Add( new I2PLease( reader ) );
@@ -135,7 +136,7 @@ namespace I2PCore.Data
         {
             try
             {
-                var signfields = new List<BufLen>
+                var signfields = new List<I2PByteBlock>
                 {
                     new( Destination.ToByteArray() ),
                     PublicKey.Key,
@@ -145,7 +146,7 @@ namespace I2PCore.Data
 
                 foreach ( var lease in LeasesField )
                 {
-                    signfields.Add( new BufLen( lease.ToByteArray() ) );
+                    signfields.Add( new I2PByteBlock( lease.ToByteArray() ) );
                 }
 
                 var versig = I2PSignature.DoVerify( spkey, Signature, signfields.ToArray() );
@@ -164,18 +165,18 @@ namespace I2PCore.Data
             }
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( IBufferWriter<byte> dest )
         {
             Destination.Write( dest );
             PublicKey.Write( dest );
             PublicSigningKey.Write( dest );
 
-            dest.Write( (byte)LeasesField.Count );
+            dest.WriteByte( (byte)LeasesField.Count );
 
             foreach ( var lease in LeasesField )
             {
                 var buf = lease.ToByteArray();
-                dest.Write( buf );
+                dest.WriteBytes( buf );
             }
 
             Signature.Write( dest );
@@ -186,7 +187,7 @@ namespace I2PCore.Data
             var cnt = (byte)LeasesField.Count;
             if ( cnt > 16 ) throw new OverflowException( "Max 16 leases per I2PLeaseSet" );
 
-            var signfields = new List<BufLen>
+            var signfields = new List<I2PByteBlock>
             {
                 new( Destination.ToByteArray() ),
                 PublicKey.Key,
@@ -197,7 +198,7 @@ namespace I2PCore.Data
             foreach ( var lease in LeasesField )
             {
                 var buf = lease.ToByteArray();
-                signfields.Add( new BufLen( buf ) );
+                signfields.Add( new I2PByteBlock( buf ) );
             }
 
             return I2PSignature.DoSign( privsignkey, signfields.ToArray() );

@@ -268,11 +268,11 @@ namespace I2PRouterCli
             try
             {
                 var ri = RouterContext.Inst.MyRouterInfo;
-                var brs = new I2PCore.Utils.BufRefStream();
+                var brs = new System.Buffers.ArrayBufferWriter<byte>();
                 ri.Write( brs );
                 var riPath = System.IO.Path.Combine(
                     dataDir ?? System.IO.Directory.GetCurrentDirectory(), "router.info" );
-                System.IO.File.WriteAllBytes( riPath, brs.ToByteArray() );
+                System.IO.File.WriteAllBytes( riPath, brs.WrittenSpan.ToArray() );
                 Logging.LogInformation( $"RouterInfo exported to {riPath}" );
             }
             catch ( Exception ex )

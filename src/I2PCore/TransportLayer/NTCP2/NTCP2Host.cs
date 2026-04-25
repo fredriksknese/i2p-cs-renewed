@@ -380,8 +380,8 @@ namespace I2PCore.TransportLayer.NTCP2
             // v = version (2 for NTCP2)
             // CRITICAL: Use I2P Base64 encoding (FreenetBase64) not standard Base64!
             // I2P Base64 uses '-' and '~' instead of '+' and '/'
-            addr.Options["s"] = FreenetBase64.Encode(new BufLen(StaticPublicKey));
-            addr.Options["i"] = FreenetBase64.Encode(new BufLen(IV));
+            addr.Options["s"] = FreenetBase64.Encode(new I2PByteBlock(StaticPublicKey));
+            addr.Options["i"] = FreenetBase64.Encode(new I2PByteBlock(IV));
             // v = version: MUST be "2" per i2pd RouterInfo.cpp line 310
             // i2pd marks the address as invalid if v != "2"
             // Post-quantum is indicated via separate "pq" option, not "v"

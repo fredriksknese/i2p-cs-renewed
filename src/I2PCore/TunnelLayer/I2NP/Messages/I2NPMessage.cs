@@ -50,7 +50,7 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
 
         // Always allocated with space for a 16 byte header in front
         // Message payload starts at Payload.
-        private BufLen Buf;
+        private I2PByteBlock Buf;
 
         public abstract MessageTypes MessageType { get; }
 
@@ -101,9 +101,9 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
         // SetBuffer assumes that there is 16 bytes extra available in front of the message buffer.
         // If a message with a (received) 5 byte header is accessed with Header16 you will get an out 
         // of range exception, or faulty data.
-        protected void SetBuffer( BufRef start, BufRef reader )
+        protected void SetBuffer( I2PBufferCursor start, I2PBufferCursor reader )
         {
-            Buf = new BufLen( start, -I2NpMaxHeaderSize, ( reader - start ) + I2NpMaxHeaderSize );
+            Buf = new I2PByteBlock( start.BaseArray, start.BaseArrayOffset - I2NpMaxHeaderSize, reader.DistanceFrom( start ) + I2NpMaxHeaderSize );
 #if DEBUG
             HeaderState = HeaderStates.Invalid;
 #endif
@@ -111,7 +111,7 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
 
         protected void AllocateBuffer( int size )
         {
-            Buf = new BufLen( new byte[size + I2NpMaxHeaderSize] );
+            Buf = new I2PByteBlock( new byte[size + I2NpMaxHeaderSize] );
 #if DEBUG
             HeaderState = HeaderStates.Invalid;
 #endif
@@ -119,34 +119,34 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
 
         public static T Clone<T>( T src ) where T : I2NpMessage
         {
-            return (T)I2NpUtil.GetMessage( src.MessageType, new BufRefLen( src.Buf.Clone(), I2NpMaxHeaderSize ), src.MessageId );
+            return (T)I2NpUtil.GetMessage( src.MessageType, new I2PBufferCursor( src.Buf.Clone().ToByteArray(), I2NpMaxHeaderSize ), src.MessageId );
         }
 
-        protected BufLen Header5Buf 
+        protected I2PByteBlock Header5Buf 
         { 
             get 
             {
 #if DEBUG
                 HeaderState = HeaderStates.Header5;
 #endif
-                return new BufLen( Buf, I2NpMaxHeaderSize - 5 ); 
+                return Buf.Slice( I2NpMaxHeaderSize - 5 ); 
             } 
         }
 
-        protected BufLen Header16Buf 
+        protected I2PByteBlock Header16Buf 
         { 
             get 
             {
 #if DEBUG
                 HeaderState = HeaderStates.Header16;
 #endif
-                return new BufLen( Buf ); 
+                return Buf; 
             } 
         }
 
-        public BufLen Payload { get { return new BufLen( Buf, I2NpMaxHeaderSize ); } }
+        public I2PByteBlock Payload { get { return Buf.Slice( I2NpMaxHeaderSize ); } }
 
-        public static Ii2NpHeader16 ReadHeader16( BufRefLen reader )
+        public static Ii2NpHeader16 ReadHeader16( I2PBufferCursor reader )
         {
             return new I2NpHeader16( reader );
         }
@@ -162,7 +162,7 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
 #if DEBUG
         protected static void DebugCheckMessageCreation( I2NpMessage msg )
         {
-            if ( msg.Buf is null )
+            if ( msg.Buf.IsEmpty )
             {
                 throw new NotImplementedException( $"I2NPMessage: '{msg.GetType().Name}' " +
                     $"failed to set up a memory buffer" );

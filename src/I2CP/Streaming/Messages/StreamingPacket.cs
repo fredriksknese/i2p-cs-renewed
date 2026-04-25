@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -35,7 +36,7 @@ namespace I2P.Streaming
         public List<uint> NacKs;
         public byte ResendDelay;
         public PacketFlags Flags;
-        public BufLen Payload;
+        public I2PByteBlock Payload;
 
         public I2PDestination From;
         public I2PSigningPrivateKey SigningKey;
@@ -46,24 +47,24 @@ namespace I2P.Streaming
             Flags = flags;
         }
 
-        public StreamingPacket( BufRefLen reader )
+        public StreamingPacket( I2PBufferCursor reader )
         {
-            SendStreamId = reader.ReadFlip32();
-            ReceiveStreamId = reader.ReadFlip32();
-            SequenceNumber = reader.ReadFlip32();
-            AckTrhough = reader.ReadFlip32();
+            SendStreamId = reader.ReadUInt32BigEndian();
+            ReceiveStreamId = reader.ReadUInt32BigEndian();
+            SequenceNumber = reader.ReadUInt32BigEndian();
+            AckTrhough = reader.ReadUInt32BigEndian();
 
             NacKs = new List<uint>();
-            var nackcount = reader.Read8();
+            var nackcount = reader.ReadByte();
             for ( int i = 0; i < nackcount; ++i )
             {
-                NacKs.Add( reader.ReadFlip32() );
+                NacKs.Add( reader.ReadUInt32BigEndian() );
             }
 
-            ResendDelay = reader.Read8();
+            ResendDelay = reader.ReadByte();
 
-            Flags = (PacketFlags)reader.ReadFlip16();
-            var optionsize = reader.ReadFlip16();
+            Flags = (PacketFlags)reader.ReadUInt16BigEndian();
+            var optionsize = reader.ReadUInt16BigEndian();
 
             // Options order
             // DELAY_REQUESTED
@@ -75,7 +76,7 @@ namespace I2P.Streaming
             // MAX_PACKET_SIZE_INCLUDED
             if ( ( Flags & PacketFlags.MaxPacketSizeIncluded ) != 0 )
             {
-                var mtu = reader.ReadFlip16();
+                var mtu = reader.ReadUInt16BigEndian();
             }
             // OFFLINE_SIGNATURE
             // SIGNATURE_INCLUDED
@@ -84,10 +85,10 @@ namespace I2P.Streaming
                 Signature = new I2PSignature( reader, From.Certificate );
             }
 
-            Payload = reader.ReadBufLen( reader.Length );
+            Payload = reader.ReadBlock( reader.Remaining );
         }
 
-        public void Write( BufRefStream dest )
+        public void Write( ArrayBufferWriter<byte> dest )
         {
             // Not including options
             var headersize = 4 * 4 + 1 + NacKs.Count * 4 + 1 + 2 + 2;
@@ -106,42 +107,42 @@ namespace I2P.Streaming
             optionssize += ( Flags & PacketFlags.DelayRequested ) != 0
                 ? 2 : 0;
 
-            var header = new BufLen( new byte[headersize + optionssize] );
-            var writer = new BufRefLen( header );
+            var header = new I2PByteBlock( new byte[headersize + optionssize] );
+            var writer = new I2PBufferCursor( header );
 
-            writer.WriteFlip32( SendStreamId );
-            writer.WriteFlip32( ReceiveStreamId );
-            writer.WriteFlip32( SequenceNumber );
-            writer.WriteFlip32( AckTrhough );
+            writer.WriteUInt32BigEndian( SendStreamId );
+            writer.WriteUInt32BigEndian( ReceiveStreamId );
+            writer.WriteUInt32BigEndian( SequenceNumber );
+            writer.WriteUInt32BigEndian( AckTrhough );
 
-            writer.Write8( (byte)NacKs.Count );
+            writer.WriteByte( (byte)NacKs.Count );
             foreach ( var nak in NacKs )
             {
-                writer.WriteFlip32( nak );
+                writer.WriteUInt32BigEndian( nak );
             }
 
-            writer.Write8( ResendDelay );
+            writer.WriteByte( ResendDelay );
 
-            writer.WriteFlip16( (ushort)Flags );
-            writer.WriteFlip16( (ushort)optionssize );
+            writer.WriteUInt16BigEndian( (ushort)Flags );
+            writer.WriteUInt16BigEndian( (ushort)optionssize );
 
             // Options order
             // DELAY_REQUESTED
             // FROM_INCLUDED
             if ( ( Flags & PacketFlags.FromIncluded ) != 0 )
             {
-                writer.Write( From.ToByteArray() );
+                writer.WriteBytes( From.ToByteArray() );
             }
             // MAX_PACKET_SIZE_INCLUDED
             if ( ( Flags & PacketFlags.MaxPacketSizeIncluded ) != 0 )
             {
-                writer.WriteFlip16( Mtu );
+                writer.WriteUInt16BigEndian( Mtu );
             }
             // OFFLINE_SIGNATURE
             // SIGNATURE_INCLUDED
             if ( ( Flags & PacketFlags.SignatureIncluded ) != 0 )
             {
-                writer.Write( I2PSignature.DoSign( SigningKey, header ) );
+                writer.WriteBytes( I2PSignature.DoSign( SigningKey, header ) );
             }
 
 #if DEBUG
@@ -151,8 +152,8 @@ namespace I2P.Streaming
             }
 #endif
 
-            dest.Write( (BufRefLen)header );
-            dest.Write( (BufRefLen)Payload );
+            dest.WriteBlock( header );
+            dest.WriteBlock( Payload );
         }
 
         public override string ToString()

@@ -55,8 +55,8 @@ namespace I2PCore
                     var data = s.Read( ix );
                     readsw.Stop();
 
-                    var reader = new BufRefLen( data );
-                    switch ( (StoreRecordId)reader.Read32() )
+                    var reader = new I2PBufferCursor( data );
+                    switch ( (StoreRecordId)reader.ReadUInt32LittleEndian() )
                     {
                         case StoreRecordId.RouterStatistics:
                             constrsw.Start();
@@ -110,7 +110,7 @@ namespace I2PCore
                         continue;
                     }
 
-                    var rec = new BufLen[] 
+                    var rec = new I2PByteBlock[] 
                     { 
                         new( BitConverter.GetBytes( (int)StoreRecordId.RouterStatistics ) ),
                         new( one.Value.ToByteArray() ) 

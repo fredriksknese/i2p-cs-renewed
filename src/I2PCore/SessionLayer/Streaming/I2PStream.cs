@@ -1,3 +1,4 @@
+using System.Buffers;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -364,8 +365,8 @@ namespace I2PCore.SessionLayer.Streaming
                 {
                     try
                     {
-                        var decompressed = LzUtils.BcgZipDecompressNew( new BufLen( payloadData ) );
-                        if ( decompressed != null )
+                        var decompressed = LzUtils.BcgZipDecompressNew( new I2PByteBlock( payloadData ) );
+                        if ( !decompressed.IsEmpty )
                         {
                             payloadData = decompressed.ToByteArray();
                         }
@@ -410,10 +411,10 @@ namespace I2PCore.SessionLayer.Streaming
             {
                 try
                 {
-                    var startRef = new BufRef(opts, offset);
-                    var reader = new BufRef(opts, offset);
+                    var startRef = new I2PBufferCursor(opts, offset);
+                    var reader = new I2PBufferCursor(opts, offset);
                     _remoteDestination = new I2PDestination(reader);
-                    offset += reader - startRef;
+                    offset += reader.DistanceFrom(startRef);
                 }
                 catch (Exception ex)
                 {
@@ -434,27 +435,27 @@ namespace I2PCore.SessionLayer.Streaming
             {
                 try
                 {
-                    var startRef = new BufRef(opts, offset);
-                    var reader = new BufRef(opts, offset);
+                    var startRef = new I2PBufferCursor(opts, offset);
+                    var reader = new I2PBufferCursor(opts, offset);
                     var offlineSig = new I2POfflineSignature(reader, _remoteDestination.Certificate);
 
                     // Verify the offline signature: it signs (expires + sigType + transientKey)
                     // using the destination's long-term signing key
-                    var signedData = new BufRefStream();
+                    var signedData = new ArrayBufferWriter<byte>();
                     offlineSig.Expires.Write(signedData);
                     signedData.Write(BufUtils.Flip16B((ushort)offlineSig.SignatureType));
                     offlineSig.TransientPublicKey.Write(signedData);
-                    var signedBytes = signedData.ToByteArray();
+                    var signedBytes = signedData.WrittenSpan.ToArray();
 
                     bool offlineVerified = I2PSignature.DoVerify(
                         _remoteDestination.SigningPublicKey,
                         offlineSig.Signature,
-                        new BufLen(signedBytes));
+                        new I2PByteBlock(signedBytes));
 
                     if (offlineVerified)
                     {
                         transientKey = offlineSig.TransientPublicKey;
-                        offset = reader - startRef + offset;
+                        offset = reader.DistanceFrom(startRef) + offset;
                         Logging.LogDebug("I2PStream: Offline signature verified, using transient key");
                     }
                     else
@@ -494,14 +495,14 @@ namespace I2PCore.SessionLayer.Streaming
 
                         var sig = new I2PSignature
                         {
-                            Sig = new BufLen(sigBytes),
+                            Sig = new I2PByteBlock(sigBytes),
                             Certificate = verifyKey.Certificate
                         };
 
                         bool verified = I2PSignature.DoVerify(
                             verifyKey,
                             sig,
-                            new BufLen(packetBytes));
+                            new I2PByteBlock(packetBytes));
 
                         if (!verified)
                         {
@@ -800,8 +801,8 @@ namespace I2PCore.SessionLayer.Streaming
                     {
                         try
                         {
-                            var compressed = LzUtils.BcgZipCompressNew( new BufLen( payload ) );
-                            if ( compressed != null && compressed.Length < payload.Length )
+                            var compressed = LzUtils.BcgZipCompressNew( new I2PByteBlock( payload ) );
+                            if ( !compressed.IsEmpty && compressed.Length < payload.Length )
                             {
                                 payload = compressed.ToByteArray();
                             }
@@ -840,7 +841,7 @@ namespace I2PCore.SessionLayer.Streaming
                 pkt.Flags |= StreamingPacket.FLAG_FROM_INCLUDED;
                 pkt.Flags |= StreamingPacket.FLAG_MAX_PACKET_SIZE_INCLUDED;
 
-                var optStream = new BufRefStream();
+                var optStream = new ArrayBufferWriter<byte>();
                 if (_localIdentityBytes != null)
                     optStream.Write(_localIdentityBytes);
                 optStream.Write(BufUtils.Flip16B((ushort)STREAMING_MTU));
@@ -853,13 +854,13 @@ namespace I2PCore.SessionLayer.Streaming
                     // Write zeroed signature placeholder into options
                     var sigPlaceholder = new byte[sigLen];
                     optStream.Write(sigPlaceholder);
-                    pkt.OptionData = optStream.ToByteArray();
+                    pkt.OptionData = optStream.WrittenSpan.ToArray();
 
                     // Serialize the full packet (with zeroed signature) and sign it
                     var packetBytes = pkt.ToByteArray();
                     var signature = I2PSignature.DoSign(
                         _signingPrivateKey,
-                        new BufLen(packetBytes));
+                        new I2PByteBlock(packetBytes));
 
                     // Patch the signature into the option data
                     int sigOffset = pkt.OptionData.Length - sigLen;
@@ -867,7 +868,7 @@ namespace I2PCore.SessionLayer.Streaming
                 }
                 else
                 {
-                    pkt.OptionData = optStream.ToByteArray();
+                    pkt.OptionData = optStream.WrittenSpan.ToArray();
                 }
             }
             else if (_sentPackets.Count >= _windowSize / 2)
@@ -1005,7 +1006,7 @@ namespace I2PCore.SessionLayer.Streaming
             var packetBytes = pkt.ToByteArray();
             var signature = I2PSignature.DoSign(
                 _signingPrivateKey,
-                new BufLen(packetBytes));
+                new I2PByteBlock(packetBytes));
 
             // Patch signature into options
             Array.Copy(signature, 0, pkt.OptionData, sigOffset, sigLen);
@@ -1062,7 +1063,7 @@ namespace I2PCore.SessionLayer.Streaming
                             Array.Clear(pkt.OptionData, sigOffset, sigLen);
 
                             var packetBytes = pkt.ToByteArray();
-                            var signature = I2PSignature.DoSign(_signingPrivateKey, new BufLen(packetBytes));
+                            var signature = I2PSignature.DoSign(_signingPrivateKey, new I2PByteBlock(packetBytes));
                             Array.Copy(signature, 0, pkt.OptionData, sigOffset, sigLen);
                         }
 
@@ -1098,7 +1099,7 @@ namespace I2PCore.SessionLayer.Streaming
                         Array.Clear(oldest.OptionData, sigOffset, sigLen);
 
                         var packetBytes = oldest.ToByteArray();
-                        var signature = I2PSignature.DoSign(_signingPrivateKey, new BufLen(packetBytes));
+                        var signature = I2PSignature.DoSign(_signingPrivateKey, new I2PByteBlock(packetBytes));
                         Array.Copy(signature, 0, oldest.OptionData, sigOffset, sigLen);
                     }
 
@@ -1207,15 +1208,27 @@ namespace I2PCore.SessionLayer.Streaming
     }
 
     /// <summary>
-    /// Helper class for BufRef that provides the base offset.
+    /// Helper class for I2PBufferCursor that provides the base offset.
     /// Used internally for tracking parse position in SYN options.
     /// </summary>
-    internal class BufRefArray : BufRef
+    internal class BufRefArray
     {
+        private readonly I2PBufferCursor _cursor;
         public int BaseOffset { get; }
-        public BufRefArray(byte[] data, int offset) : base(data, offset)
+        public BufRefArray(byte[] data, int offset)
         {
+            _cursor = new I2PBufferCursor( data, offset );
             BaseOffset = offset;
         }
+        public byte[] BaseArray => _cursor.BaseArray;
+        public int BaseArrayOffset => _cursor.BaseArrayOffset;
+        public int Position => _cursor.Position;
+        public int Remaining => _cursor.Remaining;
+        public byte ReadByte() => _cursor.ReadByte();
+        public ushort ReadUInt16BigEndian() => _cursor.ReadUInt16BigEndian();
+        public uint ReadUInt32BigEndian() => _cursor.ReadUInt32BigEndian();
+        public byte[] ReadBytes( int count ) => _cursor.ReadBytes( count );
+        public I2PByteBlock ReadBlock( int length ) => _cursor.ReadBlock( length );
+        public int Seek( int offset ) => _cursor.Seek( offset );
     }
 }

@@ -70,7 +70,7 @@ namespace I2P.I2CP
         {
             try
             {
-                var recvbuf = new BufLen( RecvBuf );
+                var recvbuf = new I2PByteBlock( RecvBuf );
 
                 var readlen = await MyStream.ReadAsync( RecvBuf, 0, 1, CtSource.Token ).ConfigureAwait( false );
                 if ( readlen != 1 )
@@ -92,7 +92,7 @@ namespace I2P.I2CP
                         break;
                     }
 
-                    var msglen = recvbuf.PeekFlip32( 0 );
+                    var msglen = recvbuf.ReadUInt32BigEndian( 0 );
                     var msgtype = recvbuf[4];
 
                     if ( msglen + 5 >= RecvBuf.Length )
@@ -129,7 +129,7 @@ namespace I2P.I2CP
                     try
                     {
                         var msg = GetMessage(
-                                new BufRefLen( recvbuf, 0, readlen + 5 ).Clone() );
+                                new I2PBufferCursor( recvbuf.Slice( 0, readlen + 5 ).Clone() ) );
 
                         var nextstate = CurrentState.MessageReceived( msg );
                         if ( nextstate != CurrentState )
@@ -268,12 +268,12 @@ namespace I2P.I2CP
             try
             {
                 var header = new byte[5];
-                var writer = new BufRefLen( header );
+                var writer = new I2PBufferCursor( header );
                 var data = msg.ToByteArray();
-                writer.WriteFlip32( (uint)data.Length );
-                writer.Write8( (byte)msg.MessageType );
+                writer.WriteUInt32BigEndian( (uint)data.Length );
+                writer.WriteByte( (byte)msg.MessageType );
 
-                Logging.LogDebug( $"{this} SendOneMessage: {msg.MessageType} {new BufLen( header ):h} {new BufLen( data ):20}" );
+                Logging.LogDebug( $"{this} SendOneMessage: {msg.MessageType} {new I2PByteBlock( header ):h} {new I2PByteBlock( data ):20}" );
 
                 MyTcpClient.Client.BeginSend(
                     new List<ArraySegment<byte>> {
@@ -356,7 +356,7 @@ namespace I2P.I2CP
             return sessid.Value;
         }
 
-        internal void MyDestination_DataReceived( ClientDestination dest, BufLen data, I2PDestination sender )
+        internal void MyDestination_DataReceived( ClientDestination dest, I2PByteBlock data, I2PDestination sender )
         {
             if ( Terminated ) return;
 
@@ -473,12 +473,12 @@ namespace I2P.I2CP
             }
         }
 
-        public I2CpMessage GetMessage( BufRefLen data )
+        public I2CpMessage GetMessage( I2PBufferCursor data )
         {
             var pmt = (ProtocolMessageType)data[4];
             data.Seek( 5 );
 
-            Logging.LogDebug( $"{this} GetMessage: Received message {pmt}, {data.Length} bytes." );
+            Logging.LogDebug( $"{this} GetMessage: Received message {pmt}, {data.Remaining} bytes." );
 
             switch ( pmt )
             {

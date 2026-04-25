@@ -1,3 +1,4 @@
+using System.Buffers;
 using System;
 using System.Collections.Generic;
 using I2PCore.Data;
@@ -70,10 +71,10 @@ namespace I2PCore.SessionLayer.ECIES
         private List<GarlicClove> ParseGarlicCloves(byte[] data)
         {
             var cloves = new List<GarlicClove>();
-            var reader = new BufRef(data);
+            var reader = new I2PBufferCursor(data);
 
             // Read clove count
-            var cloveCount = reader.Read8();
+            var cloveCount = reader.ReadByte();
 
             for (int i = 0; i < cloveCount; i++)
             {
@@ -87,7 +88,7 @@ namespace I2PCore.SessionLayer.ECIES
         /// <summary>
         /// Parse a single garlic clove
         /// </summary>
-        private GarlicClove ParseClove(BufRef reader)
+        private GarlicClove ParseClove(I2PBufferCursor reader)
         {
             var clove = new GarlicClove();
 
@@ -95,16 +96,16 @@ namespace I2PCore.SessionLayer.ECIES
             clove.DeliveryInstructions = ParseDeliveryInstructions(reader);
 
             // Read clove data length
-            var cloveDataLength = reader.ReadFlip16();
+            var cloveDataLength = reader.ReadUInt16BigEndian();
 
             // Read clove data
-            clove.Data = reader.Read(cloveDataLength);
+            clove.Data = reader.ReadBytes(cloveDataLength);
 
             // Read clove ID
-            clove.CloveId = reader.ReadFlip32();
+            clove.CloveId = reader.ReadUInt32BigEndian();
 
             // Read expiration
-            clove.Expiration = reader.ReadFlip32();
+            clove.Expiration = reader.ReadUInt32BigEndian();
 
             return clove;
         }
@@ -112,12 +113,12 @@ namespace I2PCore.SessionLayer.ECIES
         /// <summary>
         /// Parse delivery instructions
         /// </summary>
-        private DeliveryInstructions ParseDeliveryInstructions(BufRef reader)
+        private DeliveryInstructions ParseDeliveryInstructions(I2PBufferCursor reader)
         {
             var instructions = new DeliveryInstructions();
 
             // Read flags
-            var flags = reader.Read8();
+            var flags = reader.ReadByte();
             instructions.DeliveryType = (DeliveryType)(flags & 0x03);
             instructions.Encrypted = (flags & 0x80) != 0;
 
@@ -148,7 +149,7 @@ namespace I2PCore.SessionLayer.ECIES
             // Read delay (optional)
             if ((flags & 0x04) != 0)
             {
-                instructions.Delay = reader.ReadFlip32();
+                instructions.Delay = reader.ReadUInt32BigEndian();
             }
 
             return instructions;
@@ -297,10 +298,10 @@ namespace I2PCore.SessionLayer.ECIES
             if (cloves == null)
                 throw new ArgumentNullException(nameof(cloves));
 
-            var stream = new BufRefStream();
+            var stream = new ArrayBufferWriter<byte>();
 
             // Write clove count
-            stream.Write((byte)cloves.Count);
+            stream.WriteByte((byte)cloves.Count);
 
             // Write each clove
             foreach (var clove in cloves)
@@ -308,34 +309,34 @@ namespace I2PCore.SessionLayer.ECIES
                 WriteClove(stream, clove);
             }
 
-            return stream.ToByteArray();
+            return stream.WrittenSpan.ToArray();
         }
 
         /// <summary>
         /// Write a single clove
         /// </summary>
-        private static void WriteClove(BufRefStream stream, GarlicClove clove)
+        private static void WriteClove(ArrayBufferWriter<byte> stream, GarlicClove clove)
         {
             // Write delivery instructions
             WriteDeliveryInstructions(stream, clove.DeliveryInstructions);
 
             // Write clove data length
-            stream.Write(BufUtils.Flip16Bl((ushort)clove.Data.Length));
+            stream.WriteBlock(BufUtils.Flip16Bl((ushort)clove.Data.Length));
 
             // Write clove data
-            stream.Write(clove.Data);
+            stream.WriteBytes(clove.Data);
 
             // Write clove ID
-            stream.Write(BufUtils.Flip32Bl(clove.CloveId));
+            stream.WriteBlock(BufUtils.Flip32Bl(clove.CloveId));
 
             // Write expiration
-            stream.Write(BufUtils.Flip32Bl(clove.Expiration));
+            stream.WriteBlock(BufUtils.Flip32Bl(clove.Expiration));
         }
 
         /// <summary>
         /// Write delivery instructions
         /// </summary>
-        private static void WriteDeliveryInstructions(BufRefStream stream, DeliveryInstructions instructions)
+        private static void WriteDeliveryInstructions(ArrayBufferWriter<byte> stream, DeliveryInstructions instructions)
         {
             // Build flags
             byte flags = (byte)instructions.DeliveryType;
@@ -344,7 +345,7 @@ namespace I2PCore.SessionLayer.ECIES
             if (instructions.Delay.HasValue)
                 flags |= 0x04;
 
-            stream.Write(flags);
+            stream.WriteByte(flags);
 
             // Write destination based on delivery type
             switch (instructions.DeliveryType)
@@ -370,7 +371,7 @@ namespace I2PCore.SessionLayer.ECIES
             // Write delay if present
             if (instructions.Delay.HasValue)
             {
-                stream.Write(BufUtils.Flip32Bl(instructions.Delay.Value));
+                stream.WriteBlock(BufUtils.Flip32Bl(instructions.Delay.Value));
             }
         }
     }
