@@ -786,29 +786,40 @@ namespace I2PCore.TransportLayer.SSU2
             // If we sent a PQ session request, the response should include
             // a KEM ciphertext that we need to decapsulate
             var remainingPayloadLen = payload.Length - 8 - paddingLen;
-            if (IsPQSession && LocalKemSecretKey != null && remainingPayloadLen > 8)
+            if (IsPQSession && LocalKemSecretKey != null)
             {
-                // Skip past any blocks to find PQ data
-                // PQ response format: pqVersion(1) + kemCiphertext(1088 for ML-KEM-768)
-                var pqReader = new I2PBufferCursor(payload, 8);
-                var remotePQVersion = pqReader.ReadByte();
-                if (remotePQVersion == PQVersion && remainingPayloadLen >= 1089)
+                bool gotPQResponse = false;
+                if (remainingPayloadLen >= 1089)
                 {
-                    var kemCiphertextLen = PQVersion switch
+                    // Skip past any blocks to find PQ data
+                    // PQ response format: pqVersion(1) + kemCiphertext(1088 for ML-KEM-768)
+                    var pqReader = new I2PBufferCursor(payload, 8);
+                    var remotePQVersion = pqReader.ReadByte();
+                    if (remotePQVersion == PQVersion)
                     {
-                        3 => 1088,  // ML-KEM-768 ciphertext size
-                        _ => 0
-                    };
+                        var kemCiphertextLen = PQVersion switch
+                        {
+                            3 => 1088,  // ML-KEM-768 ciphertext size
+                            _ => 0
+                        };
 
-                    if (kemCiphertextLen > 0)
-                    {
-                        var kemCiphertext = pqReader.ReadBlock(kemCiphertextLen).ToByteArray();
-                        var kemSharedSecret = I2PCore.Crypto.MLKEM.MLKEM768.Decapsulate(kemCiphertext, LocalKemSecretKey);
+                        if (kemCiphertextLen > 0)
+                        {
+                            var kemCiphertext = pqReader.ReadBlock(kemCiphertextLen).ToByteArray();
+                            var kemSharedSecret = I2PCore.Crypto.MLKEM.MLKEM768.Decapsulate(kemCiphertext, LocalKemSecretKey);
 
-                        // Mix KEM shared secret into Noise chaining key for post-quantum security
-                        NoiseState.MixKeyPQ(kemSharedSecret);
-                        Logging.LogDebug($"{DebugId}: PQ KEM decapsulated, mixed into session keys");
+                            // Mix KEM shared secret into Noise chaining key for post-quantum security
+                            NoiseState.MixKeyPQ(kemSharedSecret);
+                            Logging.LogDebug($"{DebugId}: PQ KEM decapsulated, mixed into session keys");
+                            gotPQResponse = true;
+                        }
                     }
+                }
+
+                if (!gotPQResponse)
+                {
+                    Logging.LogInformation($"{DebugId}: Bob rejected/downgraded SSU2 PQ hybrid session. Falling back to standard SSU2.");
+                    IsPQSession = false;
                 }
             }
 

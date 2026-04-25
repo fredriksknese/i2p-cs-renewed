@@ -396,18 +396,39 @@ namespace I2PCore.TransportLayer.NTCP2
         /// </summary>
         private int DetectRemotePQVersion()
         {
-            var ntcp2Address = RemoteRouterInfo?.Addresses?.FirstOrDefault( a =>
-                a.TransportStyle == "NTCP2" && a.Options.Contains( "v" ) );
+            if ( RemoteRouterInfo == null ) return 0;
 
-            if ( ntcp2Address == null ) return 0;
+            int bestVersion = 0;
 
-            // Spec lines 664-665: v=2 and pq=[3|4|5]
-            if ( ntcp2Address.Options.Contains( "pq" ) && int.TryParse( ntcp2Address.Options["pq"], out var pq ) )
-                return pq;
+            // 1. Check all NTCP2/NTCP addresses.
+            // Some routers publish multiple addresses (IPv4/IPv6) and might only 
+            // put the "pq" option in some of them.
+            if ( RemoteRouterInfo.Addresses != null )
+            {
+                foreach ( var addr in RemoteRouterInfo.Addresses )
+                {
+                    if ( ( addr.TransportStyle == "NTCP2" || addr.TransportStyle == "NTCP" ) && addr.Options.Contains( "v" ) )
+                    {
+                        // Standard: v=2 and pq=[3|4|5]
+                        if ( addr.Options.Contains( "pq" ) && int.TryParse( addr.Options["pq"], out var pq ) )
+                            bestVersion = Math.Max( bestVersion, pq );
+                        if ( addr.Options.Contains( "PQ" ) && int.TryParse( addr.Options["PQ"], out var pq2 ) )
+                            bestVersion = Math.Max( bestVersion, pq2 );
 
-            // Spec lines 673-677: v=[3|4|5] (future)
-            if ( int.TryParse( ntcp2Address.Options["v"], out var version ) && version >= 3 && version <= 5 )
-                return version;
+                        // Future: v=[3|4|5]
+                        if ( int.TryParse( addr.Options["v"], out var version ) && version >= 3 && version <= 5 )
+                            bestVersion = Math.Max( bestVersion, version );
+                    }
+                }
+            }
+
+            if ( bestVersion != 0 ) return bestVersion;
+
+            // 2. Check global capabilities (fallback)
+            if ( RemoteRouterInfo.Options.Contains( "pq" ) && int.TryParse( RemoteRouterInfo.Options["pq"], out var gpq ) )
+                return gpq;
+            if ( RemoteRouterInfo.Options.Contains( "PQ" ) && int.TryParse( RemoteRouterInfo.Options["PQ"], out var gp2 ) )
+                return gp2;
 
             return 0;
         }
@@ -838,11 +859,6 @@ namespace I2PCore.TransportLayer.NTCP2
             int ourPQVersion = Host.GetPublishedPQVersion();
             bool acceptPQ = isPQ && ourPQVersion != 0;
 
-            if ( acceptPQ )
-            {
-                ephemeralKey[31] &= 0x7f; // Clear for Noise/X25519
-            }
-
             int pqKeyLen = acceptPQ ? ourPQVersion switch
             {
                 3 => 800,
@@ -1053,17 +1069,9 @@ namespace I2PCore.TransportLayer.NTCP2
                     InitializeNoiseAsAlice(); 
                     
                     // Recalculate everything with new Noise state
-                    // This is complex because we already sent SessionRequest with hybrid hash.
-                    // Actually, Proposal 165 says initiator MUST proceed with standard NTCP2.
-                    // But standard NTCP2 uses a different initial hash.
-                    // If Bob downgraded, he didn't know about hybrid, so he used standard hash.
-                    // Alice must now match Bob's state.
-                    
-                    ephemeralKey[31] &= 0x7f;
                 }
                 else if (bobSupportsPQ)
                 {
-                    ephemeralKey[31] &= 0x7f;
                 }
 
                 byte[] cipherKey;
@@ -1572,7 +1580,7 @@ namespace I2PCore.TransportLayer.NTCP2
             if ( IsPQSession )
             {
                 // Hybrid Handshake Message 2: <- e, ee, ekem1, p
-                var cipherKey = NoiseState.PerformMessage2EphemeralAndEE();
+                var cipherKey = NoiseState.PerformMessage2EphemeralAndEE( IsPQSession );
                 
                 var (ciphertext, sharedSecret) = EncapsulateMLKEM( RemoteKemPublicKey, PQVersion );
                 encryptedPQFrame = NoiseState.EncryptHandshakeBlock( cipherKey, ciphertext );

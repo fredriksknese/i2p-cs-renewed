@@ -133,10 +133,13 @@
                                     <td>
                                         @if (r.IsConnected)
                                         {
-                                            <span class="badge bg-success">@r.Protocol</span>
                                             @if (r.IsPQ)
                                             {
-                                                <span class="badge bg-info">PQ</span>
+                                                <span class="badge bg-success">@r.Protocol-PQ</span>
+                                            }
+                                            else
+                                            {
+                                                <span class="badge bg-success">@r.Protocol</span>
                                             }
                                         }
                                     </td>

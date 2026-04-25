@@ -331,8 +331,10 @@ namespace I2PCore.TransportLayer.NTCP2
                 return ProtocolCapabilities.None;
 
             // Check if router has NTCP2 address
+            // Spec line 1348: can be published as "NTCP" or "NTCP2".
             var ntcp2Address = router.Addresses?.FirstOrDefault(a =>
-                a.TransportStyle == "NTCP2" && a.Options.Contains("s"));
+                (a.TransportStyle == "NTCP2" || (a.TransportStyle == "NTCP" && a.Options.Contains("v"))) 
+                && a.Options.Contains("s"));
 
             if (ntcp2Address == null)
                 return ProtocolCapabilities.None;
@@ -493,9 +495,25 @@ namespace I2PCore.TransportLayer.NTCP2
         internal int GetPublishedPQVersion()
         {
             var myRI = GetMyRouterInfo();
-            var ntcp2Addr = myRI?.Addresses?.FirstOrDefault( a => a.TransportStyle == "NTCP2" );
-            if ( ntcp2Addr != null && ntcp2Addr.Options.Contains( "pq" ) && int.TryParse( ntcp2Addr.Options["pq"], out var pq ) )
-                return pq;
+            if ( myRI == null ) return 0;
+
+            // 1. Check address options (standard for NTCP2)
+            var ntcp2Addr = myRI.Addresses?.FirstOrDefault( a => 
+                (a.TransportStyle == "NTCP2" || a.TransportStyle == "NTCP") && a.Options.Contains( "v" ) );
+
+            if ( ntcp2Addr != null )
+            {
+                if ( ntcp2Addr.Options.Contains( "pq" ) && int.TryParse( ntcp2Addr.Options["pq"], out var pq ) )
+                    return pq;
+                if ( ntcp2Addr.Options.Contains( "PQ" ) && int.TryParse( ntcp2Addr.Options["PQ"], out var pq2 ) )
+                    return pq2;
+            }
+
+            // 2. Check global capabilities (fallback, used by some routers)
+            if ( myRI.Options.Contains( "pq" ) && int.TryParse( myRI.Options["pq"], out var gpq ) )
+                return gpq;
+            if ( myRI.Options.Contains( "PQ" ) && int.TryParse( myRI.Options["PQ"], out var gp2 ) )
+                return gp2;
 
             return 0; // PQ not advertised
         }

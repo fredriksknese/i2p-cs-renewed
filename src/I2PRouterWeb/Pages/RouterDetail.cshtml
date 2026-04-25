@@ -22,10 +22,13 @@ else
                 <div class="card-body py-2 text-center">
                     @if (Model.IsConnected)
                     {
-                        <span class="badge bg-success fs-6">@Model.Protocol</span>
                         @if (Model.IsPQ)
                         {
-                            <span class="badge bg-info fs-6">PQ</span>
+                            <span class="badge bg-success fs-6">@Model.Protocol-PQ</span>
+                        }
+                        else
+                        {
+                            <span class="badge bg-success fs-6">@Model.Protocol</span>
                         }
                     }
                     else

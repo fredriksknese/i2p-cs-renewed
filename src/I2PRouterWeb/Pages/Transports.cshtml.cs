@@ -46,7 +46,7 @@ public class TransportsModel : PageModel
                 Ssu2Connecting = tp.Ssu2ConnectingCount;
                 Ntcp2BlockedIPs = tp.Ntcp2BlockedCount;
                 Ssu2BlockedIPs = tp.Ssu2BlockedCount;
-                Ntcp2PQEnabled = true; // Version 5 advertised
+                Ntcp2PQEnabled = true; // ML-KEM-768 (pq=4) advertised
             }
 
             _routerService.LogActivity("Transports", "Viewed transport information");
