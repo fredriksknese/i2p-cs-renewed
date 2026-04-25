@@ -518,6 +518,7 @@ namespace I2PCore.SessionLayer
 
                     caps["netId"] = I2PConstants.I2PNetworkId.ToString();
                     caps["router.version"] = I2PConstants.ProtocolVersion;
+                    caps["pq"] = "4";
 
                     var addresses = RouterAddresses.Values.SelectMany( a => a ).ToArray();
                     var result = new I2PRouterInfo(

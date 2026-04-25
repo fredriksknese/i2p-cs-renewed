@@ -96,7 +96,7 @@ namespace I2PCore.Data
         }
 
         public const byte ProtocolByte = 0x2a;
-        public const string ProtocolVersion = "0.9.68";
+        public const string ProtocolVersion = "0.9.69";
 
         public const ushort SsuProtocolVersion = 0x00;
     }

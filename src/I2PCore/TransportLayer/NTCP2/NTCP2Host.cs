@@ -429,8 +429,9 @@ namespace I2PCore.TransportLayer.NTCP2
             addr.Options["i"] = FreenetBase64.Encode(new I2PByteBlock(IV));
             // v = version: MUST be "2" per i2pd RouterInfo.cpp line 310
             // i2pd marks the address as invalid if v != "2"
-            // Post-quantum is indicated via separate "pq" option, not "v"
             addr.Options["v"] = "2";
+            // Post-quantum is indicated via separate "pq" option, not "v"
+            addr.Options["pq"] = "4";
 
             // Publish to RouterContext
             var addresses = new List<I2PRouterAddress> { addr };
