@@ -3,102 +3,97 @@ using System.Diagnostics;
 using System.IO;
 using System.Threading;
 
-namespace I2PCore.Utils
+namespace I2PCore.Utils;
+
+public class FileLogStore : StreamLogStore
 {
-    public class FileLogStore : StreamLogStore
+    private readonly bool DoTimestamp;
+    public readonly long MaxLogFileSize;
+    private DateTime LogFileCreated;
+
+    private string LogFileName;
+
+    public FileLogStore(bool dotimestamp, long maxfilesize = 10 * 1024 * 1024)
     {
-        readonly public long MaxLogFileSize;
+        DoTimestamp = dotimestamp;
+        MaxLogFileSize = maxfilesize;
+    }
 
-        private string LogFileName = null;
-        private DateTime LogFileCreated;
-        private readonly bool DoTimestamp;
+    public override string Name
+    {
+        get => LogFileName;
 
-        public FileLogStore( bool dotimestamp, long maxfilesize = 10 * 1024 * 1024 )
+        set
         {
-            DoTimestamp = dotimestamp;
-            MaxLogFileSize = maxfilesize;
+            Close();
+            LogFileName = Path.GetFullPath(value);
         }
+    }
 
-        public override string Name
-        {
-            get
-            {
-                return LogFileName;
-            }
+    protected virtual void CreateTheFile()
+    {
+        var dirname = Path.GetDirectoryName(LogFileName);
+        if (!Directory.Exists(dirname))
+            Directory.CreateDirectory(dirname);
 
-            set
-            {
-                Close();
-                LogFileName = Path.GetFullPath( value );
-            }
-        }
-
-        protected virtual void CreateTheFile()
-        {
-            var dirname = Path.GetDirectoryName( LogFileName );
-            if ( !Directory.Exists( dirname ) )
-                Directory.CreateDirectory( dirname );
-
-            var retries = 1;
+        var retries = 1;
         again:
-            try
-            {
-                string tsfilename;
-
-                if ( DoTimestamp )
-                {
-                    tsfilename = Path.Combine( Path.GetDirectoryName( LogFileName ),
-                        Path.GetFileNameWithoutExtension( LogFileName )
-                        + $"_{DateTime.UtcNow:yyyyMMdd_HHmm}{retries}{Path.GetExtension( LogFileName )}" );
-                    Stream = new FileStream(
-                            tsfilename,
-                            FileMode.Create,
-                            FileAccess.Write,
-                            FileShare.Read,
-                            1024 );
-                }
-                else
-                {
-                    tsfilename = Path.Combine( Path.GetDirectoryName( LogFileName ),
-                        Path.GetFileNameWithoutExtension( LogFileName )
-                        + $"{(retries == 1 ? "": retries.ToString())}{Path.GetExtension( LogFileName )}" );
-                    Stream = new FileStream(
-                            tsfilename,
-                            FileMode.Create,
-                            FileAccess.Write,
-                            FileShare.Read,
-                            1024 );
-                }
-            }
-            catch ( IOException ex )
-            {
-                Thread.Sleep( 200 );
-                if ( retries++ <= 5 ) goto again;
-
-                LogFileName = null;
-                Close();
-
-                Debug.WriteLine( ex );
-                throw;
-            }
-            LogFileCreated = DateTime.UtcNow;
-        }
-
-        public override void CheckStoreRotation()
+        try
         {
-            if ( LogFile == null ) return;
+            string tsfilename;
 
-            if ( LogFile.BaseStream.Length > MaxLogFileSize || 
-                ( DoTimestamp && LogFileCreated.Day != DateTime.UtcNow.Day ) )
+            if (DoTimestamp)
             {
-                Close();
+                tsfilename = Path.Combine(Path.GetDirectoryName(LogFileName),
+                    Path.GetFileNameWithoutExtension(LogFileName)
+                    + $"_{DateTime.UtcNow:yyyyMMdd_HHmm}{retries}{Path.GetExtension(LogFileName)}");
+                Stream = new FileStream(
+                    tsfilename,
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.Read,
+                    1024);
+            }
+            else
+            {
+                tsfilename = Path.Combine(Path.GetDirectoryName(LogFileName),
+                    Path.GetFileNameWithoutExtension(LogFileName)
+                    + $"{(retries == 1 ? "" : retries.ToString())}{Path.GetExtension(LogFileName)}");
+                Stream = new FileStream(
+                    tsfilename,
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.Read,
+                    1024);
             }
         }
-
-        public override void Log( string text )
+        catch (IOException ex)
         {
-            if ( LogFile == null ) CreateTheFile();
-            base.Log( text );
+            Thread.Sleep(200);
+            if (retries++ <= 5) goto again;
+
+            LogFileName = null;
+            Close();
+
+            Debug.WriteLine(ex);
+            throw;
         }
+
+        LogFileCreated = DateTime.UtcNow;
+    }
+
+    public override void CheckStoreRotation()
+    {
+        if (LogFile == null) return;
+
+        if (LogFile.BaseStream.Length > MaxLogFileSize ||
+            (DoTimestamp && LogFileCreated.Day != DateTime.UtcNow.Day))
+            Close();
+    }
+
+    public override void Log(string text)
+    {
+        if (LogFile == null) CreateTheFile();
+        base.Log(text);
     }
 }

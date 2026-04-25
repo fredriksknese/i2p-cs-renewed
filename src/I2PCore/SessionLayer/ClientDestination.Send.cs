@@ -1,148 +1,166 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using I2PCore.Data;
 using I2PCore.TunnelLayer;
 using I2PCore.TunnelLayer.I2NP.Data;
 using I2PCore.TunnelLayer.I2NP.Messages;
 using I2PCore.Utils;
 
-namespace I2PCore.SessionLayer
+namespace I2PCore.SessionLayer;
+
+public partial class ClientDestination : IClient
 {
-    public partial class ClientDestination : IClient
+    private SendPreconditionState CheckSendPreconditions(I2PIdentHash dest)
     {
-        private class SendPreconditionState
+        if (InboundEstablishedPool.IsEmpty)
         {
-            public ClientStates ClientState;
-            public OutboundTunnel OutTunnel;
-            public ILease RemoteLease;
-            public ILeaseSet RemoteLeaseSet;
+            Logging.LogDebug($"{this}: Inbound established pool is empty.");
+            return new SendPreconditionState { ClientState = ClientStates.NoTunnels };
         }
 
-        private SendPreconditionState CheckSendPreconditions( I2PIdentHash dest )
+        var outtunnel = SelectOutboundTunnel();
+
+        if (outtunnel is null)
         {
-            if ( InboundEstablishedPool.IsEmpty )
-            {
-                Logging.LogDebug( $"{this}: Inbound established pool is empty." );
-                return new SendPreconditionState { ClientState = ClientStates.NoTunnels };
-            }
-
-            var outtunnel = SelectOutboundTunnel();
-
-            if ( outtunnel is null )
-            {
-                Logging.LogDebug( $"{this}: No established outbound tunnels." );
-                return new SendPreconditionState { ClientState = ClientStates.NoTunnels };
-            }
-
-            var leaseset = MySessions.GetLeaseSet( dest );
-
-            if ( leaseset is null )
-            {
-                return new SendPreconditionState { ClientState = ClientStates.NoLeases };
-            }
-
-            var l = MySessions.GetTunnelPair( dest, outtunnel );
-
-            if ( l is null )
-            {
-                return new SendPreconditionState { ClientState = ClientStates.NoLeases };
-            }
-
-            Logging.LogDebug( $"{this}: CheckSendPreconditions: Using tunnels: {outtunnel} -> {l}" );
-
-            return new SendPreconditionState
-                            {
-                                ClientState = ClientStates.Established,
-                                OutTunnel = outtunnel,
-                                RemoteLease = l,
-                                RemoteLeaseSet = leaseset,
-                            };
+            Logging.LogDebug($"{this}: No established outbound tunnels.");
+            return new SendPreconditionState { ClientState = ClientStates.NoTunnels };
         }
 
-        /// <summary>
-        /// Send cloves to the destination through a local out tunnel
-        /// after encrypting them for the Destination.
-        /// </summary>
-        /// <returns>The send.</returns>
-        /// <param name="dest">The Destination</param>
-        /// <param name="cloves">Cloves</param>
-        internal ClientStates Send( I2PDestination dest, params GarlicClove[] cloves )
+        var leaseset = MySessions.GetLeaseSet(dest);
+
+        if (leaseset is null) return new SendPreconditionState { ClientState = ClientStates.NoLeases };
+
+        var l = MySessions.GetTunnelPair(dest, outtunnel);
+
+        if (l is null) return new SendPreconditionState { ClientState = ClientStates.NoLeases };
+
+        Logging.LogDebug($"{this}: CheckSendPreconditions: Using tunnels: {outtunnel} -> {l}");
+
+        return new SendPreconditionState
         {
-            if ( Terminated ) throw new InvalidOperationException( $"Destination {this} is terminated." );
+            ClientState = ClientStates.Established,
+            OutTunnel = outtunnel,
+            RemoteLease = l,
+            RemoteLeaseSet = leaseset
+        };
+    }
 
-            var replytunnel = SelectInboundTunnel();
+    /// <summary>
+    ///     Send cloves to the destination through a local out tunnel
+    ///     after encrypting them for the Destination.
+    /// </summary>
+    /// <returns>The send.</returns>
+    /// <param name="dest">The Destination</param>
+    /// <param name="cloves">Cloves</param>
+    internal ClientStates Send(I2PDestination dest, params GarlicClove[] cloves)
+    {
+        if (Terminated) throw new InvalidOperationException($"Destination {this} is terminated.");
 
-            var remoteleases = MySessions.GetLeaseSet( dest.IdentHash );
-            if ( remoteleases is null )
-            { 
-                return ClientStates.NoLeases;
-            }
-
-            var remotepubkeys = remoteleases
-                    .PublicKeys;
-
-            var msg = MySessions.Encrypt(
-                dest.IdentHash,
-                remotepubkeys,
-                replytunnel,
-                new List<GarlicClove>( cloves ) );
-
-            return Send( dest, msg );
+        var replytunnel = SelectInboundTunnel();
+        if (replytunnel is null)
+        {
+            Logging.LogWarning($"{this}: Send: No inbound tunnel available for reply.");
+            return ClientStates.NoTunnels;
         }
 
-        /// <summary>
-        /// Send a I2NPMessage to the Destination through a local out tunnel.
-        /// </summary>
-        /// <returns>The send.</returns>
-        /// <param name="dest">The Destination</param>
-        /// <param name="msg">I2NPMessage</param>
-        internal ClientStates Send( I2PDestination dest, I2NpMessage msg )
+        var remoteleases = MySessions.GetLeaseSet(dest.IdentHash);
+        if (remoteleases is null)
         {
-            if ( Terminated ) throw new InvalidOperationException( $"This Destination {this} is terminated." );
+            Logging.LogWarning($"{this}: Send: No LeaseSet for {dest.IdentHash.Id32Short}.");
+            return ClientStates.NoLeases;
+        }
 
-            var result = CheckSendPreconditions( dest.IdentHash );
+        var remotepubkeys = remoteleases.PublicKeys;
 
-            switch ( result.ClientState )
-            {
-                case ClientStates.Established:
-                    break;
+        var keyTypes = string.Join(", ", remotepubkeys.Select(pk => pk.Certificate.PublicKeyType.ToString()));
+        var leaseCount = remoteleases.Leases.Count();
+        Logging.LogInformation($"{this}: Send: Remote {dest.IdentHash.Id32Short} LeaseSet has " +
+                               $"{leaseCount} lease(s), encryption key types: [{keyTypes}]");
 
-                case ClientStates.NoTunnels:
-                    Logging.LogDebug( $"{this}: No established tunnels (inbound or outbound) available." );
-                    return result.ClientState;
+        var msg = MySessions.Encrypt(
+            dest.IdentHash,
+            remotepubkeys,
+            replytunnel,
+            new List<GarlicClove>(cloves));
 
-                case ClientStates.NoLeases:
-                    Logging.LogDebug( $"{this}: No leases available." );
-                    LookupDestination( dest.IdentHash, HandleDestinationLookupResult, null );
-                    return result.ClientState;
-            }
+        if (msg is null)
+        {
+            Logging.LogWarning($"{this}: Send: Garlic encryption returned null for {dest.IdentHash.Id32Short}.");
+            return ClientStates.NoLeases;
+        }
 
-            // Remote leases getting old?
-            var newestlease = result.RemoteLeaseSet.Expire;
-            var leasehorizon = newestlease - DateTime.UtcNow;
+        return Send(dest, msg);
+    }
 
-            if ( leasehorizon.TotalSeconds < 0 )
-            {
+    /// <summary>
+    ///     Send a I2NPMessage to the Destination through a local out tunnel.
+    /// </summary>
+    /// <returns>The send.</returns>
+    /// <param name="dest">The Destination</param>
+    /// <param name="msg">I2NPMessage</param>
+    internal ClientStates Send(I2PDestination dest, I2NpMessage msg)
+    {
+        if (Terminated) throw new InvalidOperationException($"This Destination {this} is terminated.");
+
+        var result = CheckSendPreconditions(dest.IdentHash);
+
+        switch (result.ClientState)
+        {
+            case ClientStates.Established:
+                break;
+
+            case ClientStates.NoTunnels:
+                Logging.LogDebug($"{this}: No established tunnels (inbound or outbound) available.");
+                return result.ClientState;
+
+            case ClientStates.NoLeases:
+                Logging.LogDebug($"{this}: No leases available.");
+                LookupDestination(dest.IdentHash, HandleDestinationLookupResult);
+                return result.ClientState;
+        }
+
+        // Remote leases getting old?
+        var newestlease = result.RemoteLeaseSet.Expire;
+        var leasehorizon = newestlease - DateTime.UtcNow;
+
+        if (leasehorizon.TotalSeconds < 0)
+        {
 #if !LOG_ALL_LEASE_MGMT
-                Logging.LogDebug( $"{this} Send: Leases for {dest.IdentHash.Id32Short} have all expired ({Tunnel.TunnelLifetime}). Looking up." );
+            Logging.LogDebug(
+                $"{this} Send: Leases for {dest.IdentHash.Id32Short} have all expired ({Tunnel.TunnelLifetime}). Looking up.");
 #endif
-                LookupDestination( dest.IdentHash, HandleDestinationLookupResult, null );
-                return ClientStates.NoLeases;
-            }
-            else if ( leasehorizon < MinLeaseLifetime )
-            {
-#if !LOG_ALL_LEASE_MGMT
-                Logging.LogDebug( $"{this} Send: Leases for {dest.IdentHash.Id32Short} is getting old ({leasehorizon}). Looking up." );
-#endif
-                LookupDestination( dest.IdentHash, HandleDestinationLookupResult, null );
-            }
-
-            result.OutTunnel.Send(
-                new TunnelMessageTunnel(
-                    msg,
-                    result.RemoteLease.TunnelGw, result.RemoteLease.TunnelId ) );
-
-            return ClientStates.Established;
+            LookupDestination(dest.IdentHash, HandleDestinationLookupResult);
+            return ClientStates.NoLeases;
         }
+
+        if (leasehorizon < MinLeaseLifetime)
+        {
+#if !LOG_ALL_LEASE_MGMT
+            Logging.LogDebug(
+                $"{this} Send: Leases for {dest.IdentHash.Id32Short} is getting old ({leasehorizon}). Looking up.");
+#endif
+            LookupDestination(dest.IdentHash, HandleDestinationLookupResult);
+        }
+
+        Logging.LogInformation($"{this}: Send: Routing garlic via outbound tunnel " +
+                               $"{result.OutTunnel.TunnelDebugTrace} to remote lease " +
+                               $"GW={result.RemoteLease.TunnelGw.Id32Short} TunnelId={result.RemoteLease.TunnelId}, " +
+                               $"msg type={msg.MessageType}, payload={msg.Payload.Length} bytes");
+
+        result.OutTunnel.Send(
+            new TunnelMessageTunnel(
+                msg,
+                result.RemoteLease.TunnelGw, result.RemoteLease.TunnelId));
+
+        return ClientStates.Established;
+    }
+
+    private class SendPreconditionState
+    {
+        public ClientStates ClientState;
+        public OutboundTunnel OutTunnel;
+        public ILease RemoteLease;
+        public ILeaseSet RemoteLeaseSet;
     }
 }

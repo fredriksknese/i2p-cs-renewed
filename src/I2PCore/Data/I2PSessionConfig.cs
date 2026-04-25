@@ -1,199 +1,149 @@
 ﻿using System;
 using System.Buffers;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.IO;
 using I2PCore.Utils;
-using Org.BouncyCastle.Math;
 
-namespace I2PCore.Data
+namespace I2PCore.Data;
+
+public class I2PSessionConfig : I2PType
 {
-    public class I2PSessionConfig: I2PType
+    public enum MessageReliabilities
     {
-        public enum MessageReliabilities { None, BestEffort, Invalid }
+        None,
+        BestEffort,
+        Invalid
+    }
 
-        public I2PDestination Destination { get; set; }
-        public I2PMapping Options { get; set; }
-        public I2PDate Date { get; set; }
-        public I2PSignature Signature { get; set; }
+    private MessageReliabilities MessageReliabilityCached = MessageReliabilities.Invalid;
 
-        /// Not trasmitted
-        public I2PSigningPrivateKey PrivateSigningKey;
-        public I2PByteBlock SignedBuf;
+    /// Not trasmitted
+    public I2PSigningPrivateKey PrivateSigningKey;
 
-        public I2PSessionConfig( 
-                I2PDestination dest, 
-                I2PMapping map, 
-                I2PDate date, 
-                I2PSignature sign, 
-                I2PSigningPrivateKey privsignkey )
+    public I2PByteBlock SignedBuf;
+
+    public I2PSessionConfig(
+        I2PDestination dest,
+        I2PMapping map,
+        I2PDate date,
+        I2PSignature sign,
+        I2PSigningPrivateKey privsignkey)
+    {
+        Destination = dest;
+        Options = map != null ? map : new I2PMapping();
+        Date = date != null ? date : new I2PDate(DateTime.Now);
+        Signature = sign;
+
+        PrivateSigningKey = privsignkey;
+    }
+
+    public I2PSessionConfig(I2PBufferCursor reader)
+    {
+        var startPos = reader.Position;
+        Destination = new I2PDestination(reader);
+        Options = new I2PMapping(reader);
+        Date = new I2PDate(reader);
+
+        SignedBuf = reader.BlockSince(startPos);
+
+        Signature = new I2PSignature(reader, Destination.Certificate);
+    }
+
+    public I2PDestination Destination { get; set; }
+    public I2PMapping Options { get; set; }
+    public I2PDate Date { get; set; }
+    public I2PSignature Signature { get; set; }
+
+    public bool DontPublishLeaseSet
+    {
+        get => bool.Parse(Options.TryGet("i2cp.dontPublishLeaseSet", "true"));
+        set => Options["i2cp.dontPublishLeaseSet"] = value.ToString();
+    }
+
+    public bool FastReceive
+    {
+        get => bool.Parse(Options.TryGet("i2cp.fastReceive", "true"));
+        set => Options["i2cp.fastReceive"] = value.ToString();
+    }
+
+    public MessageReliabilities MessageReliability
+    {
+        get
         {
-            Destination = dest;
-            Options = map != null ? map : new I2PMapping();
-            Date = date != null ? date : new I2PDate( DateTime.Now );
-            Signature = sign;
+            if (MessageReliabilityCached != MessageReliabilities.Invalid) return MessageReliabilityCached;
 
-            PrivateSigningKey = privsignkey;
+            MessageReliabilityCached = Options
+                .TryGet("i2cp.messageReliability", "none")
+                .ToLower() == "besteffort"
+                ? MessageReliabilities.BestEffort
+                : MessageReliabilities.None;
+
+            return MessageReliabilityCached;
         }
-
-        public I2PSessionConfig( I2PBufferCursor reader )
+        set
         {
-            var startPos = reader.Position;
-            Destination = new I2PDestination( reader );
-            Options = new I2PMapping( reader );
-            Date = new I2PDate( reader );
+            Options["i2cp.messageReliability"] =
+                value == MessageReliabilities.BestEffort
+                    ? "BestEffort"
+                    : "None";
 
-            SignedBuf = reader.BlockSince( startPos );
-
-            Signature = new I2PSignature( reader, Destination.Certificate );
+            MessageReliabilityCached = MessageReliabilities.Invalid;
         }
+    }
 
-        public void Write( IBufferWriter<byte> dest )
-        {
-            var dest2 = new ArrayBufferWriter<byte>();
-            Destination.Write( dest2 );
-            Options.Write( dest2 );
-            Date.Write( dest2 );
-            var dest2data = dest2.WrittenSpan.ToArray();
+    public int InboundLength
+    {
+        get => int.Parse(Options.TryGet("inbound.length", "2"));
+        set => Options["inbound.length"] = value.ToString();
+    }
 
-            var sig = new I2PSignature( 
-                    new I2PBufferCursor( 
-                        I2PSignature.DoSign( PrivateSigningKey, new I2PByteBlock( dest2data ) ) ), 
-                    Signature.Certificate );
+    public int InboundLengthVariance
+    {
+        get => int.Parse(Options.TryGet("inbound.lengthVariance", "0"));
+        set => Options["inbound.lengthVariance"] = value.ToString();
+    }
 
-            dest.WriteBytes( dest2data );
-            sig.Write( dest );
-        }
+    public int InboundQuantity
+    {
+        get => int.Parse(Options.TryGet("inbound.quantity", "2"));
+        set => Options["inbound.quantity"] = value.ToString();
+    }
 
-        public bool DontPublishLeaseSet
-        {
-            get
-            {
-                return bool.Parse( Options.TryGet( "i2cp.dontPublishLeaseSet", "true" ) );
-            }
-            set
-            {
-                Options["i2cp.dontPublishLeaseSet"] = value.ToString();
-            }
-        }
+    public int OutboundLength
+    {
+        get => int.Parse(Options.TryGet("outbound.length", "2"));
+        set => Options["outbound.length"] = value.ToString();
+    }
 
-        public bool FastReceive
-        {
-            get
-            {
-                return bool.Parse( Options.TryGet( "i2cp.fastReceive", "true" ) );
-            }
-            set
-            {
-                Options["i2cp.fastReceive"] = value.ToString();
-            }
-        }
+    public int OutboundLengthVariance
+    {
+        get => int.Parse(Options["outbound.lengthVariance"]);
+        set => Options["outbound.lengthVariance"] = value.ToString();
+    }
 
-        private MessageReliabilities MessageReliabilityCached = MessageReliabilities.Invalid;
-        public MessageReliabilities MessageReliability
-        {
-            get
-            {
-                if ( MessageReliabilityCached != MessageReliabilities.Invalid )
-                {
-                    return MessageReliabilityCached;
-                }
+    public int OutboundQuantity
+    {
+        get => int.Parse(Options.TryGet("outbound.quantity", "2"));
+        set => Options["outbound.quantity"] = value.ToString();
+    }
 
-                MessageReliabilityCached = Options
-                    .TryGet( "i2cp.messageReliability", "none" )
-                    .ToLower() == "besteffort"
-                        ? MessageReliabilities.BestEffort
-                        : MessageReliabilities.None;
+    public void Write(IBufferWriter<byte> dest)
+    {
+        var dest2 = new ArrayBufferWriter<byte>();
+        Destination.Write(dest2);
+        Options.Write(dest2);
+        Date.Write(dest2);
+        var dest2data = dest2.WrittenSpan.ToArray();
 
-                return MessageReliabilityCached;
-            }
-            set
-            {
-                Options["i2cp.messageReliability"] = 
-                    value == MessageReliabilities.BestEffort
-                        ? "BestEffort"
-                        : "None";
+        var sig = new I2PSignature(
+            new I2PBufferCursor(
+                I2PSignature.DoSign(PrivateSigningKey, new I2PByteBlock(dest2data))),
+            Signature.Certificate);
 
-                MessageReliabilityCached = MessageReliabilities.Invalid;
-            }
-        }
+        dest.WriteBytes(dest2data);
+        sig.Write(dest);
+    }
 
-        public int InboundLength
-        {
-            get
-            {
-                return int.Parse( Options.TryGet( "inbound.length", "2" ) );
-            }
-            set
-            {
-                Options["inbound.length"] = value.ToString();
-            }
-        }
-
-        public int InboundLengthVariance
-        {
-            get
-            {
-                return int.Parse( Options.TryGet( "inbound.lengthVariance", "0" ) );
-            }
-            set
-            {
-                Options["inbound.lengthVariance"] = value.ToString();
-            }
-        }
-
-        public int InboundQuantity
-        {
-            get
-            {
-                return int.Parse( Options.TryGet( "inbound.quantity", "2" ) );
-            }
-            set
-            {
-                Options["inbound.quantity"] = value.ToString();
-            }
-        }
-
-        public int OutboundLength
-        {
-            get
-            {
-                return int.Parse( Options.TryGet( "outbound.length", "2" ) );
-            }
-            set
-            {
-                Options["outbound.length"] = value.ToString();
-            }
-        }
-
-        public int OutboundLengthVariance
-        {
-            get
-            {
-                return int.Parse( Options["outbound.lengthVariance"] );
-            }
-            set
-            {
-                Options["outbound.lengthVariance"] = value.ToString();
-            }
-        }
-
-        public int OutboundQuantity
-        {
-            get
-            {
-                return int.Parse( Options.TryGet( "outbound.quantity", "2" ) );
-            }
-            set
-            {
-                Options["outbound.quantity"] = value.ToString();
-            }
-        }
-
-        public override string ToString()
-        {
-            return $"{Date} {Destination} {Options}";
-        }
+    public override string ToString()
+    {
+        return $"{Date} {Destination} {Options}";
     }
 }

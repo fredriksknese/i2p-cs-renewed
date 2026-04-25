@@ -1,14 +1,19 @@
-using Microsoft.AspNetCore.Mvc.RazorPages;
 using I2PCore;
 using I2PCore.Data;
 using I2PCore.TransportLayer;
 using I2PRouterWeb.Services;
+using Microsoft.AspNetCore.Mvc.RazorPages;
 
 namespace I2PRouterWeb.Pages;
 
 public class RoutersModel : PageModel
 {
     private readonly RouterService _routerService;
+
+    public RoutersModel(RouterService routerService)
+    {
+        _routerService = routerService;
+    }
 
     public List<RouterDisplayInfo> Routers { get; set; } = new();
     public int TotalRouters { get; set; }
@@ -18,11 +23,6 @@ public class RoutersModel : PageModel
     public int FloodfillCount { get; set; }
     public string SearchQuery { get; set; } = string.Empty;
     public bool ShowAll { get; set; }
-
-    public RoutersModel(RouterService routerService)
-    {
-        _routerService = routerService;
-    }
 
     public void OnGet(string? search, bool? all)
     {
@@ -56,11 +56,9 @@ public class RoutersModel : PageModel
 
                 // Apply search filter if provided
                 if (!string.IsNullOrEmpty(SearchQuery))
-                {
                     filteredRouters = filteredRouters.Where(r =>
                         r.Identity.IdentHash.Id32Short.Contains(SearchQuery, StringComparison.OrdinalIgnoreCase) ||
                         r.Addresses.Any(a => a.Host?.ToString()?.Contains(SearchQuery) == true));
-                }
             }
             else
             {
@@ -70,63 +68,63 @@ public class RoutersModel : PageModel
             }
 
             Routers = filteredRouters.Select(ri =>
-            {
-                var hash = ri.Identity.IdentHash;
-                var stats = netDb.Statistics[hash];
-
-                bool isConnected = false;
-                string protocol = string.Empty;
-                bool isPQ = false;
-                
-                var activeTransport = transportProvider?.GetActiveTransport(hash);
-                if (activeTransport != null)
                 {
-                    isConnected = true;
-                    protocol = activeTransport.Protocol;
-                    isPQ = activeTransport.IsPQ;
-                }
+                    var hash = ri.Identity.IdentHash;
+                    var stats = netDb.Statistics[hash];
 
-                // Gather all transport types from addresses
-                var transports = ri.Addresses
-                    .Select(a => a.TransportStyle?.ToString() ?? "?")
-                    .Distinct()
-                    .ToList();
+                    var isConnected = false;
+                    var protocol = string.Empty;
+                    var isPQ = false;
 
-                var caps = ri.Options?["caps"]?.ToString() ?? "";
-                var version = ri.Options?["router.version"]?.ToString() ?? "";
-                var isFloodfill = caps.Contains('f');
+                    var activeTransport = transportProvider?.GetActiveTransport(hash);
+                    if (activeTransport != null)
+                    {
+                        isConnected = true;
+                        protocol = activeTransport.Protocol;
+                        isPQ = activeTransport.IsPQ;
+                    }
 
-                // Get first IPv4 address
-                var addr = ri.Addresses.FirstOrDefault(a => a.Options.Contains("host"));
-                var host = addr?.Host?.ToString() ?? "";
-                var port = addr?.Port ?? 0;
+                    // Gather all transport types from addresses
+                    var transports = ri.Addresses
+                        .Select(a => a.TransportStyle?.ToString() ?? "?")
+                        .Distinct()
+                        .ToList();
 
-                return new RouterDisplayInfo
-                {
-                    Hash = hash.Id32Short,
-                    FullHash = hash.ToString(),
-                    Host = host,
-                    Port = port,
-                    Caps = caps,
-                    Version = version,
-                    IsFloodfill = isFloodfill,
-                    Transports = transports,
-                    IsConnected = isConnected,
-                    Protocol = protocol,
-                    IsPQ = isPQ,
-                    PublishedDate = (DateTime)ri.PublishedDate,
-                    Score = stats?.Score ?? 0,
-                    SuccessfulConnects = stats?.SuccessfulConnects ?? 0,
-                    FailedConnects = stats?.FailedConnects ?? 0,
-                    SuccessfulTunnelMember = stats?.SuccessfulTunnelMember ?? 0,
-                    DeclinedTunnelMember = stats?.DeclinedTunnelMember ?? 0,
-                    TunnelBuildTimeout = stats?.TunnelBuildTimeout ?? 0,
-                    AddressCount = ri.Addresses?.Length ?? 0
-                };
-            })
-            .OrderByDescending(r => r.IsConnected)
-            .ThenByDescending(r => r.Score)
-            .ToList();
+                    var caps = ri.Options?["caps"]?.ToString() ?? "";
+                    var version = ri.Options?["router.version"]?.ToString() ?? "";
+                    var isFloodfill = caps.Contains('f');
+
+                    // Get first IPv4 address
+                    var addr = ri.Addresses.FirstOrDefault(a => a.Options.Contains("host"));
+                    var host = addr?.Host?.ToString() ?? "";
+                    var port = addr?.Port ?? 0;
+
+                    return new RouterDisplayInfo
+                    {
+                        Hash = hash.Id32Short,
+                        FullHash = hash.ToString(),
+                        Host = host,
+                        Port = port,
+                        Caps = caps,
+                        Version = version,
+                        IsFloodfill = isFloodfill,
+                        Transports = transports,
+                        IsConnected = isConnected,
+                        Protocol = protocol,
+                        IsPQ = isPQ,
+                        PublishedDate = (DateTime)ri.PublishedDate,
+                        Score = stats?.Score ?? 0,
+                        SuccessfulConnects = stats?.SuccessfulConnects ?? 0,
+                        FailedConnects = stats?.FailedConnects ?? 0,
+                        SuccessfulTunnelMember = stats?.SuccessfulTunnelMember ?? 0,
+                        DeclinedTunnelMember = stats?.DeclinedTunnelMember ?? 0,
+                        TunnelBuildTimeout = stats?.TunnelBuildTimeout ?? 0,
+                        AddressCount = ri.Addresses?.Length ?? 0
+                    };
+                })
+                .OrderByDescending(r => r.IsConnected)
+                .ThenByDescending(r => r.Score)
+                .ToList();
 
             _routerService.LogActivity("Routers", $"Viewed {Routers.Count} routers");
         }

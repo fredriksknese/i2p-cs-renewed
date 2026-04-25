@@ -1,10 +1,9 @@
-﻿namespace I2PCore.Utils
+﻿namespace I2PCore.Utils;
+
+public interface ILogStore
 {
-    public interface ILogStore
-    {
-        string Name { set; get; }
-        void Log( string text );
-        void CheckStoreRotation();
-        void Close();
-    }
+    string Name { get; set; }
+    void Log(string text);
+    void CheckStoreRotation();
+    void Close();
 }

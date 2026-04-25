@@ -1,67 +1,66 @@
-﻿using System;
-using System.Buffers;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
+﻿using System.Buffers;
 using I2PCore.Data;
-using System.IO;
 using I2PCore.Utils;
 
-namespace I2P.I2CP.Messages
+namespace I2P.I2CP.Messages;
+
+public class HostLookupMessage : I2CpMessage
 {
-    public class HostLookupMessage : I2CpMessage
+    public enum HostLookupTypes : byte
     {
-        public enum HostLookupTypes: byte { Hash = 0, HostName = 1 }
+        Hash = 0,
+        HostName = 1
+    }
 
-        public ushort SessionId;
-        public uint RequestId;
-        public uint TimeoutMilliseconds;
-        public HostLookupTypes RequestType;
-        public I2PIdentHash Hash;
-        public I2PString HostName;
+    public I2PIdentHash Hash;
+    public I2PString HostName;
+    public uint RequestId;
+    public HostLookupTypes RequestType;
 
-        public HostLookupMessage( I2PBufferCursor reader )
-            : base( ProtocolMessageType.HostLookup )
+    public ushort SessionId;
+    public uint TimeoutMilliseconds;
+
+    public HostLookupMessage(I2PBufferCursor reader)
+        : base(ProtocolMessageType.HostLookup)
+    {
+        SessionId = reader.ReadUInt16BigEndian();
+        RequestId = reader.ReadUInt32BigEndian();
+        TimeoutMilliseconds = reader.ReadUInt32BigEndian();
+        RequestType = (HostLookupTypes)reader.ReadByte();
+
+        switch (RequestType)
         {
-            SessionId = reader.ReadUInt16BigEndian();
-            RequestId = reader.ReadUInt32BigEndian();
-            TimeoutMilliseconds = reader.ReadUInt32BigEndian();
-            RequestType = (HostLookupTypes)reader.ReadByte();
+            case HostLookupTypes.Hash:
+                Hash = new I2PIdentHash(reader);
+                break;
 
-            switch ( RequestType )
-            {
-                case HostLookupTypes.Hash:
-                    Hash = new I2PIdentHash( reader );
-                    break;
-
-                case HostLookupTypes.HostName:
-                    HostName = new I2PString( reader );
-                    break;
-            }
+            case HostLookupTypes.HostName:
+                HostName = new I2PString(reader);
+                break;
         }
+    }
 
-        public override void Write( ArrayBufferWriter<byte> dest )
+    public override void Write(ArrayBufferWriter<byte> dest)
+    {
+        dest.WriteUInt16BigEndian(SessionId);
+        dest.WriteUInt32BigEndian(RequestId);
+        dest.WriteUInt32BigEndian(TimeoutMilliseconds);
+        dest.WriteByte((byte)RequestType);
+
+        switch (RequestType)
         {
-            dest.WriteUInt16BigEndian( SessionId );
-            dest.WriteUInt32BigEndian( RequestId );
-            dest.WriteUInt32BigEndian( TimeoutMilliseconds );
-            dest.WriteByte( (byte)RequestType );
+            case HostLookupTypes.Hash:
+                Hash.Write(dest);
+                break;
 
-            switch ( RequestType )
-            {
-                case HostLookupTypes.Hash:
-                    Hash.Write( dest );
-                    break;
-
-                case HostLookupTypes.HostName:
-                    HostName.Write( dest );
-                    break;
-            }
+            case HostLookupTypes.HostName:
+                HostName.Write(dest);
+                break;
         }
+    }
 
-        public override string ToString()
-        {
-            return $"{GetType().Name} {SessionId} {RequestId} {Hash?.Id32Short} {HostName}";
-        }
+    public override string ToString()
+    {
+        return $"{GetType().Name} {SessionId} {RequestId} {Hash?.Id32Short} {HostName}";
     }
 }

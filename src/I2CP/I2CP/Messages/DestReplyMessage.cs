@@ -1,59 +1,49 @@
-﻿using System;
-using System.Buffers;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
+﻿using System.Buffers;
 using I2PCore.Data;
-using System.IO;
 using I2PCore.Utils;
 
-namespace I2P.I2CP.Messages
+namespace I2P.I2CP.Messages;
+
+public class DestReplyMessage : I2CpMessage
 {
-    public class DestReplyMessage : I2CpMessage
+    public I2PDestination Destination;
+    public I2PIdentHash Ident;
+
+    // Success
+    public DestReplyMessage(I2PDestination dest)
+        : base(ProtocolMessageType.DestReply)
     {
-        public I2PDestination Destination;
-        public I2PIdentHash Ident;
+        Destination = dest;
+    }
 
-        // Success
-        public DestReplyMessage( I2PDestination dest )
-            : base( ProtocolMessageType.DestReply )
+    // Failure
+    public DestReplyMessage(I2PIdentHash hash)
+        : base(ProtocolMessageType.DestReply)
+    {
+        Ident = hash;
+    }
+
+    public DestReplyMessage(I2PBufferCursor reader)
+        : base(ProtocolMessageType.DestReply)
+    {
+        Destination = null;
+        Ident = null;
+
+        if (reader.Remaining == 0) return;
+        if (reader.Remaining == 32)
+            Ident = new I2PIdentHash(reader);
+        else
+            Destination = new I2PDestination(reader);
+    }
+
+    public override void Write(ArrayBufferWriter<byte> dest)
+    {
+        if (Destination != null)
         {
-            Destination = dest;
+            Destination.Write(dest);
+            return;
         }
 
-        // Failure
-        public DestReplyMessage( I2PIdentHash hash )
-            : base( ProtocolMessageType.DestReply )
-        {
-            Ident = hash;
-        }
-
-        public DestReplyMessage( I2PBufferCursor reader )
-            : base( ProtocolMessageType.DestReply )
-        {
-            Destination = null;
-            Ident = null;
-
-            if ( reader.Remaining == 0 ) return;
-            if ( reader.Remaining == 32 )
-            {
-                Ident = new I2PIdentHash( reader );
-            }
-            else
-            {
-                Destination = new I2PDestination( reader );
-            }
-        }
-
-        public override void Write( ArrayBufferWriter<byte> dest )
-        {
-            if ( Destination != null )
-            {
-                Destination.Write( dest );
-                return;
-            }
-
-            Ident.Write( dest );
-        }
+        Ident.Write(dest);
     }
 }

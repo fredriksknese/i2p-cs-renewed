@@ -1,76 +1,86 @@
+using System.Collections.Concurrent;
+using System.Net;
+using I2PCore;
+using I2PCore.Client;
 using I2PCore.Data;
 using I2PCore.SessionLayer;
 using I2PCore.TransportLayer;
+using I2PCore.TransportLayer.Log;
 using I2PCore.TunnelLayer;
 using I2PCore.Utils;
-using System.Collections.Concurrent;
-using System.Net;
 
 namespace I2PRouterWeb.Services;
 
 public class RouterService
 {
-    private readonly NetDbLogService _netDbLogService;
+    private const int MaxActivityLogEntries = 1000;
     private readonly ConcurrentQueue<ActivityLogEntry> _activityLog = new();
+    private readonly NetDbLogService _netDbLogService;
+    private DateTime? _startTime;
 
     public RouterService(NetDbLogService netDbLogService)
     {
         _netDbLogService = netDbLogService;
     }
-    private const int MaxActivityLogEntries = 1000;
-    private bool _isRunning = false;
-    private DateTime? _startTime = null;
 
     public IPAddress? ExternalAddress { get; set; }
     public int TcpPort { get; set; } = 12345;
     public int UdpPort { get; set; } = 12345;
     public bool IsFirewalled { get; set; } = true;
-    public bool UseIPv6 { get; set; } = false;
+    public bool UseIPv6 { get; set; }
     public bool EnableSSU2 { get; set; } = true;
-    public bool FloodfillEnabled { get; set; } = false;
+    public bool FloodfillEnabled { get; set; }
     public int MaxTransitTunnels { get; set; } = 10000;
     public int MaxNtcp2InboundConnections { get; set; } = 2500;
     public int MaxNtcp2OutboundConnections { get; set; } = 2500;
     public int TransitSharePercent { get; set; } = 80;
-    public RouterContext.HttpProxyEncryptionType ProxyEncryption { get; set; } = RouterContext.HttpProxyEncryptionType.Hybrid;
+
+    public RouterContext.HttpProxyEncryptionType ProxyEncryption { get; set; } =
+        RouterContext.HttpProxyEncryptionType.Hybrid;
+
     public int HttpProxyPort { get; set; } = 4445;
 
-    public bool IsRunning => _isRunning;
-    public bool IsHttpProxyRunning => I2PCore.Client.ClientContext.Inst?.HTTPProxy?.IsRunning ?? false;
-    
+    public bool IsRunning { get; private set; }
+
+    public bool IsHttpProxyRunning => ClientContext.Inst?.HTTPProxy?.IsRunning ?? false;
+
     /// <summary>
-    /// Get the detected external IPv4 address (from peer reports or manual config)
+    ///     Get the detected external IPv4 address (from peer reports or manual config)
     /// </summary>
     public IPAddress? DetectedExternalAddress => RouterContext.Inst?.ExtIpv4Address;
+
     public async Task ReseedAsync()
     {
         LogActivity("Network", "Triggering manual reseed from servers...");
-        await I2PCore.Bootstrap.NetworkBootstrap();
+        await Bootstrap.NetworkBootstrap();
     }
 
     public async Task<int> ReseedFromFileAsync(byte[] data)
     {
         LogActivity("Network", $"Manual reseed from uploaded file ({data.Length} bytes)...");
-        var count = I2PCore.Bootstrap.ImportReseedFile(new I2PByteBlock(data));
+        var count = Bootstrap.ImportReseedFile(new I2PByteBlock(data));
         LogActivity("Network", $"Manual reseed imported {count} routers.");
         return count;
     }
 
-    public IEnumerable<I2PCore.Utils.HttpProxyLogger.LogEntry> GetHttpProxyLogs()
+    public IEnumerable<HttpProxyLogger.LogEntry> GetHttpProxyLogs()
     {
-        return I2PCore.Utils.HttpProxyLogger.Inst.GetLogs().Reverse();
+        return HttpProxyLogger.Inst.GetLogs().Reverse();
     }
 
-    public IEnumerable<ActivityLogEntry> GetActivityLog() => _activityLog.ToArray().Reverse();
-
-    public IEnumerable<I2PCore.TransportLayer.Log.TransportConnectionLogger.LogEntry> GetTransportConnectionLogs()
+    public IEnumerable<ActivityLogEntry> GetActivityLog()
     {
-        return I2PCore.TransportLayer.Log.TransportConnectionLogger.Inst.GetEntries();
+        return _activityLog.ToArray().Reverse();
+    }
+
+    public IEnumerable<TransportConnectionLogger.LogEntry> GetTransportConnectionLogs()
+    {
+        return TransportConnectionLogger.Inst.GetEntries();
     }
 
     public void StartRouter()
     {
-        if (_isRunning)
+        if (IsRunning)
         {
             LogActivity("Router", "Router already running");
             return;
@@ -78,10 +88,7 @@ public class RouterService
 
         RouterContext.RouterSettingsFile = "I2PRouterWeb.bin";
 
-        if (ExternalAddress != null)
-        {
-            RouterContext.Inst.DefaultExtAddress = ExternalAddress;
-        }
+        if (ExternalAddress != null) RouterContext.Inst.DefaultExtAddress = ExternalAddress;
 
         RouterContext.Inst.DefaultTcpPort = TcpPort;
         RouterContext.Inst.DefaultUdpPort = UdpPort;
@@ -100,7 +107,7 @@ public class RouterService
         Router.Start();
         _netDbLogService.Initialize();
 
-        _isRunning = true;
+        IsRunning = true;
         _startTime = DateTime.UtcNow;
 
         LogActivity("Router", "I2P Router started");
@@ -109,7 +116,7 @@ public class RouterService
 
     public void StopRouter()
     {
-        if (!_isRunning)
+        if (!IsRunning)
         {
             LogActivity("Router", "Router not running");
             return;
@@ -117,7 +124,7 @@ public class RouterService
 
         Router.Stop();
 
-        _isRunning = false;
+        IsRunning = false;
         _startTime = null;
 
         LogActivity("Router", "I2P Router stopped");
@@ -126,7 +133,7 @@ public class RouterService
 
     public void StartHttpProxy()
     {
-        if (!_isRunning)
+        if (!IsRunning)
         {
             LogActivity("HTTP Proxy", "Cannot start HTTP proxy - router not running");
             return;
@@ -138,11 +145,11 @@ public class RouterService
             return;
         }
 
-        var ctx = I2PCore.Client.ClientContext.Inst;
-        ctx.SetConfig(I2PCore.Client.ClientContext.CfgHttpProxyPort, HttpProxyPort.ToString());
-        ctx.SetConfig(I2PCore.Client.ClientContext.CfgHttpProxyEnabled, "true");
-        ctx.SetConfig(I2PCore.Client.ClientContext.CfgSamEnabled, "false");
-        ctx.SetConfig(I2PCore.Client.ClientContext.CfgSocksProxyEnabled, "false");
+        var ctx = ClientContext.Inst;
+        ctx.SetConfig(ClientContext.CfgHttpProxyPort, HttpProxyPort.ToString());
+        ctx.SetConfig(ClientContext.CfgHttpProxyEnabled, "true");
+        ctx.SetConfig(ClientContext.CfgSamEnabled, "false");
+        ctx.SetConfig(ClientContext.CfgSocksProxyEnabled, "false");
         ctx.Start();
 
         LogActivity("HTTP Proxy", $"HTTP proxy started on 127.0.0.1:{HttpProxyPort}");
@@ -168,13 +175,16 @@ public class RouterService
             return;
         }
 
-        I2PCore.Client.ClientContext.Inst?.Stop();
+        ClientContext.Inst?.Stop();
 
         LogActivity("HTTP Proxy", "HTTP proxy stopped");
         Logging.LogInformation("HTTP proxy stopped");
     }
 
-    public void ApplySettings(IPAddress? externalAddress, int tcpPort, int udpPort, bool isFirewalled, bool useIPv6, bool enableSSU2, bool floodfillEnabled, RouterContext.HttpProxyEncryptionType proxyEncryption, int? maxTransitTunnels = null, int? transitSharePercent = null, int? maxNtcp2Inbound = null, int? maxNtcp2Outbound = null)
+    public void ApplySettings(IPAddress? externalAddress, int tcpPort, int udpPort, bool isFirewalled, bool useIPv6,
+        bool enableSSU2, bool floodfillEnabled, RouterContext.HttpProxyEncryptionType proxyEncryption,
+        int? maxTransitTunnels = null, int? transitSharePercent = null, int? maxNtcp2Inbound = null,
+        int? maxNtcp2Outbound = null)
     {
         ExternalAddress = externalAddress;
         TcpPort = tcpPort;
@@ -192,15 +202,9 @@ public class RouterService
         var proxyEncryptionChanged = RouterContext.Inst.ProxyEncryption != ProxyEncryption;
         var proxyRunning = IsHttpProxyRunning;
 
-        if ( proxyEncryptionChanged && proxyRunning )
-        {
-            StopHttpProxy();
-        }
+        if (proxyEncryptionChanged && proxyRunning) StopHttpProxy();
 
-        if (ExternalAddress != null)
-        {
-            RouterContext.Inst.DefaultExtAddress = ExternalAddress;
-        }
+        if (ExternalAddress != null) RouterContext.Inst.DefaultExtAddress = ExternalAddress;
 
         RouterContext.Inst.DefaultTcpPort = TcpPort;
         RouterContext.Inst.DefaultUdpPort = UdpPort;
@@ -216,12 +220,10 @@ public class RouterService
 
         RouterContext.Inst.ApplyNewSettings();
 
-        if ( proxyEncryptionChanged && proxyRunning )
-        {
-            StartHttpProxy();
-        }
+        if (proxyEncryptionChanged && proxyRunning) StartHttpProxy();
 
-        LogActivity("Settings", $"Applied new settings: Port {TcpPort}, Firewalled: {IsFirewalled}, SSU2: {EnableSSU2}, Floodfill: {FloodfillEnabled}, Encryption: {ProxyEncryption}, Max Transit Tunnels: {MaxTransitTunnels}, NTCP2 In/Out: {MaxNtcp2InboundConnections}/{MaxNtcp2OutboundConnections}");
+        LogActivity("Settings",
+            $"Applied new settings: Port {TcpPort}, Firewalled: {IsFirewalled}, SSU2: {EnableSSU2}, Floodfill: {FloodfillEnabled}, Encryption: {ProxyEncryption}, Max Transit Tunnels: {MaxTransitTunnels}, NTCP2 In/Out: {MaxNtcp2InboundConnections}/{MaxNtcp2OutboundConnections}");
     }
 
     public void LogActivity(string category, string message)
@@ -233,10 +235,7 @@ public class RouterService
             Message = message
         });
 
-        while (_activityLog.Count > MaxActivityLogEntries)
-        {
-            _activityLog.TryDequeue(out _);
-        }
+        while (_activityLog.Count > MaxActivityLogEntries) _activityLog.TryDequeue(out _);
     }
 
     public RouterStatistics GetStatistics()
@@ -250,28 +249,32 @@ public class RouterService
             Uptime = uptime,
             PublicKey = Convert.ToBase64String(RouterContext.Inst.MyRouterIdentity.PublicKey.ToByteArray()),
             KeyType = RouterContext.Inst.MyRouterIdentity.PublicKey.Certificate.PublicKeyType.ToString(),
-            IsRunning = _isRunning,
+            IsRunning = IsRunning,
             BandwidthClass = RouterContext.Inst.GetBandwidthCapChar().ToString()
         };
 
         // NetDb and Transport stats
         try
         {
-            stats.KnownRouters = I2PCore.NetDb.Inst.RouterCount;
-            stats.KnownFloodfills = I2PCore.NetDb.Inst.FloodfillCount;
+            stats.KnownRouters = NetDb.Inst.RouterCount;
+            stats.KnownFloodfills = NetDb.Inst.FloodfillCount;
             stats.NTCP2SessionCount = TransportProvider.Inst?.Ntcp2SessionCount ?? 0;
             stats.SSU2SessionCount = TransportProvider.Inst?.Ssu2SessionCount ?? 0;
-            
+
             stats.InboundTunnels = TunnelProvider.Inst?.InboundTunnelCount ?? 0;
             stats.OutboundTunnels = TunnelProvider.Inst?.OutboundTunnelCount ?? 0;
-            stats.ExploratoryTunnels = (TunnelProvider.Inst?.GetInboundTunnels()?.Count(t => t.Config?.Pool == TunnelConfig.TunnelPool.Exploratory) ?? 0) +
-                                       (TunnelProvider.Inst?.GetOutboundTunnels()?.Count(t => t.Config?.Pool == TunnelConfig.TunnelPool.Exploratory) ?? 0);
+            stats.ExploratoryTunnels = (TunnelProvider.Inst?.GetInboundTunnels()
+                                           ?.Count(t => t.Config?.Pool == TunnelConfig.TunnelPool.Exploratory) ?? 0) +
+                                       (TunnelProvider.Inst?.GetOutboundTunnels()?.Count(t =>
+                                           t.Config?.Pool == TunnelConfig.TunnelPool.Exploratory) ?? 0);
             stats.TransitTunnels = Router.TransitTunnelMgr?.TransitTunnelCount ?? 0;
 
             stats.HTTPProxyRunning = IsHttpProxyRunning;
             stats.HTTPProxyPort = HttpProxyPort;
         }
-        catch { }
+        catch
+        {
+        }
 
         return stats;
     }
@@ -288,7 +291,7 @@ public class RouterService
             var destHash = tunnel.Destination;
 
             // Extract ReceiveFrom (previous hop) from the specific tunnel type
-            I2PCore.Data.I2PIdentHash receiveFrom = null;
+            I2PIdentHash receiveFrom = null;
             if (tunnel is TransitTunnel tt) receiveFrom = tt.ReceiveFrom;
             else if (tunnel is EndpointTunnel et) receiveFrom = et.ReceiveFrom;
             else if (tunnel is GatewayTunnel gt) receiveFrom = gt.ReceiveFrom;
@@ -336,7 +339,8 @@ public class RouterService
                 BytesReceived = tunnel.Bandwidth.ReceiveBandwidth.DataBytes,
                 SendBitrateKBps = tunnel.Bandwidth.SendBandwidth.Bitrate / 8192f,
                 ReceiveBitrateKBps = tunnel.Bandwidth.ReceiveBandwidth.Bitrate / 8192f,
-                LastActivity = DateTime.UtcNow - TimeSpan.FromMilliseconds( tunnel.EstablishedTime.DeltaToNowMilliseconds )
+                LastActivity = DateTime.UtcNow -
+                               TimeSpan.FromMilliseconds(tunnel.EstablishedTime.DeltaToNowMilliseconds)
             });
         }
 

@@ -1,244 +1,231 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using I2PCore.TunnelLayer;
-using I2PCore.TunnelLayer.I2NP.Messages;
-using I2PCore.Data;
-using I2PCore.Utils;
-using I2PCore.SessionLayer;
-using Org.BouncyCastle.Crypto.Modes;
-using Org.BouncyCastle.Crypto.Engines;
-using I2PCore.TunnelLayer.I2NP.Data;
-using I2PCore.TransportLayer;
 using System.Threading;
+using I2PCore.Data;
+using I2PCore.SessionLayer;
+using I2PCore.TunnelLayer.I2NP.Messages;
+using I2PCore.Utils;
+using Org.BouncyCastle.Crypto.Engines;
+using Org.BouncyCastle.Crypto.Modes;
 
-namespace I2PCore.TunnelLayer
+namespace I2PCore.TunnelLayer;
+
+public class InboundTunnel : Tunnel
 {
-    public class InboundTunnel: Tunnel
+    private readonly PeriodicAction FragBufferReport = new(TickSpan.Seconds(60));
+    public readonly int OutTunnelHops;
+
+    private readonly TunnelDataFragmentReassembly Reassembler = new();
+    private readonly I2PIdentHash RemoteGateway;
+
+    public readonly uint TunnelBuildReplyMessageId = I2NpMessage.GenerateMessageId();
+
+    internal I2PTunnelId GatewayTunnelId;
+
+    public InboundTunnel(ITunnelOwner owner, TunnelConfig config, int outtunnelhops)
+        : base(owner, config)
     {
-        private I2PIdentHash RemoteGateway;
-        public override I2PIdentHash Destination { get { return RemoteGateway; } }
-        public override I2PIdentHash FarEnd => RemoteGateway;
+        OutTunnelHops = outtunnelhops;
 
-        internal I2PTunnelId GatewayTunnelId;
+        var gw = config.Info.Hops[0];
+        RemoteGateway = gw.Peer.IdentHash;
+        GatewayTunnelId = gw.TunnelId;
 
-        public readonly uint TunnelBuildReplyMessageId = I2NpMessage.GenerateMessageId();
-        public readonly int OutTunnelHops;
-
-        public event Action<GarlicMessage> GarlicMessageReceived;
-
-        public InboundTunnel( ITunnelOwner owner, TunnelConfig config, int outtunnelhops )
-            : base( owner, config )
-        {
-            OutTunnelHops = outtunnelhops;
-
-            var gw = config.Info.Hops[0];
-            RemoteGateway = gw.Peer.IdentHash;
-            GatewayTunnelId = gw.TunnelId;
-
-            ReceiveTunnelId = config.Info.Hops.Last().TunnelId;
+        ReceiveTunnelId = config.Info.Hops.Last().TunnelId;
 
 #if LOG_ALL_TUNNEL_TRANSFER
             Logging.LogDebug( $"InboundTunnel: Tunnel {Destination?.Id32Short} created." );
 #endif
-        }
+    }
 
-        // Fake 0-hop
-        protected InboundTunnel( ITunnelOwner owner, TunnelConfig config, I2PIdentHash remotegateway )
-            : base( owner, config )
+    // Fake 0-hop
+    protected InboundTunnel(ITunnelOwner owner, TunnelConfig config, I2PIdentHash remotegateway)
+        : base(owner, config)
+    {
+        Established = true;
+
+        ReceiveTunnelId = config.Info.Hops.Any() ? config.Info.Hops.Last().TunnelId : new I2PTunnelId();
+        RemoteGateway = remotegateway;
+        GatewayTunnelId = ReceiveTunnelId;
+
+        Logging.LogDebug($"{this}: 0-hop tunnel {Destination?.Id32Short} created.");
+    }
+
+    public override I2PIdentHash Destination => RemoteGateway;
+    public override I2PIdentHash FarEnd => RemoteGateway;
+
+    public override IEnumerable<I2PRouterIdentity> TunnelMembers
+    {
+        get
         {
-            Established = true;
-
-            ReceiveTunnelId = config.Info.Hops.Any() ? config.Info.Hops.Last().TunnelId : new I2PTunnelId();
-            RemoteGateway = remotegateway;
-            GatewayTunnelId = ReceiveTunnelId;
-
-            Logging.LogDebug( $"{this}: 0-hop tunnel {Destination?.Id32Short} created." );
+            if (Config?.Info is null) return null;
+            return Config.Info.Hops.Select(h => (I2PRouterIdentity)h.Peer);
         }
+    }
 
-        public override IEnumerable<I2PRouterIdentity> TunnelMembers 
+    public override TickSpan TunnelEstablishmentTimeout
+    {
+        get
         {
-            get
+            var hops = OutTunnelHops + TunnelMemberHops;
+            var timeperhop = Config.Pool == TunnelConfig.TunnelPool.Exploratory
+                ? ExpectedTunnelBuildTimePerHop * 2.0
+                : ExpectedTunnelBuildTimePerHop;
+
+            return timeperhop * hops;
+        }
+    }
+
+    public event Action<GarlicMessage> GarlicMessageReceived;
+
+    public override bool Exectue()
+    {
+        if (Terminated || RemoteGateway == null) return false;
+
+        FragBufferReport.Do(delegate
+        {
+            var fbsize = Reassembler.BufferedFragmentCount;
+            if (fbsize > 0)
             {
-                if ( Config?.Info is null ) return null; 
-                return Config.Info.Hops.Select( h => (I2PRouterIdentity)h.Peer );
+                Logging.Log($"{this}: {Destination.Id32Short} Fragment buffer size: {fbsize}");
+                if (fbsize > 2000) throw new Exception("BufferedFragmentCount > 2000 !"); // Trying to fill my memory?
+            }
+        });
+
+        return HandleReceiveQueue() && HandleSendQueue();
+    }
+
+    private bool HandleReceiveQueue()
+    {
+        List<TunnelDataMessage> tdmsgs = null;
+
+        while (!ReceiveQueue.IsEmpty)
+        {
+            if (!ReceiveQueue.TryDequeue(out var msg)) continue;
+
+            if (msg.MessageType != I2NpMessage.MessageTypes.TunnelData)
+            {
+                HandleTunnelMessage(msg);
+            }
+            else
+            {
+                if (tdmsgs is null) tdmsgs = new List<TunnelDataMessage>();
+                tdmsgs.Add((TunnelDataMessage)msg);
             }
         }
 
-        public override TickSpan TunnelEstablishmentTimeout 
-        { 
-            get 
-            {
-                var hops = OutTunnelHops + TunnelMemberHops;
-                var timeperhop = Config.Pool == TunnelConfig.TunnelPool.Exploratory
-                        ? ExpectedTunnelBuildTimePerHop * 2.0
-                        : ExpectedTunnelBuildTimePerHop;
+        if (tdmsgs != null) HandleTunnelData(tdmsgs);
 
-                return timeperhop * hops;
-            }
-        }
+        return true;
+    }
 
-        private PeriodicAction FragBufferReport = new( TickSpan.Seconds( 60 ) );
-
-        public override bool Exectue()
-        {
-            if ( Terminated || RemoteGateway == null )
-            {
-                return false;
-            }
-
-            FragBufferReport.Do( delegate()
-            {
-                var fbsize = Reassembler.BufferedFragmentCount;
-                if ( fbsize > 0 )
-                {
-                    Logging.Log( $"{this}: {Destination.Id32Short} Fragment buffer size: {fbsize}" );
-                    if ( fbsize > 2000 ) throw new Exception( "BufferedFragmentCount > 2000 !" ); // Trying to fill my memory?
-                }
-            } );
-
-            return HandleReceiveQueue() && HandleSendQueue();
-        }
-
-        private bool HandleReceiveQueue()
-        {
-            List<TunnelDataMessage> tdmsgs = null;
-
-            while ( !ReceiveQueue.IsEmpty )
-            {
-                if ( !ReceiveQueue.TryDequeue( out var msg ) ) continue;
-
-                if ( msg.MessageType != I2NpMessage.MessageTypes.TunnelData )
-                {
-                    HandleTunnelMessage( msg );
-                }
-                else
-                {
-                    if ( tdmsgs is null ) tdmsgs = new List<TunnelDataMessage>();
-                    tdmsgs.Add( (TunnelDataMessage)msg );
-                }
-            }
-
-            if ( tdmsgs != null )
-            {
-                HandleTunnelData( tdmsgs );
-            }
-
-            return true;
-        }
-
-        private bool HandleTunnelMessage( I2NpMessage msg )
-        {
+    private bool HandleTunnelMessage(I2NpMessage msg)
+    {
 #if LOG_ALL_TUNNEL_TRANSFER
             Logging.LogDebug( $"{this} HandleReceiveQueue: {msg.MessageType}" );
 #endif
 
-            switch ( msg.MessageType )
-            {
-                case I2NpMessage.MessageTypes.TunnelData:
-                    throw new NotImplementedException( $"Should not happen {TunnelDebugTrace}" );
+        switch (msg.MessageType)
+        {
+            case I2NpMessage.MessageTypes.TunnelData:
+                throw new NotImplementedException($"Should not happen {TunnelDebugTrace}");
 
-                case I2NpMessage.MessageTypes.Garlic:
-                    var garlic = (GarlicMessage)msg;
+            case I2NpMessage.MessageTypes.Garlic:
+                var garlic = (GarlicMessage)msg;
 
-                    if ( GarlicMessageReceived != null )
-                    {
-                        ThreadPool.QueueUserWorkItem( cb => GarlicMessageReceived.Invoke( garlic ) );
-                    }
-                    else
-                    {
-                        // No subscriber (e.g. zero-hop tunnel) - route to Router for handling
-                        Logging.LogDebug( $"{this}: Garlic routed to Router (no subscriber)" );
-                        Router.HandleI2NpMessageReceived( msg.CreateHeader16, this );
-                    }
-                    break;
+                var handler = GarlicMessageReceived;
+                if (handler != null)
+                {
+                    ThreadPool.QueueUserWorkItem(cb => handler(garlic));
+                }
+                else
+                {
+                    // No subscriber (e.g. zero-hop tunnel) - route to Router for handling
+                    Logging.LogDebug($"{this}: Garlic routed to Router (no subscriber)");
+                    Router.HandleI2NpMessageReceived(msg.CreateHeader16, this);
+                }
 
-                default:
+                break;
+
+            default:
 #if LOG_ALL_TUNNEL_TRANSFER
                     Logging.LogDebug( $"{this}: HandleReceiveQueue: not handled {msg?.MessageType}" );
 #endif
 
-                    Router.HandleI2NpMessageReceived( msg.CreateHeader16, this );
-                    break;
-            }
-
-            return true;
+                Router.HandleI2NpMessageReceived(msg.CreateHeader16, this);
+                break;
         }
 
-        private TunnelDataFragmentReassembly Reassembler = new();
+        return true;
+    }
 
-        private void HandleTunnelData( List<TunnelDataMessage> msgs )
+    private void HandleTunnelData(List<TunnelDataMessage> msgs)
+    {
+        DecryptTunnelMessages(msgs);
+
+        var newmsgs = Reassembler.Process(msgs, out var failed);
+
+        if (failed)
         {
-            DecryptTunnelMessages( msgs );
-
-            var newmsgs = Reassembler.Process( msgs, out var failed );
-
-            if ( failed )
-            {
-                Logging.LogWarning( $"{this}: Reassembler failure. Dropping tunnel." );
-                Shutdown();
-            }
-
-            foreach ( var one in newmsgs ) 
-            {
-                one.Distribute( this );
-            }
+            Logging.LogWarning($"{this}: Reassembler failure. Dropping tunnel.");
+            Shutdown();
         }
 
-        private void DecryptTunnelMessages( List<TunnelDataMessage> msgs )
-        {
-            var cipher = new CbcBlockCipher( new AesEngine() );
-            List<TunnelDataMessage> failed = null;
+        foreach (var one in newmsgs) one.Distribute(this);
+    }
 
-            foreach ( var msg in msgs )
+    private void DecryptTunnelMessages(List<TunnelDataMessage> msgs)
+    {
+        var cipher = new CbcBlockCipher(new AesEngine());
+        List<TunnelDataMessage> failed = null;
+
+        foreach (var msg in msgs)
+            try
             {
-                try
+                for (var i = Config.Info.Hops.Count - 2; i >= 0; --i)
                 {
-                    for ( int i = Config.Info.Hops.Count - 2; i >= 0; --i )
-                    {
-                        var hop = Config.Info.Hops[i];
+                    var hop = Config.Info.Hops[i];
 
-                        msg.Iv.AesEcbDecrypt( hop.IvKey.Key.ToByteArray() );
-                        cipher.Decrypt( hop.LayerKey.Key, msg.Iv, msg.EncryptedWindow );
-                        msg.Iv.AesEcbDecrypt( hop.IvKey.Key.ToByteArray() );
-                    }
-
-                    // The 0 should be visible now
-                    msg.UpdateFirstDeliveryInstructionPosition();
+                    msg.Iv.AesEcbDecrypt(hop.IvKey.Key.ToByteArray());
+                    cipher.Decrypt(hop.LayerKey.Key, msg.Iv, msg.EncryptedWindow);
+                    msg.Iv.AesEcbDecrypt(hop.IvKey.Key.ToByteArray());
                 }
-                catch ( Exception ex )
-                {
-                    Logging.Log( "DecryptTunnelMessages", ex );
 
-                    // Be resiliant to faulty data. Just drop it.
-                    if ( failed == null ) failed = new List<TunnelDataMessage>();
-                    failed.Add( msg );
-                }
+                // The 0 should be visible now
+                msg.UpdateFirstDeliveryInstructionPosition();
             }
-
-            if ( failed != null )
+            catch (Exception ex)
             {
-                foreach ( var one in failed ) while ( msgs.Remove( one ) );
+                Logging.Log("DecryptTunnelMessages", ex);
+
+                // Be resiliant to faulty data. Just drop it.
+                if (failed == null) failed = new List<TunnelDataMessage>();
+                failed.Add(msg);
             }
-        }
 
-        private bool HandleSendQueue()
-        {
-            return true;
-        }
+        if (failed != null)
+            foreach (var one in failed)
+                while (msgs.Remove(one))
+                    ;
+    }
 
-        public I2NpMessage CreateBuildRequest( InboundTunnel replytunnel )
-        {
-            var vtb = VariableTunnelBuildMessage.BuildInboundTunnel( Config.Info,
-                replytunnel.Destination, replytunnel.GatewayTunnelId,
-                TunnelBuildReplyMessageId );
+    private bool HandleSendQueue()
+    {
+        return true;
+    }
 
-            return vtb;
-        }
+    public I2NpMessage CreateBuildRequest(InboundTunnel replytunnel)
+    {
+        var vtb = VariableTunnelBuildMessage.BuildInboundTunnel(Config.Info,
+            replytunnel.Destination, replytunnel.GatewayTunnelId,
+            TunnelBuildReplyMessageId);
 
-        public override string ToString()
-        {
-            return $"{base.ToString()} {Destination.Id32Short} {GatewayTunnelId}";
-        }
+        return vtb;
+    }
+
+    public override string ToString()
+    {
+        return $"{base.ToString()} {Destination.Id32Short} {GatewayTunnelId}";
     }
 }

@@ -1,30 +1,26 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
+﻿using System.Collections.Generic;
 using I2PCore.Data;
 using I2PCore.TunnelLayer.I2NP.Messages;
 using I2PCore.Utils;
 
-namespace I2PCore.TransportLayer
+namespace I2PCore.TransportLayer;
+
+internal class LookupDestination
 {
-    internal class LookupDestination
+    public TickCounter Created = TickCounter.Now;
+    public I2PIdentHash Destination;
+    public List<I2NpMessage> Messages = new();
+
+    public LookupDestination(I2PIdentHash dest)
     {
-        public I2PIdentHash Destination;
-        public TickCounter Created = TickCounter.Now;
-        public List<I2NpMessage> Messages = new();
+        Destination = dest;
+    }
 
-        public LookupDestination( I2PIdentHash dest )
+    public void Add(I2NpMessage msg)
+    {
+        lock (Messages)
         {
-            Destination = dest;
-        }
-
-        public void Add( I2NpMessage msg )
-        {
-            lock ( Messages )
-            {
-                Messages.Add( msg );
-            }
+            Messages.Add(msg);
         }
     }
 }

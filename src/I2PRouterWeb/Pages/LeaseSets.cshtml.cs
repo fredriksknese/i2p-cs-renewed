@@ -1,7 +1,7 @@
-using Microsoft.AspNetCore.Mvc.RazorPages;
-using I2PCore.Data;
+using I2PCore;
 using I2PCore.Utils;
 using I2PRouterWeb.Services;
+using Microsoft.AspNetCore.Mvc.RazorPages;
 
 namespace I2PRouterWeb.Pages;
 
@@ -9,24 +9,23 @@ public class LeaseSetsModel : PageModel
 {
     private readonly RouterService _routerService;
 
-    public List<LeaseSetDisplayInfo> LeaseSets { get; set; } = new();
-    public int TotalCount => LeaseSets.Count;
-
     public LeaseSetsModel(RouterService routerService)
     {
         _routerService = routerService;
     }
 
+    public List<LeaseSetDisplayInfo> LeaseSets { get; set; } = new();
+    public int TotalCount => LeaseSets.Count;
+
     public void OnGet()
     {
         try
         {
-            var netdb = I2PCore.NetDb.Inst;
+            var netdb = NetDb.Inst;
             if (netdb != null)
             {
                 var leaseSets = netdb.GetAllLeaseSets();
                 if (leaseSets != null)
-                {
                     foreach (var ls in leaseSets)
                     {
                         var dest = ls.Destination;
@@ -43,28 +42,22 @@ public class LeaseSetsModel : PageModel
                             DestHashShort = identHash?.Id32Short ?? "Unknown",
                             LeaseSetType = ls.MessageType.ToString(),
                             TypeClassName = ls.GetType().Name,
-                            Expiration = ls.Expire,
+                            Expiration = ls.Expire
                         };
 
                         // Public keys
                         if (ls.PublicKeys != null)
-                        {
                             foreach (var pk in ls.PublicKeys)
-                            {
                                 info.PublicKeys.Add(new PublicKeyDisplayInfo
                                 {
                                     KeyType = pk.Certificate?.PublicKeyType.ToString() ?? "Unknown",
                                     KeyLength = pk.Key.Length,
-                                    KeyBase64 = Convert.ToBase64String(pk.Key.ToByteArray()),
+                                    KeyBase64 = Convert.ToBase64String(pk.Key.ToByteArray())
                                 });
-                            }
-                        }
 
                         // Leases
                         if (ls.Leases != null)
-                        {
                             foreach (var lease in ls.Leases)
-                            {
                                 info.Leases.Add(new LeaseDisplayInfo
                                 {
                                     TunnelGatewayHash = lease.TunnelGw?.Id32Short ?? "Unknown",
@@ -72,14 +65,11 @@ public class LeaseSetsModel : PageModel
                                         ? $"{lease.TunnelGw.Id32}.b32.i2p"
                                         : "",
                                     TunnelId = lease.TunnelId?.ToString() ?? "0",
-                                    Expiration = lease.Expire,
+                                    Expiration = lease.Expire
                                 });
-                            }
-                        }
 
                         LeaseSets.Add(info);
                     }
-                }
             }
 
             _routerService.LogActivity("LeaseSets", "Viewed lease set information");

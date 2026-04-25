@@ -1,44 +1,39 @@
-﻿using System;
-using I2PCore.Data;
+﻿using I2PCore.Data;
 using I2PCore.Utils;
 
-namespace I2PCore
+namespace I2PCore;
+
+public partial class NetDb
 {
-    public partial class NetDb
+    protected class RouterEntry
     {
-        protected class RouterEntry
+        private RouterStatistics CachedStatisticsField;
+
+        private TickCounter ScoreAge;
+
+        public RouterEntry(I2PRouterInfo info, RouterInfoMeta meta)
         {
-            public I2PRouterInfo Router { get; protected set; }
-            public RouterInfoMeta Meta { get; protected set; }
+            Router = info;
+            Meta = meta;
+        }
 
-            public RouterEntry( I2PRouterInfo info, RouterInfoMeta meta )
-            {
-                Router = info;
-                Meta = meta;
-            }
+        public I2PRouterInfo Router { get; protected set; }
+        public RouterInfoMeta Meta { get; protected set; }
 
-            private TickCounter ScoreAge = null;
-            private RouterStatistics CachedStatisticsField;
-            public RouterStatistics CachedStatistics
+        public RouterStatistics CachedStatistics
+        {
+            get
             {
-                get
+                if (ScoreAge is null || ScoreAge.DeltaToNow > TickSpan.Minutes(5))
                 {
-                    if ( ScoreAge is null || ScoreAge.DeltaToNow > TickSpan.Minutes( 5 ) )
-                    {
-                        ScoreAge = TickCounter.Now;
-                        CachedStatisticsField = NetDb.Inst.Statistics[Router.Identity.IdentHash];
-                    }
-                    return CachedStatisticsField;
+                    ScoreAge = TickCounter.Now;
+                    CachedStatisticsField = Inst.Statistics[Router.Identity.IdentHash];
                 }
-            }
 
-            public bool IsFloodfill
-            {
-                get
-                {
-                    return Router.Options["caps"].IndexOf( 'f' ) >= 0;
-                }
+                return CachedStatisticsField;
             }
         }
+
+        public bool IsFloodfill => Router.Options["caps"].IndexOf('f') >= 0;
     }
 }

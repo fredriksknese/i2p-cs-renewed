@@ -1,6 +1,7 @@
-using I2PCore.Data;
-using I2PCore;
 using System.Collections.Concurrent;
+using I2PCore;
+using I2PCore.Data;
+using I2PCore.TunnelLayer.I2NP.Messages;
 
 namespace I2PRouterWeb.Services;
 
@@ -23,9 +24,9 @@ public class NetDbLogEntry
 
 public class NetDbLogService
 {
-    private readonly ConcurrentQueue<NetDbLogEntry> _logs = new();
     private const int MaxLogEntries = 1000;
-    private bool _isInitialized = false;
+    private readonly ConcurrentQueue<NetDbLogEntry> _logs = new();
+    private bool _isInitialized;
 
     public void Initialize()
     {
@@ -36,25 +37,22 @@ public class NetDbLogService
         NetDb.Inst.LeaseSetUpdates += OnLeaseSetUpdated;
         NetDb.Inst.DatabaseSearchReplies += OnDatabaseSearchReplyReceived;
         NetDb.Inst.DatabaseLookupReceived += OnDatabaseLookupReceived;
-        
+
         _isInitialized = true;
     }
 
-    private void OnDatabaseLookupReceived(I2PCore.TunnelLayer.I2NP.Messages.DatabaseLookupMessage lookup, I2PIdentHash from, NetDb.DatabaseLookupResult result)
+    private void OnDatabaseLookupReceived(DatabaseLookupMessage lookup, I2PIdentHash from,
+        NetDb.DatabaseLookupResult result)
     {
-        var isRouterInfoLookup = (lookup.LookupType & I2PCore.TunnelLayer.I2NP.Messages.DatabaseLookupMessage.LookupTypes.RouterInfo) != 0;
+        var isRouterInfoLookup = (lookup.LookupType & DatabaseLookupMessage.LookupTypes.RouterInfo) != 0;
         var keyStr = isRouterInfoLookup ? lookup.Key.Id32Short : $"{lookup.Key.Id32}.b32.i2p";
 
-        var isTunnel = (lookup.LookupType & I2PCore.TunnelLayer.I2NP.Messages.DatabaseLookupMessage.LookupTypes.Tunnel) != 0;
+        var isTunnel = (lookup.LookupType & DatabaseLookupMessage.LookupTypes.Tunnel) != 0;
         string viaStr;
         if (isTunnel)
-        {
             viaStr = $"Tunnel {lookup.TunnelId} at {lookup.From?.Id32Short ?? "Unknown"}";
-        }
         else
-        {
             viaStr = $"Direct to {lookup.From?.Id32Short ?? "Unknown"}";
-        }
 
         var resultStr = result switch
         {
@@ -64,11 +62,12 @@ public class NetDbLogService
             _ => "Unknown"
         };
 
-        var message = $"Received {lookup.LookupType} lookup for {keyStr} ({lookup.Key.Id64}). Responding via {viaStr}. Result: {resultStr}";
+        var message =
+            $"Received {lookup.LookupType} lookup for {keyStr} ({lookup.Key.Id64}). Responding via {viaStr}. Result: {resultStr}";
         AddLog(NetDbLogCategory.DatabaseLookupReceived, lookup.Key.Id32Short, message);
     }
 
-    private void OnDatabaseSearchReplyReceived(I2PCore.TunnelLayer.I2NP.Messages.DatabaseSearchReplyMessage dsm)
+    private void OnDatabaseSearchReplyReceived(DatabaseSearchReplyMessage dsm)
     {
         var hashes = dsm.Peers.Select(r => r.Id32Short).ToArray();
         var message = $"Discovered {hashes.Length} peer hashes via search reply: {string.Join(", ", hashes)}";
@@ -78,7 +77,8 @@ public class NetDbLogService
     private void OnRouterInfoUpdated(I2PRouterInfo info)
     {
         // Only log if we didn't have this router before, or if it was marked as deleted
-        AddLog(NetDbLogCategory.RouterInfoDiscovered, info.Identity.IdentHash.Id32Short, $"Newly discovered RouterInfo: {info.Identity.IdentHash.Id32Short}");
+        AddLog(NetDbLogCategory.RouterInfoDiscovered, info.Identity.IdentHash.Id32Short,
+            $"Newly discovered RouterInfo: {info.Identity.IdentHash.Id32Short}");
     }
 
     private void OnRouterInfoRemoved(I2PIdentHash hash)
@@ -88,7 +88,8 @@ public class NetDbLogService
 
     private void OnLeaseSetUpdated(ILeaseSet ls)
     {
-        AddLog(NetDbLogCategory.LeaseSetAnnounced, ls.Destination.IdentHash.Id32Short, $"LeaseSet announced for {ls.Destination.IdentHash.Id32Short}");
+        AddLog(NetDbLogCategory.LeaseSetAnnounced, ls.Destination.IdentHash.Id32Short,
+            $"LeaseSet announced for {ls.Destination.IdentHash.Id32Short}");
     }
 
     private void AddLog(NetDbLogCategory category, string identHash, string message)
@@ -101,11 +102,11 @@ public class NetDbLogService
             Message = message
         });
 
-        while (_logs.Count > MaxLogEntries)
-        {
-            _logs.TryDequeue(out _);
-        }
+        while (_logs.Count > MaxLogEntries) _logs.TryDequeue(out _);
     }
 
-    public IEnumerable<NetDbLogEntry> GetLogs() => _logs.ToArray().Reverse();
+    public IEnumerable<NetDbLogEntry> GetLogs()
+    {
+        return _logs.ToArray().Reverse();
+    }
 }

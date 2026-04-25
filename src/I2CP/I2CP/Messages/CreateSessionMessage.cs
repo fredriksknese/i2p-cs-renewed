@@ -1,31 +1,30 @@
-﻿using I2PCore.Data;
-using System.Buffers;
+﻿using System.Buffers;
+using I2PCore.Data;
 using I2PCore.Utils;
 
-namespace I2P.I2CP.Messages
+namespace I2P.I2CP.Messages;
+
+public class CreateSessionMessage : I2CpMessage
 {
-    public class CreateSessionMessage: I2CpMessage
+    public I2PSessionConfig Config;
+
+    public CreateSessionMessage(I2PSessionConfig cfg) : base(ProtocolMessageType.CreateSession)
     {
-        public I2PSessionConfig Config;
+        Config = cfg;
+    }
 
-        public CreateSessionMessage( I2PSessionConfig cfg ): base( ProtocolMessageType.CreateSession )
-        {
-            Config = cfg;
-        }
+    public CreateSessionMessage(I2PBufferCursor reader) : base(ProtocolMessageType.CreateSession)
+    {
+        Config = new I2PSessionConfig(reader);
+    }
 
-        public CreateSessionMessage( I2PBufferCursor reader ) : base( ProtocolMessageType.CreateSession )
-        {
-            Config = new I2PSessionConfig( reader );
-        }
+    public override void Write(ArrayBufferWriter<byte> dest)
+    {
+        Config.Write(dest);
+    }
 
-        public override void Write( ArrayBufferWriter<byte> dest )
-        {
-            Config.Write( dest );
-        }
-
-        public override string ToString()
-        {
-            return Config?.ToString();
-        }
+    public override string ToString()
+    {
+        return Config?.ToString();
     }
 }

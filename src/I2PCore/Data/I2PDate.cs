@@ -1,104 +1,95 @@
 ﻿using System;
 using System.Buffers;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
 using I2PCore.Utils;
-using System.IO;
 
-namespace I2PCore.Data
+namespace I2PCore.Data;
+
+public class I2PDate : I2PType, IComparable, IComparable<I2PDate>
 {
-    public class I2PDate : I2PType, IComparable, IComparable<I2PDate>
+    public static readonly I2PDate Zero = new(0);
+
+    public static readonly DateTime RefDate = new(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    private ulong DateMilliseconds;
+
+    private I2PDate()
     {
-        public static readonly I2PDate Zero = new( 0 );
+    }
 
-        private ulong DateMilliseconds;
+    /// <summary>
+    ///     Set value explicitly.
+    /// </summary>
+    /// <param name="val">Milliseconds since Jan 1st 1970.</param>
+    public I2PDate(ulong val)
+    {
+        DateMilliseconds = val;
+    }
 
-        private I2PDate()
-        {
-        }
+    public I2PDate(I2PBufferCursor reader)
+    {
+        DateMilliseconds = reader.ReadUInt64BigEndian();
+    }
 
-        /// <summary>
-        /// Set value explicitly.
-        /// </summary>
-        /// <param name="val">Milliseconds since Jan 1st 1970.</param>
-        public I2PDate( UInt64 val )
-        {
-            DateMilliseconds = val;
-        }
-        public I2PDate( I2PBufferCursor reader )
-        {
-            DateMilliseconds = reader.ReadUInt64BigEndian();
-        }
-        public I2PDate( I2PDate date )
-        {
-            DateMilliseconds = date.DateMilliseconds;
-        }
+    public I2PDate(I2PDate date)
+    {
+        DateMilliseconds = date.DateMilliseconds;
+    }
 
-        public static readonly DateTime RefDate = new( 1970, 1, 1, 0, 0, 0, DateTimeKind.Utc );
+    public I2PDate(DateTime dt)
+    {
+        DateMilliseconds = (ulong)(dt - RefDate).TotalMilliseconds;
+    }
 
-        public I2PDate( DateTime dt )
-        {
-            DateMilliseconds = (UInt64)( dt - RefDate ).TotalMilliseconds;
-        }
+    public static I2PDate Now => new(DateTime.UtcNow);
 
-        public void Write( IBufferWriter<byte> dest )
-        {
-            dest.WriteUInt64BigEndian( DateMilliseconds );
-        }
+    public void Write(IBufferWriter<byte> dest)
+    {
+        dest.WriteUInt64BigEndian(DateMilliseconds);
+    }
 
-        public void Write( I2PBufferCursor dest )
-        {
-            dest.WriteUInt64BigEndian( DateMilliseconds );
-        }
+    public int CompareTo(object obj)
+    {
+        if (obj is null) return 1;
+        var other = obj as I2PDate;
+        if (other is null) return 1;
+        if (DateMilliseconds == other.DateMilliseconds) return 0;
+        return DateMilliseconds > other.DateMilliseconds ? 1 : -1;
+    }
 
-        public void Poke( I2PByteBlock dest, int offset )
-        {
-            dest.WriteUInt64BigEndian( DateMilliseconds, offset );
-        }
+    public int CompareTo(I2PDate other)
+    {
+        if (other is null) return 1;
+        if (DateMilliseconds == other.DateMilliseconds) return 0;
+        return DateMilliseconds > other.DateMilliseconds ? 1 : -1;
+    }
 
-        public ulong Nudge()
-        {
-            return ++DateMilliseconds;
-        }
+    public void Write(I2PBufferCursor dest)
+    {
+        dest.WriteUInt64BigEndian(DateMilliseconds);
+    }
 
-        public override string ToString()
-        {
-            return ( RefDate + new TimeSpan( (long)DateMilliseconds * 10000 ) ).ToString();
-        }
+    public void Poke(I2PByteBlock dest, int offset)
+    {
+        dest.WriteUInt64BigEndian(DateMilliseconds, offset);
+    }
 
-        public static explicit operator DateTime( I2PDate date )
-        {
-            return RefDate + TimeSpan.FromMilliseconds( date.DateMilliseconds );
-        }
+    public ulong Nudge()
+    {
+        return ++DateMilliseconds;
+    }
 
-        public static explicit operator ulong( I2PDate date )
-        {
-            return date.DateMilliseconds;
-        }
+    public override string ToString()
+    {
+        return (RefDate + new TimeSpan((long)DateMilliseconds * 10000)).ToString();
+    }
 
-        public int CompareTo( object obj )
-        {
-            if ( obj is null ) return 1;
-            var other = obj as I2PDate;
-            if ( other is null ) return 1;
-            if ( DateMilliseconds == other.DateMilliseconds ) return 0;
-            return DateMilliseconds > other.DateMilliseconds ? 1 : -1;
-        }
+    public static explicit operator DateTime(I2PDate date)
+    {
+        return RefDate + TimeSpan.FromMilliseconds(date.DateMilliseconds);
+    }
 
-        public int CompareTo( I2PDate other )
-        {
-            if ( other is null ) return 1;
-            if ( DateMilliseconds == other.DateMilliseconds ) return 0;
-            return DateMilliseconds > other.DateMilliseconds ? 1 : -1;
-        }
-
-        public static I2PDate Now
-        {
-            get
-            {
-                return new I2PDate( DateTime.UtcNow );
-            }
-        }
+    public static explicit operator ulong(I2PDate date)
+    {
+        return date.DateMilliseconds;
     }
 }

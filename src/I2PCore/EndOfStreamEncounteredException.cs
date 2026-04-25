@@ -1,13 +1,14 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
 
-namespace I2PCore
+namespace I2PCore;
+
+public class EndOfStreamEncounteredException : Exception
 {
-    public class EndOfStreamEncounteredException: Exception
+    public EndOfStreamEncounteredException()
     {
-        public EndOfStreamEncounteredException() : base() { }
-        public EndOfStreamEncounteredException( string text ) : base( text ) { }
+    }
+
+    public EndOfStreamEncounteredException(string text) : base(text)
+    {
     }
 }

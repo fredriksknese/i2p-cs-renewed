@@ -1,22 +1,17 @@
-﻿using System;
-using I2PCore.Utils;
+﻿using I2PCore.Utils;
 
-namespace I2PCore.TunnelLayer
+namespace I2PCore.TunnelLayer;
+
+public class TunnelQuality
 {
-    public class TunnelQuality
+    public TickSpan MinLatencyMeasured { get; set; }
+
+    public bool PassedTunnelTest { get; set; }
+
+    public TickSpan BuildTimePerHop { get; set; }
+
+    public void UpdateMinLatency(TickSpan delta)
     {
-        public TickSpan MinLatencyMeasured { set; get; }
-
-        public void UpdateMinLatency( TickSpan delta )
-        {
-            if ( MinLatencyMeasured == null || MinLatencyMeasured > delta )
-            {
-                MinLatencyMeasured = delta;
-            }
-        }
-
-        public bool PassedTunnelTest { get; set; }
-
-        public TickSpan BuildTimePerHop { get; set; }
+        if (MinLatencyMeasured == null || MinLatencyMeasured > delta) MinLatencyMeasured = delta;
     }
 }

@@ -1,151 +1,154 @@
 #define NOMANUAL_SIGN
 
 using System;
-using I2PCore.Data;
-using System.Net.Sockets;
-using System.IO;
-using System.Threading;
-using I2PCore.Utils;
-using I2PCore.SessionLayer;
-using System.Net;
-using I2PCore;
-using System.Linq;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Net.Sockets;
+using System.Threading;
+using I2PCore.Data;
+using I2PCore.SessionLayer;
+using I2PCore.Utils;
 
-namespace I2PDemo
+namespace I2PDemo;
+
+internal class Program
 {
-    internal class Program
+    private static I2PDestinationInfo _myDestinationInfo;
+    private static I2PDestination _myDestination;
+
+    private static ClientDestination _publishedDestination;
+
+    private static I2PDestinationInfo _myOriginInfo;
+    private static ClientDestination _myOrigin;
+
+    private static ILeaseSet _lookedUpLeaseSet;
+    private static I2PByteBlock _dataSent;
+
+    private static bool _connected;
+
+    private static void Main(string[] args)
     {
-        private static I2PDestinationInfo _myDestinationInfo;
-        private static I2PDestination _myDestination;
+        var sendInterval = new PeriodicAction(TickSpan.Seconds(20));
 
-        private static ClientDestination _publishedDestination;
+        Logging.LogToDebug = false;
+        Logging.LogToConsole = true;
+        Logging.ReadAppConfig();
 
-        private static I2PDestinationInfo _myOriginInfo;
-        private static ClientDestination _myOrigin;
+        RouterContext.RouterSettingsFile = "I2PDemo.bin";
 
-        private static void Main( string[] args )
-        {
-            PeriodicAction sendInterval = new PeriodicAction( TickSpan.Seconds( 20 ) );
+        _myDestinationInfo = new I2PDestinationInfo(I2PSigningKey.SigningKeyTypes.EdDsaSha512Ed25519);
 
-            Logging.LogToDebug = false;
-            Logging.LogToConsole = true;
-            Logging.ReadAppConfig();
-
-            RouterContext.RouterSettingsFile = "I2PDemo.bin";
-
-            _myDestinationInfo = new I2PDestinationInfo( I2PSigningKey.SigningKeyTypes.EdDsaSha512Ed25519 );
-
-            for ( int i = 0; i < args.Length; ++i )
+        for (var i = 0; i < args.Length; ++i)
+            switch (args[i])
             {
-                switch ( args[i] )
-                {
-                    case "--addr":
-                    case "--address":
-                        if ( args.Length > i + 1 ) 
-                        {
-                            RouterContext.Inst.DefaultExtAddress = IPAddress.Parse( args[++i] );
-                            Console.WriteLine( $"addr {RouterContext.Inst.DefaultExtAddress}" );
-                        }
-                        else
-                        {
-                            Console.WriteLine( "--addr require ip number" );
-                            return;
-                        }
-                        break;
-
-                    case "--port":
-                        if ( args.Length > i + 1 )
-                        {
-                            var port = int.Parse( args[++i] );
-                            RouterContext.Inst.DefaultTcpPort = port;
-                            RouterContext.Inst.DefaultUdpPort = port;
-                            Console.WriteLine( $"port {port}" );
-                        }
-                        else
-                        {
-                            Console.WriteLine( "--port require port number" );
-                            return;
-                        }
-                        break;
-                        
-                    case "--nofw":
-                        RouterContext.Inst.IsFirewalled = false;
-                        Console.WriteLine( $"Firewalled {RouterContext.Inst.IsFirewalled}" );
-                        break;
-
-                    case "--ipv6":
-                        RouterContext.UseIpV6 = true;
-                        Console.WriteLine( $"Using IPV6" );
-                        break;
-
-                    case "--mkdest":
-                    case "--create-destination":
-                        var certtype = 0;
-                        if ( args.Length > i + 1 )
-                        {
-                            certtype = int.Parse( args[++i] );
-                        }
-
-                        I2PSigningKey.SigningKeyTypes ct;
-                        I2PDestinationInfo d;
-
-                        switch ( certtype )
-                        {
-                            default:
-                            case 0:
-                                ct = I2PSigningKey.SigningKeyTypes.EdDsaSha512Ed25519;
-                                d = new I2PDestinationInfo( ct );
-                                break;
-
-                            case 1:
-                                ct = I2PSigningKey.SigningKeyTypes.DsaSha1;
-                                d = new I2PDestinationInfo( ct );
-                                break;
-
-                            case 2:
-                                ct = I2PSigningKey.SigningKeyTypes.EcdsaSha256P256;
-                                d = new I2PDestinationInfo( ct );
-                                break;
-
-                            case 3:
-                                ct = I2PSigningKey.SigningKeyTypes.EcdsaSha384P384;
-                                d = new I2PDestinationInfo( ct );
-                                break;
-                        }
-
-                        Console.WriteLine( $"New destination {ct}: {d.ToBase64()}" );
+                case "--addr":
+                case "--address":
+                    if (args.Length > i + 1)
+                    {
+                        RouterContext.Inst.DefaultExtAddress = IPAddress.Parse(args[++i]);
+                        Console.WriteLine($"addr {RouterContext.Inst.DefaultExtAddress}");
+                    }
+                    else
+                    {
+                        Console.WriteLine("--addr require ip number");
                         return;
+                    }
 
-                    case "--destination":
-                        if ( args.Length > i + 1 )
-                        {
-                            _myDestinationInfo = new I2PDestinationInfo( args[++i] );
-                            Console.WriteLine( $"Destination {_myDestinationInfo}" );
-                        }
-                        else
-                        {
-                            Console.WriteLine( "Base64 encoded Destination required" );
-                            return;
-                        }
-                        break;
+                    break;
 
-                    default:
-                        Console.WriteLine( args[i] );
-                        Console.WriteLine( "Usage: I2P.exe --addr 12.34.56.78 --port 8081 --nofw --create-destination [0-3] --destination b64..." );
-                        break;
-                }
+                case "--port":
+                    if (args.Length > i + 1)
+                    {
+                        var port = int.Parse(args[++i]);
+                        RouterContext.Inst.DefaultTcpPort = port;
+                        RouterContext.Inst.DefaultUdpPort = port;
+                        Console.WriteLine($"port {port}");
+                    }
+                    else
+                    {
+                        Console.WriteLine("--port require port number");
+                        return;
+                    }
+
+                    break;
+
+                case "--nofw":
+                    RouterContext.Inst.IsFirewalled = false;
+                    Console.WriteLine($"Firewalled {RouterContext.Inst.IsFirewalled}");
+                    break;
+
+                case "--ipv6":
+                    RouterContext.UseIpV6 = true;
+                    Console.WriteLine("Using IPV6");
+                    break;
+
+                case "--mkdest":
+                case "--create-destination":
+                    var certtype = 0;
+                    if (args.Length > i + 1) certtype = int.Parse(args[++i]);
+
+                    I2PSigningKey.SigningKeyTypes ct;
+                    I2PDestinationInfo d;
+
+                    switch (certtype)
+                    {
+                        default:
+                        case 0:
+                            ct = I2PSigningKey.SigningKeyTypes.EdDsaSha512Ed25519;
+                            d = new I2PDestinationInfo(ct);
+                            break;
+
+                        case 1:
+                            ct = I2PSigningKey.SigningKeyTypes.DsaSha1;
+                            d = new I2PDestinationInfo(ct);
+                            break;
+
+                        case 2:
+                            ct = I2PSigningKey.SigningKeyTypes.EcdsaSha256P256;
+                            d = new I2PDestinationInfo(ct);
+                            break;
+
+                        case 3:
+                            ct = I2PSigningKey.SigningKeyTypes.EcdsaSha384P384;
+                            d = new I2PDestinationInfo(ct);
+                            break;
+                    }
+
+                    Console.WriteLine($"New destination {ct}: {d.ToBase64()}");
+                    return;
+
+                case "--destination":
+                    if (args.Length > i + 1)
+                    {
+                        _myDestinationInfo = new I2PDestinationInfo(args[++i]);
+                        Console.WriteLine($"Destination {_myDestinationInfo}");
+                    }
+                    else
+                    {
+                        Console.WriteLine("Base64 encoded Destination required");
+                        return;
+                    }
+
+                    break;
+
+                default:
+                    Console.WriteLine(args[i]);
+                    Console.WriteLine(
+                        "Usage: I2P.exe --addr 12.34.56.78 --port 8081 --nofw --create-destination [0-3] --destination b64...");
+                    break;
             }
 
-            RouterContext.Inst.ApplyNewSettings();
+        RouterContext.Inst.ApplyNewSettings();
 
-            var pnp = new UPnp();
+        var pnp = new UPnp();
 
-            Router.Start();
+        Router.Start();
 
-            // Create new identities for this run
+        // Create new identities for this run
 
-            _myDestination = _myDestinationInfo.Destination;
+        _myDestination = _myDestinationInfo.Destination;
 
 #if MANUAL_SIGN
             PublishedDestination = Router.CreateDestination(
@@ -156,148 +159,137 @@ namespace I2PDemo
             
             PublishedDestination.GenerateTemporaryKeys();
 #else
-            // Publish our destinaiton
-            _publishedDestination = Router.CreateDestination(
-                _myDestinationInfo,
-                true, out _ );
+        // Publish our destinaiton
+        _publishedDestination = Router.CreateDestination(
+            _myDestinationInfo,
+            true, out _);
 #endif
-            _publishedDestination.Name = "PublishedDestination";
-            _publishedDestination.ClientStateChanged += MyDestination_ClientStateChanged;
-            _publishedDestination.DataReceived += MyDestination_DataReceived;
+        _publishedDestination.Name = "PublishedDestination";
+        _publishedDestination.ClientStateChanged += MyDestination_ClientStateChanged;
+        _publishedDestination.DataReceived += MyDestination_DataReceived;
 
-            var ls = new I2PLeaseSet( _myDestinationInfo.Destination, null, 
-                    _myDestinationInfo.Destination.PublicKey,
-                    _myDestinationInfo.Destination.SigningPublicKey,
-                    _myDestinationInfo.PrivateSigningKey );
+        var ls = new I2PLeaseSet(_myDestinationInfo.Destination, null,
+            _myDestinationInfo.Destination.PublicKey,
+            _myDestinationInfo.Destination.SigningPublicKey,
+            _myDestinationInfo.PrivateSigningKey);
 
-            // Caller
-            
-            _myOriginInfo = new I2PDestinationInfo( I2PSigningKey.SigningKeyTypes.DsaSha1 );
+        // Caller
 
-            _myOrigin = Router.CreateDestination(
-                    _myOriginInfo,
-                    false,
-                    out _ );
+        _myOriginInfo = new I2PDestinationInfo(I2PSigningKey.SigningKeyTypes.DsaSha1);
 
-            _myOrigin.Name = "MyOrigin";
-            _myOrigin.ClientStateChanged += MyOrigin_ClientStateChanged;
-            _myOrigin.DataReceived += MyOrigin_DataReceived;
+        _myOrigin = Router.CreateDestination(
+            _myOriginInfo,
+            false,
+            out _);
 
-            Logging.LogInformation( $"MyDestination: {_publishedDestination.Destination.IdentHash} {_myDestinationInfo.Destination.Certificate}" );
+        _myOrigin.Name = "MyOrigin";
+        _myOrigin.ClientStateChanged += MyOrigin_ClientStateChanged;
+        _myOrigin.DataReceived += MyOrigin_DataReceived;
 
-            while ( true )
+        Logging.LogInformation(
+            $"MyDestination: {_publishedDestination.Destination.IdentHash} {_myDestinationInfo.Destination.Certificate}");
+
+        while (true)
+            try
             {
-                try
+                _connected = true;
+
+                var sendevents = 0;
+
+                while (_connected)
                 {
-                    _connected = true;
+                    Thread.Sleep(2000);
 
-                    var sendevents = 0;
-
-                    while ( _connected )
-                    {
-                        Thread.Sleep( 2000 );
-
-                        if ( _myOrigin.ClientState == ClientDestination.ClientStates.Established )
+                    if (_myOrigin.ClientState == ClientDestination.ClientStates.Established)
+                        sendInterval.Do(() =>
                         {
-                            sendInterval.Do( () =>
+                            if (sendevents < 20)
                             {
-                                if ( sendevents < 20 )
+                                if (_lookedUpLeaseSet == null)
                                 {
-                                    if ( _lookedUpLeaseSet == null )
-                                    {
-                                        _myOrigin.LookupDestination( _publishedDestination.Destination.IdentHash, LookupResult );
-                                        return;
-                                    }
-
-                                    // Send some data to the MyDestination
-                                    _dataSent = new I2PByteBlock(
-                                                    BufUtils.RandomBytes(
-                                                        (int)( 1 + BufUtils.RandomDouble( 25 ) * 1024 ) ) );
-
-                                    var ok = _myOrigin.Send( _lookedUpLeaseSet.Destination, _dataSent );
-                                    Logging.LogInformation( $"Program {_myOrigin}: Send[{sendevents}] to " +
-                                            $"{_lookedUpLeaseSet.Destination.IdentHash.Id32Short} {ok}, {_dataSent}" );
-
-                                    if ( ok == ClientDestination.ClientStates.Established )
-                                    {
-                                        ++sendevents;
-                                    }
+                                    _myOrigin.LookupDestination(_publishedDestination.Destination.IdentHash,
+                                        LookupResult);
+                                    return;
                                 }
-                                else
-                                {
-                                    if ( ++sendevents > 50 ) sendevents = 0;
-                                }
-                            } );
-                        }
-                    }
-                }
-                catch ( SocketException ex )
-                {
-                    Logging.Log( ex );
-                }
-                catch ( IOException ex )
-                {
-                    Logging.Log( ex );
-                }
-                catch ( Exception ex )
-                {
-                    Logging.Log( ex );
+
+                                // Send some data to the MyDestination
+                                _dataSent = new I2PByteBlock(
+                                    BufUtils.RandomBytes(
+                                        (int)(1 + BufUtils.RandomDouble(25) * 1024)));
+
+                                var ok = _myOrigin.Send(_lookedUpLeaseSet.Destination, _dataSent);
+                                Logging.LogInformation($"Program {_myOrigin}: Send[{sendevents}] to " +
+                                                       $"{_lookedUpLeaseSet.Destination.IdentHash.Id32Short} {ok}, {_dataSent}");
+
+                                if (ok == ClientDestination.ClientStates.Established) ++sendevents;
+                            }
+                            else
+                            {
+                                if (++sendevents > 50) sendevents = 0;
+                            }
+                        });
                 }
             }
-        }
-
-        private static void MyOrigin_ClientStateChanged( ClientDestination dest, ClientDestination.ClientStates state )
-        {
-            Logging.LogInformation( $"Program {dest}: Client state {state}" );
-        }
-
-        private static ILeaseSet _lookedUpLeaseSet;
-        private static I2PByteBlock _dataSent;
-
-        private static void MyDestination_ClientStateChanged( ClientDestination dest, ClientDestination.ClientStates state )
-        {
-            Logging.LogInformation( $"Program {dest}: Client state {state}" );
-        }
-
-        private static void MyDestination_DataReceived( ClientDestination dest, I2PByteBlock data, I2PDestination sender )
-        {
-            var compareok = _dataSent.IsEmpty ? false : _dataSent == data;
-            Logging.LogInformation( $"Program {dest}: MyDestination data received. Matches send: {compareok} {data}" );
-            var ok = _publishedDestination.Send( _myOrigin.Destination, data );
-            Logging.LogInformation( $"Program {dest}: Send to {_myOrigin.Destination.IdentHash.Id32Short} {ok}" );
-        }
-
-        private static void MyOrigin_DataReceived( ClientDestination dest, I2PByteBlock data, I2PDestination sender )
-        {
-            Logging.LogInformation( $"Program {dest}: data received. {data}" );
-        }
-
-        private static void MyDestination_SignLeasesRequest( ClientDestination dest, IEnumerable<ILease> ls )
-        {
-            Logging.LogInformation( $"Program {dest}: Signing {ls} for publishing" );
-            _publishedDestination.PrivateKeys = new List<I2PPrivateKey>( new I2PPrivateKey[] { _myDestinationInfo.PrivateKey } );
-            _publishedDestination.SignedLeases = new I2PLeaseSet(
-                    _myDestination,
-                    ls.Select( l => new I2PLease( l.TunnelGw, l.TunnelId, new I2PDate( l.Expire ) ) ),
-                    _myDestination.PublicKey,
-                    _myDestination.SigningPublicKey,
-                    _myDestinationInfo.PrivateSigningKey );
-        }
-
-        private static void LookupResult( I2PIdentHash hash, ILeaseSet ls, object o )
-        {
-            Logging.LogInformation( $"Program {_myOrigin}: LookupResult {hash.Id32Short} {ls}" );
-
-            if ( ls is null && _lookedUpLeaseSet is null )
+            catch (SocketException ex)
             {
-                // Try again
-                _myOrigin.LookupDestination( _publishedDestination.Destination.IdentHash, LookupResult );
-                return;
+                Logging.Log(ex);
             }
+            catch (IOException ex)
+            {
+                Logging.Log(ex);
+            }
+            catch (Exception ex)
+            {
+                Logging.Log(ex);
+            }
+    }
 
-            _lookedUpLeaseSet = ls;
+    private static void MyOrigin_ClientStateChanged(ClientDestination dest, ClientDestination.ClientStates state)
+    {
+        Logging.LogInformation($"Program {dest}: Client state {state}");
+    }
+
+    private static void MyDestination_ClientStateChanged(ClientDestination dest, ClientDestination.ClientStates state)
+    {
+        Logging.LogInformation($"Program {dest}: Client state {state}");
+    }
+
+    private static void MyDestination_DataReceived(ClientDestination dest, I2PByteBlock data, I2PDestination sender)
+    {
+        var compareok = _dataSent.IsEmpty ? false : _dataSent == data;
+        Logging.LogInformation($"Program {dest}: MyDestination data received. Matches send: {compareok} {data}");
+        var ok = _publishedDestination.Send(_myOrigin.Destination, data);
+        Logging.LogInformation($"Program {dest}: Send to {_myOrigin.Destination.IdentHash.Id32Short} {ok}");
+    }
+
+    private static void MyOrigin_DataReceived(ClientDestination dest, I2PByteBlock data, I2PDestination sender)
+    {
+        Logging.LogInformation($"Program {dest}: data received. {data}");
+    }
+
+    private static void MyDestination_SignLeasesRequest(ClientDestination dest, IEnumerable<ILease> ls)
+    {
+        Logging.LogInformation($"Program {dest}: Signing {ls} for publishing");
+        _publishedDestination.PrivateKeys = new List<I2PPrivateKey>(new[] { _myDestinationInfo.PrivateKey });
+        _publishedDestination.SignedLeases = new I2PLeaseSet(
+            _myDestination,
+            ls.Select(l => new I2PLease(l.TunnelGw, l.TunnelId, new I2PDate(l.Expire))),
+            _myDestination.PublicKey,
+            _myDestination.SigningPublicKey,
+            _myDestinationInfo.PrivateSigningKey);
+    }
+
+    private static void LookupResult(I2PIdentHash hash, ILeaseSet ls, object o)
+    {
+        Logging.LogInformation($"Program {_myOrigin}: LookupResult {hash.Id32Short} {ls}");
+
+        if (ls is null && _lookedUpLeaseSet is null)
+        {
+            // Try again
+            _myOrigin.LookupDestination(_publishedDestination.Destination.IdentHash, LookupResult);
+            return;
         }
 
-        private static bool _connected = false;
+        _lookedUpLeaseSet = ls;
     }
 }

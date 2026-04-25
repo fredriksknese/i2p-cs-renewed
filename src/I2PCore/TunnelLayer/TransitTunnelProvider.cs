@@ -1,513 +1,493 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using I2PCore.TunnelLayer.I2NP.Data;
-using I2PCore.Utils;
-using I2PCore.SessionLayer;
-using I2PCore.TunnelLayer.I2NP.Messages;
-using I2PCore.TransportLayer;
 using I2PCore.Data;
+using I2PCore.SessionLayer;
+using I2PCore.TransportLayer;
+using I2PCore.TunnelLayer.I2NP.Data;
+using I2PCore.TunnelLayer.I2NP.Messages;
+using I2PCore.Utils;
 using CM = System.Configuration.ConfigurationManager;
-using System.Collections.Concurrent;
 using static I2PCore.Utils.BufUtils;
 
-namespace I2PCore.TunnelLayer
+namespace I2PCore.TunnelLayer;
+
+public class TransitTunnelProvider : ITunnelOwner
 {
-    public class TransitTunnelProvider: ITunnelOwner
+    private static readonly TickSpan BlockRecentTunnelsWindow = Tunnel.TunnelLifetime * 3;
+    public const int BlockRecentTunnelsCount = 2;
+
+    private readonly TunnelProvider TunnelMgr;
+
+    private readonly ConcurrentDictionary<Tunnel, byte> RunningGatewayTunnels = new();
+
+    private readonly ConcurrentDictionary<Tunnel, byte> RunningEndpointTunnels = new();
+
+    private readonly ConcurrentDictionary<Tunnel, byte> RunningTransitTunnels = new();
+
+    private readonly ItemFilterWindow<uint> AcceptedTunnelHashes =
+        new(
+            BlockRecentTunnelsWindow,
+            BlockRecentTunnelsCount);
+
+    private readonly ItemFilterWindow<I2PIdentHash> NextHopFilter = new(TickSpan.Minutes(5), 2);
+
+    private class PendingRequest
     {
-        private static readonly TickSpan BlockRecentTunnelsWindow = Tunnel.TunnelLifetime * 3;
-        public const int BlockRecentTunnelsCount = 2;
+        public readonly TickCounter Created = new();
+        public TunnelBuildRequestDecrypt Decrypt;
+        public I2PIdentHash From;
+        public Ii2NpHeader Msg;
+    }
 
-        private TunnelProvider TunnelMgr;
+    private readonly ConcurrentDictionary<I2PIdentHash, ConcurrentQueue<PendingRequest>> PendingLookups = new();
+    private readonly TickSpan PendingLookupTimeout = TickSpan.Seconds(20);
 
-        private ConcurrentDictionary<Tunnel, byte> RunningGatewayTunnels = new();
+    internal TransitTunnelProvider(TunnelProvider tp)
+    {
+        TunnelMgr = tp;
+        ReadAppConfig();
 
-        private ConcurrentDictionary<Tunnel, byte> RunningEndpointTunnels = new();
+        tp.TunnelBuildRequestEvents += HandleTunnelBuildRecords;
+        NetDb.Inst.RouterInfoUpdates += NetDb_RouterInfoUpdates;
+    }
 
-        private ConcurrentDictionary<Tunnel, byte> RunningTransitTunnels = new();
-
-        private ItemFilterWindow<uint> AcceptedTunnelHashes = 
-            new( 
-                    BlockRecentTunnelsWindow,
-                    BlockRecentTunnelsCount );
-
-        private readonly ItemFilterWindow<I2PIdentHash> NextHopFilter = new( TickSpan.Minutes( 5 ), 2 );
-
-        private class PendingRequest
+    private void NetDb_RouterInfoUpdates(I2PRouterInfo ri)
+    {
+        if (PendingLookups.TryRemove(ri.Identity.IdentHash, out var queue))
         {
-            public Ii2NpHeader Msg;
-            public TunnelBuildRequestDecrypt Decrypt;
-            public I2PIdentHash From;
-            public TickCounter Created = new();
+            Logging.LogInformation(
+                $"TransitTunnelProvider: RouterInfo for {ri.Identity.IdentHash.Id32Short} found. Resuming {queue.Count} pending build requests.");
+            while (queue.TryDequeue(out var request))
+                if (request.Created.DeltaToNow < PendingLookupTimeout)
+                    HandleTunnelBuildRecords(request.Msg, request.Decrypt, request.From);
+                else
+                    Logging.LogDebug(
+                        $"TransitTunnelProvider: Pending build request for {ri.Identity.IdentHash.Id32Short} expired.");
         }
+    }
 
-        private readonly ConcurrentDictionary<I2PIdentHash, ConcurrentQueue<PendingRequest>> PendingLookups = new();
-        private readonly TickSpan PendingLookupTimeout = TickSpan.Seconds( 20 );
-
-        internal TransitTunnelProvider( TunnelProvider tp )
-        {
-            TunnelMgr = tp;
-            ReadAppConfig();
-
-            tp.TunnelBuildRequestEvents += HandleTunnelBuildRecords;
-            NetDb.Inst.RouterInfoUpdates += NetDb_RouterInfoUpdates;
-        }
-
-        private void NetDb_RouterInfoUpdates( I2PRouterInfo ri )
-        {
-            if ( PendingLookups.TryRemove( ri.Identity.IdentHash, out var queue ) )
+    private void CleanupPendingLookups()
+    {
+        foreach (var key in PendingLookups.Keys.ToArray())
+            if (PendingLookups.TryGetValue(key, out var queue))
             {
-                Logging.LogInformation( $"TransitTunnelProvider: RouterInfo for {ri.Identity.IdentHash.Id32Short} found. Resuming {queue.Count} pending build requests." );
-                while ( queue.TryDequeue( out var request ) )
-                {
-                    if ( request.Created.DeltaToNow < PendingLookupTimeout )
+                var allExpired = true;
+                foreach (var req in queue)
+                    if (req.Created.DeltaToNow < PendingLookupTimeout)
                     {
-                        HandleTunnelBuildRecords( request.Msg, request.Decrypt, request.From );
+                        allExpired = false;
+                        break;
                     }
-                    else
-                    {
-                        Logging.LogDebug( $"TransitTunnelProvider: Pending build request for {ri.Identity.IdentHash.Id32Short} expired." );
-                    }
-                }
+
+                if (allExpired) PendingLookups.TryRemove(key, out _);
             }
-        }
+    }
 
-        private void CleanupPendingLookups()
-        {
-            foreach ( var key in PendingLookups.Keys.ToArray() )
-            {
-                if ( PendingLookups.TryGetValue( key, out var queue ) )
-                {
-                    var allExpired = true;
-                    foreach ( var req in queue )
-                    {
-                        if ( req.Created.DeltaToNow < PendingLookupTimeout )
-                        {
-                            allExpired = false;
-                            break;
-                        }
-                    }
-
-                    if ( allExpired )
-                    {
-                        PendingLookups.TryRemove( key, out _ );
-                    }
-                }
-            }
-        }
-
-        private readonly PeriodicAction Maintenance = new( TickSpan.Minutes( 15 ) );
+    private readonly PeriodicAction Maintenance = new(TickSpan.Minutes(15));
 
 #if DEBUG
-        private PeriodicAction LogStatus = new( TickSpan.Seconds( 30 ) );
+    private readonly PeriodicAction LogStatus = new(TickSpan.Seconds(30));
 #else
         PeriodicAction LogStatus = new PeriodicAction( TickSpan.Minutes( 2 ) );
 #endif
-        public void Execute()
+    public void Execute()
+    {
+        LogStatus.Do(LogStatusReport);
+        CleanupPendingLookups();
+    }
+
+    /// <summary>
+    ///     Get transit tunnel statistics for web console display.
+    /// </summary>
+    internal (int gateway, int endpoint, int transit) GetTransitCounts()
+    {
+        return (RunningGatewayTunnels.Count, RunningEndpointTunnels.Count, RunningTransitTunnels.Count);
+    }
+
+    /// <summary>
+    ///     Total number of running transit tunnels (all types)
+    /// </summary>
+    public int TransitTunnelCount =>
+        RunningGatewayTunnels.Count + RunningEndpointTunnels.Count + RunningTransitTunnels.Count;
+
+    public IEnumerable<Tunnel> GetTunnels()
+    {
+        return RunningGatewayTunnels.Keys
+            .Concat(RunningEndpointTunnels.Keys)
+            .Concat(RunningTransitTunnels.Keys);
+    }
+
+    internal void RegisterTransitTunnel(Tunnel tunnel)
+    {
+        if (tunnel is GatewayTunnel)
+            RunningGatewayTunnels[tunnel] = 1;
+        else if (tunnel is EndpointTunnel)
+            RunningEndpointTunnels[tunnel] = 1;
+        else if (tunnel is TransitTunnel) RunningTransitTunnels[tunnel] = 1;
+    }
+
+    private void LogStatusReport()
+    {
+        var gtc = RunningGatewayTunnels.Count;
+        var gbrr = RunningGatewayTunnels.Sum(gt =>
+            gt.Key.Bandwidth.ReceiveBandwidth.Bitrate) / 1024f;
+        var gbrs = RunningGatewayTunnels.Sum(gt =>
+            gt.Key.Bandwidth.SendBandwidth.Bitrate) / 1024f;
+
+        var gbr = RunningGatewayTunnels.Sum(gt =>
+            gt.Key.Bandwidth.ReceiveBandwidth.DataBytes);
+        var gbs = RunningGatewayTunnels.Sum(gt =>
+            gt.Key.Bandwidth.SendBandwidth.DataBytes);
+
+        var etc = RunningEndpointTunnels.Count;
+        var ebrr = RunningEndpointTunnels.Sum(gt =>
+            gt.Key.Bandwidth.ReceiveBandwidth.Bitrate) / 1024f;
+        var ebrs = RunningEndpointTunnels.Sum(gt =>
+            gt.Key.Bandwidth.SendBandwidth.Bitrate) / 1024f;
+
+        var ebr = RunningEndpointTunnels.Sum(gt =>
+            gt.Key.Bandwidth.ReceiveBandwidth.DataBytes);
+        var ebs = RunningEndpointTunnels.Sum(gt =>
+            gt.Key.Bandwidth.SendBandwidth.DataBytes);
+
+        var ttc = RunningTransitTunnels.Count;
+        var tbrr = RunningTransitTunnels.Sum(gt =>
+            gt.Key.Bandwidth.ReceiveBandwidth.Bitrate) / 1024f;
+        var tbrs = RunningTransitTunnels.Sum(gt =>
+            gt.Key.Bandwidth.SendBandwidth.Bitrate) / 1024f;
+
+        var tbr = RunningTransitTunnels.Sum(gt =>
+            gt.Key.Bandwidth.ReceiveBandwidth.DataBytes);
+        var tbs = RunningTransitTunnels.Sum(gt =>
+            gt.Key.Bandwidth.SendBandwidth.DataBytes);
+
+        Logging.LogInformation(
+            $"Established gateway tunnels   : {gtc,2}, Send / Receive: " +
+            $"{gbrs,8:F1} kbps / {gbrr,8:F1} kbps   " +
+            $"{BytesToReadable(gbs),10} / {BytesToReadable(gbr),10}");
+
+        Logging.LogInformation(
+            $"Established endpoint tunnels  : {etc,2}, Send / Receive: " +
+            $"{ebrs,8:F1} kbps / {ebrr,8:F1} kbps   " +
+            $"{BytesToReadable(ebs),10} / {BytesToReadable(ebr),10}");
+
+        Logging.LogInformation(
+            $"Established transit tunnels   : {ttc,2}, Send / Receive: " +
+            $"{tbrs,8:F1} kbps / {tbrr,8:F1} kbps   " +
+            $"{BytesToReadable(tbs),10} / {BytesToReadable(tbr),10}");
+    }
+
+    public void ReadAppConfig()
+    {
+        if (!string.IsNullOrWhiteSpace(CM.AppSettings["MaxTransitTunnels"]))
+            RouterContext.Inst.MaxTransitTunnels = int.Parse(CM.AppSettings["MaxTransitTunnels"]);
+    }
+
+    internal void HandleTunnelBuildRecords(
+        Ii2NpHeader msg,
+        TunnelBuildRequestDecrypt decrypt,
+        I2PIdentHash from)
+    {
+        if (decrypt.Decrypted.ToAnyone)
         {
-            LogStatus.Do( LogStatusReport );
-            CleanupPendingLookups();
+            // Im outbound endpoint
+            Logging.LogInformation($"HandleTunnelBuildRecords: Outbound endpoint request from {from?.Id32Short}");
+            HandleEndpointTunnelRequest(msg, decrypt, from);
+            return;
         }
 
-        /// <summary>
-        /// Get transit tunnel statistics for web console display.
-        /// </summary>
-        internal (int gateway, int endpoint, int transit) GetTransitCounts()
+        if (decrypt.Decrypted.FromAnyone)
         {
-            return (RunningGatewayTunnels.Count, RunningEndpointTunnels.Count, RunningTransitTunnels.Count);
+            // Im inbound gateway
+            Logging.LogInformation($"HandleTunnelBuildRecords: Inbound gateway request from {from?.Id32Short}");
+            HandleGatewayTunnelRequest(msg, decrypt, from);
+            return;
         }
 
-        /// <summary>
-        /// Total number of running transit tunnels (all types)
-        /// </summary>
-        public int TransitTunnelCount =>
-            RunningGatewayTunnels.Count + RunningEndpointTunnels.Count + RunningTransitTunnels.Count;
-
-        public IEnumerable<Tunnel> GetTunnels()
+        if (decrypt.Decrypted.NextIdent != RouterContext.Inst.MyRouterIdentity.IdentHash)
         {
-            return RunningGatewayTunnels.Keys
-                .Concat( RunningEndpointTunnels.Keys )
-                .Concat( RunningTransitTunnels.Keys );
+            // Im transit tunnel
+            Logging.LogDebug($"HandleTunnelBuildRecords: Transit tunnel request {decrypt}");
+            HandleTransitTunnelRequest(msg, decrypt, from);
+            return;
         }
 
-        internal void RegisterTransitTunnel( Tunnel tunnel )
+        throw new NotSupportedException();
+    }
+
+    private void HandleGatewayTunnelRequest(
+        Ii2NpHeader msg,
+        TunnelBuildRequestDecrypt decrypt,
+        I2PIdentHash from)
+    {
+        // Validate NextHop RouterInfo exists in our NetDb before accepting
+        var nextHop = new I2PIdentHash(new I2PBufferCursor(decrypt.Decrypted.NextIdent.Hash.Clone()));
+        if (!NetDb.Inst.Contains(nextHop))
         {
-            if ( tunnel is GatewayTunnel )
-            {
-                RunningGatewayTunnels[tunnel] = 1;
-            }
-            else if ( tunnel is EndpointTunnel )
-            {
-                RunningEndpointTunnels[tunnel] = 1;
-            }
-            else if ( tunnel is TransitTunnel )
-            {
-                RunningTransitTunnels[tunnel] = 1;
-            }
-        }
-
-        private void LogStatusReport()
-        {
-            var gtc = RunningGatewayTunnels.Count;
-            var gbrr = RunningGatewayTunnels.Sum( gt => 
-                gt.Key.Bandwidth.ReceiveBandwidth.Bitrate ) / 1024f;
-            var gbrs = RunningGatewayTunnels.Sum( gt =>
-                gt.Key.Bandwidth.SendBandwidth.Bitrate ) / 1024f;
-
-            var gbr = RunningGatewayTunnels.Sum( gt =>
-                gt.Key.Bandwidth.ReceiveBandwidth.DataBytes );
-            var gbs = RunningGatewayTunnels.Sum( gt =>
-                gt.Key.Bandwidth.SendBandwidth.DataBytes );
-
-            var etc = RunningEndpointTunnels.Count;
-            var ebrr = RunningEndpointTunnels.Sum( gt =>
-                gt.Key.Bandwidth.ReceiveBandwidth.Bitrate ) / 1024f;
-            var ebrs = RunningEndpointTunnels.Sum( gt =>
-                gt.Key.Bandwidth.SendBandwidth.Bitrate ) / 1024f;
-
-            var ebr = RunningEndpointTunnels.Sum( gt =>
-                gt.Key.Bandwidth.ReceiveBandwidth.DataBytes );
-            var ebs = RunningEndpointTunnels.Sum( gt =>
-                gt.Key.Bandwidth.SendBandwidth.DataBytes );
-
-            var ttc = RunningTransitTunnels.Count;
-            var tbrr = RunningTransitTunnels.Sum( gt =>
-                gt.Key.Bandwidth.ReceiveBandwidth.Bitrate ) / 1024f;
-            var tbrs = RunningTransitTunnels.Sum( gt =>
-                gt.Key.Bandwidth.SendBandwidth.Bitrate ) / 1024f;
-
-            var tbr = RunningTransitTunnels.Sum( gt =>
-                gt.Key.Bandwidth.ReceiveBandwidth.DataBytes );
-            var tbs = RunningTransitTunnels.Sum( gt =>
-                gt.Key.Bandwidth.SendBandwidth.DataBytes );
-
             Logging.LogInformation(
-                $"Established gateway tunnels   : {gtc,2}, Send / Receive: " +
-                $"{gbrs,8:F1} kbps / {gbrr,8:F1} kbps   " +
-                $"{BytesToReadable( gbs ),10} / {BytesToReadable( gbr ),10}" );
+                $"HandleGatewayTunnelRequest: NextHop {nextHop.Id32Short} not in NetDb. Initiating lookup.");
+            var queue = PendingLookups.GetOrAdd(nextHop, _ => new ConcurrentQueue<PendingRequest>());
+            queue.Enqueue(new PendingRequest { Msg = msg, Decrypt = decrypt.Clone(), From = from });
+            NetDb.Inst.IdentHashLookup.LookupRouterInfo(nextHop);
+            return;
+        }
 
+        var config = new TunnelConfig(
+            TunnelConfig.TunnelDirection.Inbound,
+            TunnelConfig.TunnelPool.External,
+            new TunnelInfo(new List<HopInfo>
+                {
+                    new(
+                        RouterContext.Inst.MyRouterIdentity,
+                        new I2PTunnelId())
+                }
+            ));
+
+        var tunnel = new GatewayTunnel(this, config, decrypt.Decrypted);
+        tunnel.EstablishedTime.SetNow();
+        // Gateways accept from any peer, so ReceiveFrom stays null
+
+        var doaccept = AcceptingTunnels(decrypt.Decrypted);
+
+        if (!doaccept)
             Logging.LogInformation(
-                $"Established endpoint tunnels  : {etc,2}, Send / Receive: " +
-                $"{ebrs,8:F1} kbps / {ebrr,8:F1} kbps   " +
-                $"{BytesToReadable( ebs ),10} / {BytesToReadable( ebr ),10}" );
+                $"HandleGatewayTunnelRequest: Rejecting Inbound Gateway tunnel {tunnel.ReceiveTunnelId} from {from?.Id32Short}");
 
+        var response = doaccept
+            ? BuildResponseRecord.RequestResponse.Accept
+            : BuildResponseRecord.DefaultErrorReply;
+
+        Logging.LogDebug($"HandleGatewayTunnelRequest {tunnel.TunnelDebugTrace}: " +
+                         $"{tunnel.Destination.Id32Short} Gateway tunnel request: {response} " +
+                         $"for tunnel id {tunnel.ReceiveTunnelId}.");
+
+        var replymsg = CreateReplyMessage(msg, decrypt, response);
+
+        if (response == BuildResponseRecord.RequestResponse.Accept)
+        {
             Logging.LogInformation(
-                $"Established transit tunnels   : {ttc,2}, Send / Receive: " +
-                $"{tbrs,8:F1} kbps / {tbrr,8:F1} kbps   " +
-                $"{BytesToReadable( tbs ),10} / {BytesToReadable( tbr ),10}" );
+                $"HandleGatewayTunnelRequest: Accepting Inbound Gateway tunnel {tunnel.ReceiveTunnelId} from {from?.Id32Short}");
+            RunningGatewayTunnels[tunnel] = 1;
+            TunnelMgr.AddTunnel(tunnel);
+            AcceptedTunnelBuildRequest(decrypt.Decrypted);
         }
 
-        public void ReadAppConfig()
+        TransportProvider.Send(tunnel.Destination, replymsg);
+    }
+
+    private void HandleEndpointTunnelRequest(
+        Ii2NpHeader msg,
+        TunnelBuildRequestDecrypt decrypt,
+        I2PIdentHash from)
+    {
+        var config = new TunnelConfig(
+            TunnelConfig.TunnelDirection.Inbound,
+            TunnelConfig.TunnelPool.External,
+            new TunnelInfo(new List<HopInfo>
+                {
+                    new(
+                        RouterContext.Inst.MyRouterIdentity,
+                        new I2PTunnelId())
+                }
+            ));
+
+        var tunnel = new EndpointTunnel(this, config, decrypt.Decrypted);
+        tunnel.EstablishedTime.SetNow();
+        tunnel.ReceiveFrom = from;
+
+        var doaccept = AcceptingTunnels(decrypt.Decrypted);
+
+        var response = doaccept
+            ? BuildResponseRecord.RequestResponse.Accept
+            : BuildResponseRecord.DefaultErrorReply;
+
+        Logging.LogDebug($"HandleEndpointTunnelRequest {tunnel.TunnelDebugTrace}: " +
+                         $"{tunnel.Destination.Id32Short} Endpoint tunnel request: {response} " +
+                         $"for tunnel id {tunnel.ReceiveTunnelId}.");
+
+        var newrecords = decrypt.CreateTunnelBuildReplyRecords(response);
+
+        var responsemessage = new VariableTunnelBuildReplyMessage(
+            newrecords.Select(r => new BuildResponseRecord(r)),
+            tunnel.ResponseMessageId);
+
+        var buildreplymsg = new TunnelGatewayMessage(
+            responsemessage,
+            tunnel.ResponseTunnelId);
+
+        if (response == BuildResponseRecord.RequestResponse.Accept)
         {
-            if ( !string.IsNullOrWhiteSpace( CM.AppSettings["MaxTransitTunnels"] ) )
-            {
-                RouterContext.Inst.MaxTransitTunnels = int.Parse( CM.AppSettings["MaxTransitTunnels"] );
-            }
+            Logging.LogInformation(
+                $"HandleEndpointTunnelRequest: Accepting Outbound Endpoint tunnel {tunnel.ReceiveTunnelId} from {from?.Id32Short}");
+            RunningEndpointTunnels[tunnel] = 1;
+            TunnelMgr.AddTunnel(tunnel);
+            AcceptedTunnelBuildRequest(decrypt.Decrypted);
         }
 
-        internal void HandleTunnelBuildRecords(
-            Ii2NpHeader msg,
-            TunnelBuildRequestDecrypt decrypt,
-            I2PIdentHash from )
+        TransportProvider.Send(tunnel.Destination, buildreplymsg);
+    }
+
+    private void HandleTransitTunnelRequest(
+        Ii2NpHeader msg,
+        TunnelBuildRequestDecrypt decrypt,
+        I2PIdentHash from)
+    {
+        // Validate NextHop RouterInfo exists in our NetDb before accepting
+        var nextHop = new I2PIdentHash(new I2PBufferCursor(decrypt.Decrypted.NextIdent.Hash.Clone()));
+        if (!NetDb.Inst.Contains(nextHop))
         {
-            if ( decrypt.Decrypted.ToAnyone )
-            {
-                // Im outbound endpoint
-                Logging.LogInformation( $"HandleTunnelBuildRecords: Outbound endpoint request from {from?.Id32Short}" );
-                HandleEndpointTunnelRequest( msg, decrypt, from );
-                return;
-            }
-
-            if ( decrypt.Decrypted.FromAnyone )
-            {
-                // Im inbound gateway
-                Logging.LogInformation( $"HandleTunnelBuildRecords: Inbound gateway request from {from?.Id32Short}" );
-                HandleGatewayTunnelRequest( msg, decrypt, from );
-                return;
-            }
-
-            if ( decrypt.Decrypted.NextIdent != RouterContext.Inst.MyRouterIdentity.IdentHash )
-            {
-                // Im transit tunnel
-                Logging.LogDebug( $"HandleTunnelBuildRecords: Transit tunnel request {decrypt}" );
-                HandleTransitTunnelRequest( msg, decrypt, from );
-                return;
-            }
-
-            throw new NotSupportedException();
+            Logging.LogInformation(
+                $"HandleTransitTunnelRequest: NextHop {nextHop.Id32Short} not in NetDb. Initiating lookup.");
+            var queue = PendingLookups.GetOrAdd(nextHop, _ => new ConcurrentQueue<PendingRequest>());
+            queue.Enqueue(new PendingRequest { Msg = msg, Decrypt = decrypt.Clone(), From = from });
+            NetDb.Inst.IdentHashLookup.LookupRouterInfo(nextHop);
+            return;
         }
 
-        private void HandleGatewayTunnelRequest(
-            Ii2NpHeader msg,
-            TunnelBuildRequestDecrypt decrypt,
-            I2PIdentHash from )
+        var config = new TunnelConfig(
+            TunnelConfig.TunnelDirection.Inbound,
+            TunnelConfig.TunnelPool.External,
+            new TunnelInfo(new List<HopInfo>
+                {
+                    new(
+                        RouterContext.Inst.MyRouterIdentity,
+                        new I2PTunnelId())
+                }
+            ));
+
+        var tunnel = new TransitTunnel(this, config, decrypt.Decrypted);
+        tunnel.EstablishedTime.SetNow();
+        tunnel.ReceiveFrom = from;
+
+        var doaccept = AcceptingTunnels(decrypt.Decrypted);
+
+        var response = doaccept
+            ? BuildResponseRecord.RequestResponse.Accept
+            : BuildResponseRecord.DefaultErrorReply;
+
+        Logging.LogDebug($"HandleTransitTunnelRequest {tunnel.TunnelDebugTrace}: " +
+                         $"{tunnel.Destination.Id32Short} Transit tunnel request: {response} " +
+                         $"for tunnel id {tunnel.ReceiveTunnelId}.");
+
+        var replymsg2 = CreateReplyMessage(msg, decrypt, response);
+
+        if (response == BuildResponseRecord.RequestResponse.Accept)
         {
-            // Validate NextHop RouterInfo exists in our NetDb before accepting
-            var nextHop = new I2PIdentHash( new I2PBufferCursor( decrypt.Decrypted.NextIdent.Hash.Clone() ) );
-            if ( !NetDb.Inst.Contains( nextHop ) )
-            {
-                Logging.LogInformation( $"HandleGatewayTunnelRequest: NextHop {nextHop.Id32Short} not in NetDb. Initiating lookup." );
-                var queue = PendingLookups.GetOrAdd( nextHop, _ => new ConcurrentQueue<PendingRequest>() );
-                queue.Enqueue( new PendingRequest { Msg = msg, Decrypt = decrypt.Clone(), From = from } );
-                NetDb.Inst.IdentHashLookup.LookupRouterInfo( nextHop );
-                return;
-            }
-
-            var config = new TunnelConfig(
-                TunnelConfig.TunnelDirection.Inbound,
-                TunnelConfig.TunnelPool.External,
-                new TunnelInfo( new List<HopInfo>
-                    {
-                        new(
-                            RouterContext.Inst.MyRouterIdentity,
-                            new I2PTunnelId() )
-                    }
-                ) );
-
-            var tunnel = new GatewayTunnel( this, config, decrypt.Decrypted );
-            tunnel.EstablishedTime.SetNow();
-            // Gateways accept from any peer, so ReceiveFrom stays null
-
-            var doaccept = AcceptingTunnels( decrypt.Decrypted );
-
-            if ( !doaccept )
-            {
-                Logging.LogInformation( $"HandleGatewayTunnelRequest: Rejecting Inbound Gateway tunnel {tunnel.ReceiveTunnelId} from {from?.Id32Short}" );
-            }
-
-            var response = doaccept
-                    ? BuildResponseRecord.RequestResponse.Accept
-                    : BuildResponseRecord.DefaultErrorReply;
-
-            Logging.LogDebug( $"HandleGatewayTunnelRequest {tunnel.TunnelDebugTrace}: " +
-                $"{tunnel.Destination.Id32Short} Gateway tunnel request: {response} " +
-                $"for tunnel id {tunnel.ReceiveTunnelId}." );
-
-            var replymsg = CreateReplyMessage( msg, decrypt, response );
-
-            if ( response == BuildResponseRecord.RequestResponse.Accept )
-            {
-                Logging.LogInformation( $"HandleGatewayTunnelRequest: Accepting Inbound Gateway tunnel {tunnel.ReceiveTunnelId} from {from?.Id32Short}" );
-                RunningGatewayTunnels[tunnel] = 1;
-                TunnelMgr.AddTunnel( tunnel );
-                AcceptedTunnelBuildRequest( decrypt.Decrypted );
-            }
-
-            TransportProvider.Send( tunnel.Destination, replymsg );
+            RunningTransitTunnels[tunnel] = 1;
+            TunnelMgr.AddTunnel(tunnel);
+            AcceptedTunnelBuildRequest(decrypt.Decrypted);
         }
 
-        private void HandleEndpointTunnelRequest(
-            Ii2NpHeader msg,
-            TunnelBuildRequestDecrypt decrypt,
-            I2PIdentHash from )
+        TransportProvider.Send(tunnel.Destination, replymsg2);
+    }
+
+    #region Request filter
+
+    internal bool AcceptingTunnels(I2PIdentHash nextIdent)
+    {
+        // Hidden mode: reject all transit tunnels
+        if (RouterContext.Inst.IsHidden)
         {
-            var config = new TunnelConfig(
-                TunnelConfig.TunnelDirection.Inbound,
-                TunnelConfig.TunnelPool.External,
-                new TunnelInfo( new List<HopInfo>
-                    {
-                        new(
-                            RouterContext.Inst.MyRouterIdentity,
-                            new I2PTunnelId() )
-                    }
-                ) );
-
-            var tunnel = new EndpointTunnel( this, config, decrypt.Decrypted );
-            tunnel.EstablishedTime.SetNow();
-            tunnel.ReceiveFrom = from;
-
-            var doaccept = AcceptingTunnels( decrypt.Decrypted );
-
-            var response = doaccept
-                    ? BuildResponseRecord.RequestResponse.Accept
-                    : BuildResponseRecord.DefaultErrorReply;
-
-            Logging.LogDebug( $"HandleEndpointTunnelRequest {tunnel.TunnelDebugTrace}: " +
-                $"{tunnel.Destination.Id32Short} Endpoint tunnel request: {response} " +
-                $"for tunnel id {tunnel.ReceiveTunnelId}." );
-
-            var newrecords = decrypt.CreateTunnelBuildReplyRecords( response );
-
-            var responsemessage = new VariableTunnelBuildReplyMessage(
-                    newrecords.Select( r => new BuildResponseRecord( r ) ),
-                    tunnel.ResponseMessageId );
-
-            var buildreplymsg = new TunnelGatewayMessage(
-                    responsemessage,
-                    tunnel.ResponseTunnelId );
-
-            if ( response == BuildResponseRecord.RequestResponse.Accept )
-            {
-                Logging.LogInformation( $"HandleEndpointTunnelRequest: Accepting Outbound Endpoint tunnel {tunnel.ReceiveTunnelId} from {from?.Id32Short}" );
-                RunningEndpointTunnels[tunnel] = 1;
-                TunnelMgr.AddTunnel( tunnel );
-                AcceptedTunnelBuildRequest( decrypt.Decrypted );
-            }
-            TransportProvider.Send( tunnel.Destination, buildreplymsg );
+            Logging.LogDebug("TransitProvider AcceptingTunnels: Reject - hidden mode.");
+            return false;
         }
 
-        private void HandleTransitTunnelRequest(
-            Ii2NpHeader msg,
-            TunnelBuildRequestDecrypt decrypt,
-            I2PIdentHash from )
+        var currenttunnelcount = TransitTunnelCount;
+        RouterContext.Inst.CurrentTransitTunnelCount = currenttunnelcount;
+
+        // Reject if we've seen the same next-hop destination too many times recently
+        if (nextIdent != null && !NextHopFilter.Update(nextIdent))
         {
-            // Validate NextHop RouterInfo exists in our NetDb before accepting
-            var nextHop = new I2PIdentHash( new I2PBufferCursor( decrypt.Decrypted.NextIdent.Hash.Clone() ) );
-            if ( !NetDb.Inst.Contains( nextHop ) )
-            {
-                Logging.LogInformation( $"HandleTransitTunnelRequest: NextHop {nextHop.Id32Short} not in NetDb. Initiating lookup." );
-                var queue = PendingLookups.GetOrAdd( nextHop, _ => new ConcurrentQueue<PendingRequest>() );
-                queue.Enqueue( new PendingRequest { Msg = msg, Decrypt = decrypt.Clone(), From = from } );
-                NetDb.Inst.IdentHashLookup.LookupRouterInfo( nextHop );
-                return;
-            }
-
-            var config = new TunnelConfig(
-                TunnelConfig.TunnelDirection.Inbound,
-                TunnelConfig.TunnelPool.External,
-                new TunnelInfo( new List<HopInfo>
-                    {
-                        new(
-                            RouterContext.Inst.MyRouterIdentity,
-                            new I2PTunnelId() )
-                    }
-                ) );
-
-            var tunnel = new TransitTunnel( this, config, decrypt.Decrypted );
-            tunnel.EstablishedTime.SetNow();
-            tunnel.ReceiveFrom = from;
-
-            var doaccept = AcceptingTunnels( decrypt.Decrypted );
-
-            var response = doaccept
-                    ? BuildResponseRecord.RequestResponse.Accept
-                    : BuildResponseRecord.DefaultErrorReply;
-
-            Logging.LogDebug( $"HandleTransitTunnelRequest {tunnel.TunnelDebugTrace}: " +
-                $"{tunnel.Destination.Id32Short} Transit tunnel request: {response} " +
-                $"for tunnel id {tunnel.ReceiveTunnelId}." );
-
-            var replymsg2 = CreateReplyMessage( msg, decrypt, response );
-
-            if ( response == BuildResponseRecord.RequestResponse.Accept )
-            {
-                RunningTransitTunnels[tunnel] = 1;
-                TunnelMgr.AddTunnel( tunnel );
-                AcceptedTunnelBuildRequest( decrypt.Decrypted );
-            }
-            TransportProvider.Send( tunnel.Destination, replymsg2 );
+            Logging.LogDebug($"TransitProvider AcceptingTunnels: Reject due same next destination. " +
+                             $"Running tunnels: {currenttunnelcount}. Accept: false.");
+            return false;
         }
 
-        #region Request filter
+        var result = currenttunnelcount < RouterContext.Inst.MaxTransitTunnels;
+        result &= TunnelMgr.AcceptTransitTunnels;
 
-        internal bool AcceptingTunnels( I2PIdentHash nextIdent )
+        Logging.LogDebug($"TransitProvider AcceptingTunnels: Running tunnels: {currenttunnelcount}. Accept: {result}.");
+
+        return result;
+    }
+
+    private bool AcceptingTunnels(BuildRequestRecord drec)
+    {
+        if (!AcceptingTunnels(drec.NextIdent)) return false;
+
+        // Reject duplicate/similar build requests (replay protection)
+        var recent = HaveSeenTunnelBuildRequest(drec);
+        if (recent)
         {
-            // Hidden mode: reject all transit tunnels
-            if ( RouterContext.Inst.IsHidden )
-            {
-                Logging.LogDebug( "TransitProvider AcceptingTunnels: Reject - hidden mode." );
-                return false;
-            }
-
             var currenttunnelcount = TransitTunnelCount;
-            RouterContext.Inst.CurrentTransitTunnelCount = currenttunnelcount;
-
-            // Reject if we've seen the same next-hop destination too many times recently
-            if ( nextIdent != null && !NextHopFilter.Update( nextIdent ) )
-            {
-                Logging.LogDebug( $"TransitProvider AcceptingTunnels: Reject due same next destination. " +
-                    $"Running tunnels: {currenttunnelcount}. Accept: false." );
-                return false;
-            }
-
-            var result = currenttunnelcount < RouterContext.Inst.MaxTransitTunnels;
-            result &= TunnelMgr.AcceptTransitTunnels;
-
-            Logging.LogDebug( $"TransitProvider AcceptingTunnels: Running tunnels: {currenttunnelcount}. Accept: {result}." );
-
-            return result;
+            Logging.LogDebug($"TransitProvider AcceptingTunnels: Reject due to similarity to recent tunnel. " +
+                             $"Running tunnels: {currenttunnelcount}. Accept: false.");
+            return false;
         }
 
-        private bool AcceptingTunnels( BuildRequestRecord drec )
-        {
-            if ( !AcceptingTunnels( drec.NextIdent ) ) return false;
+        AcceptedTunnelBuildRequest(drec);
+        return true;
+    }
 
-            // Reject duplicate/similar build requests (replay protection)
-            bool recent = HaveSeenTunnelBuildRequest( drec );
-            if ( recent )
-            {
-                var currenttunnelcount = TransitTunnelCount;
-                Logging.LogDebug( $"TransitProvider AcceptingTunnels: Reject due to similarity to recent tunnel. " +
-                    $"Running tunnels: {currenttunnelcount}. Accept: false." );
-                return false;
-            }
+    private void AcceptedTunnelBuildRequest(BuildRequestRecord drec)
+    {
+        AcceptedTunnelBuildRequest(drec.GetReducedHash());
+    }
 
-            AcceptedTunnelBuildRequest( drec );
-            return true;
-        }
+    private void AcceptedTunnelBuildRequest(uint hash)
+    {
+        AcceptedTunnelHashes.Update(hash);
+    }
 
-        private void AcceptedTunnelBuildRequest( BuildRequestRecord drec )
-        {
-            AcceptedTunnelBuildRequest( drec.GetReducedHash() );
-        }
+    private bool HaveSeenTunnelBuildRequest(BuildRequestRecord drec)
+    {
+        return !AcceptedTunnelHashes.Update(drec.GetReducedHash());
+    }
 
-        private void AcceptedTunnelBuildRequest( uint hash )
-        {
-            AcceptedTunnelHashes.Update( hash );
-        }
+    #endregion
 
-        private bool HaveSeenTunnelBuildRequest( BuildRequestRecord drec )
-        {
-            return !AcceptedTunnelHashes.Update( drec.GetReducedHash() );
-        }
+    #region TunnelEvents
 
-        #endregion
+    public void TunnelEstablished(Tunnel tunnel)
+    {
+    }
 
-        #region TunnelEvents
-        public void TunnelEstablished( Tunnel tunnel )
-        {
-        }
+    public void TunnelBuildFailed(Tunnel tunnel, bool timeout)
+    {
+    }
 
-        public void TunnelBuildFailed( Tunnel tunnel, bool timeout )
-        {
-        }
+    public void TunnelExpired(Tunnel tunnel)
+    {
+        Logging.LogDebug($"TransitProvider: TunnelTimeout: {tunnel}");
+        RunningGatewayTunnels.TryRemove(tunnel, out _);
+        RunningEndpointTunnels.TryRemove(tunnel, out _);
+        RunningTransitTunnels.TryRemove(tunnel, out _);
+    }
 
-        public void TunnelExpired( Tunnel tunnel )
-        {
-            Logging.LogDebug( $"TransitProvider: TunnelTimeout: {tunnel}" );
-            RunningGatewayTunnels.TryRemove( tunnel, out _ );
-            RunningEndpointTunnels.TryRemove( tunnel, out _ );
-            RunningTransitTunnels.TryRemove( tunnel, out _ );
-        }
+    public void TunnelFailed(Tunnel tunnel)
+    {
+        TunnelExpired(tunnel);
+    }
 
-        public void TunnelFailed( Tunnel tunnel )
-        {
-            TunnelExpired( tunnel );
-        }
+    #endregion
 
-        #endregion
+    private static I2NpMessage CreateReplyMessage(
+        Ii2NpHeader msg,
+        TunnelBuildRequestDecrypt decrypt,
+        BuildResponseRecord.RequestResponse response)
+    {
+        var newrecords = decrypt.CreateTunnelBuildReplyRecords(response);
 
-        private static I2NpMessage CreateReplyMessage(
-                Ii2NpHeader msg,
-                TunnelBuildRequestDecrypt decrypt,
-                BuildResponseRecord.RequestResponse response )
-        {
-            var newrecords = decrypt.CreateTunnelBuildReplyRecords( response );
+        if (msg.MessageType == I2NpMessage.MessageTypes.VariableTunnelBuild)
+            return new VariableTunnelBuildMessage(newrecords);
 
-            if ( msg.MessageType == I2NpMessage.MessageTypes.VariableTunnelBuild )
-            {
-                return new VariableTunnelBuildMessage( newrecords );
-            }
-            else
-            {
-                return new TunnelBuildMessage( newrecords );
-            }
-        }
+        return new TunnelBuildMessage(newrecords);
+    }
 
-        public override string ToString()
-        {
-            return GetType().Name;
-        }
+    public override string ToString()
+    {
+        return GetType().Name;
     }
 }

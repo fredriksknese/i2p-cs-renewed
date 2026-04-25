@@ -1,44 +1,42 @@
-﻿using System;
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using I2PCore.Utils;
 
-namespace I2PCore.TunnelLayer
+namespace I2PCore.TunnelLayer;
+
+public class TunnelIdSubsriptions
 {
-    public class TunnelIdSubsriptions
+    private readonly ConcurrentDictionary<uint, HashSet<Tunnel>> TunnelIds = new();
+
+    public void Add(uint id, Tunnel tunnel)
     {
-        private ConcurrentDictionary<uint, HashSet<Tunnel>> TunnelIds = new();
+        Logging.LogDebug($"TunnelIdSubsriptions: Added {id} to {tunnel}");
 
-        public void Add( uint id, Tunnel tunnel )
-        {
-            Logging.LogDebug( $"TunnelIdSubsriptions: Added {id} to {tunnel}" );
-            
-            var tunnels = TunnelIds.GetOrAdd( id, new HashSet<Tunnel>() );
-            tunnels.Add( tunnel );
-        }
+        var tunnels = TunnelIds.GetOrAdd(id, new HashSet<Tunnel>());
+        tunnels.Add(tunnel);
+    }
 
-        public Tunnel Remove( uint id, Tunnel tunnel )
-        {
-            if ( !TunnelIds.TryGetValue( id, out var tunnels ) ) return null;
+    public Tunnel Remove(uint id, Tunnel tunnel)
+    {
+        if (!TunnelIds.TryGetValue(id, out var tunnels)) return null;
 
-            tunnels.Remove( tunnel );
-            if ( !tunnels.Any() ) TunnelIds.TryRemove( id, out _ );
+        tunnels.Remove(tunnel);
+        if (!tunnels.Any()) TunnelIds.TryRemove(id, out _);
 
-            return tunnel;
-        }
+        return tunnel;
+    }
 
-        public IEnumerable<Tunnel> FindTunnelFromTunnelId( uint tunnelid )
-        {
-            if ( TunnelIds.TryGetValue( tunnelid, out var tunnels ) )
-                return tunnels.ToArray();
+    public IEnumerable<Tunnel> FindTunnelFromTunnelId(uint tunnelid)
+    {
+        if (TunnelIds.TryGetValue(tunnelid, out var tunnels))
+            return tunnels.ToArray();
 
-            return Enumerable.Empty<Tunnel>();
-        }
+        return Enumerable.Empty<Tunnel>();
+    }
 
-        public IEnumerable<uint> GetAllTunnelIds()
-        {
-            return TunnelIds.Keys.ToArray();
-        }
+    public IEnumerable<uint> GetAllTunnelIds()
+    {
+        return TunnelIds.Keys.ToArray();
     }
 }

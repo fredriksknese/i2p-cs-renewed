@@ -5,172 +5,167 @@ using I2PCore.Utils;
 using Org.BouncyCastle.Crypto.Engines;
 using Org.BouncyCastle.Crypto.Parameters;
 
-namespace I2PCore.TunnelLayer.ECIES
+namespace I2PCore.TunnelLayer.ECIES;
+
+/// <summary>
+///     Long ECIES Tunnel Build Reply Record
+///     Unencrypted size: 528 bytes
+///     Used for replies in mixed tunnels with ElGamal/ECIES routers
+///     Structure:
+///     - bytes 0-526: options (Mapping) + padding
+///     - byte 527: reply status
+/// </summary>
+public class LongBuildReplyRecord
 {
     /// <summary>
-    /// Long ECIES Tunnel Build Reply Record
-    ///
-    /// Unencrypted size: 528 bytes
-    /// Used for replies in mixed tunnels with ElGamal/ECIES routers
-    ///
-    /// Structure:
-    /// - bytes 0-526: options (Mapping) + padding
-    /// - byte 527: reply status
+    ///     Reply status codes
     /// </summary>
-    public class LongBuildReplyRecord
+    public enum TunnelBuildReplyStatus : byte
     {
-        public const int UnencryptedRecordSize = 528;
-        public const int EncryptedRecordSize = 528;
+        Accept = 0x00,
+        RejectBandwidth = 30,
+        RejectTransitTunnels = 50,
+        RejectCongestion = 60,
+        RejectProbabilistic = 70
+    }
 
-        public I2PMapping Options { get; set; }
-        public TunnelBuildReplyStatus Status { get; set; }
+    public const int UnencryptedRecordSize = 528;
+    public const int EncryptedRecordSize = 528;
 
-        /// <summary>
-        /// Reply status codes
-        /// </summary>
-        public enum TunnelBuildReplyStatus : byte
+    public LongBuildReplyRecord()
+    {
+        Options = new I2PMapping();
+        Status = TunnelBuildReplyStatus.Accept;
+    }
+
+    public LongBuildReplyRecord(I2PMapping options, TunnelBuildReplyStatus status)
+    {
+        Options = options ?? new I2PMapping();
+        Status = status;
+    }
+
+    /// <summary>
+    ///     Parse an unencrypted long build reply record
+    /// </summary>
+    public LongBuildReplyRecord(I2PBufferCursor reader)
+    {
+        // Parse options mapping
+        Options = new I2PMapping(reader);
+
+        // Skip to the reply byte at position 527
+        var currentPos = reader.BaseArrayOffset;
+        var statusPos = UnencryptedRecordSize - 1; // Last byte
+
+        if (currentPos < statusPos)
+            // Skip padding
+            reader.Seek(statusPos - currentPos);
+
+        // Read reply status
+        Status = (TunnelBuildReplyStatus)reader.ReadByte();
+    }
+
+    public I2PMapping Options { get; set; }
+    public TunnelBuildReplyStatus Status { get; set; }
+
+    /// <summary>
+    ///     Parse from byte array
+    /// </summary>
+    public static LongBuildReplyRecord FromBytes(byte[] data)
+    {
+        if (data == null || data.Length < UnencryptedRecordSize)
+            throw new ArgumentException("Data too short for long build reply record");
+
+        return new LongBuildReplyRecord(new I2PBufferCursor(data));
+    }
+
+    /// <summary>
+    ///     Write the unencrypted record to a buffer
+    /// </summary>
+    public void Write(IBufferWriter<byte> dest)
+    {
+        var startCount = (dest as ArrayBufferWriter<byte>)?.WrittenCount ?? 0;
+
+        // Write options
+        Options.Write(dest);
+
+        // Pad to 527 bytes with random data
+        var written = ((dest as ArrayBufferWriter<byte>)?.WrittenCount ?? 0) - startCount;
+        var paddingSize = UnencryptedRecordSize - 1 - written; // -1 for reply byte
+
+        if (paddingSize > 0)
         {
-            Accept = 0x00,
-            RejectBandwidth = 30,
-            RejectTransitTunnels = 50,
-            RejectCongestion = 60,
-            RejectProbabilistic = 70
+            var padding = BufUtils.RandomBytes(paddingSize);
+            dest.WriteBytes(padding);
         }
 
-        public LongBuildReplyRecord()
-        {
-            Options = new I2PMapping();
-            Status = TunnelBuildReplyStatus.Accept;
-        }
+        // Write reply status at byte 527
+        dest.WriteByte((byte)Status);
+    }
 
-        public LongBuildReplyRecord(I2PMapping options, TunnelBuildReplyStatus status)
-        {
-            Options = options ?? new I2PMapping();
-            Status = status;
-        }
+    /// <summary>
+    ///     Convert to byte array
+    /// </summary>
+    public byte[] ToByteArray()
+    {
+        var stream = new ArrayBufferWriter<byte>();
+        Write(stream);
+        return stream.WrittenSpan.ToArray();
+    }
 
-        /// <summary>
-        /// Parse an unencrypted long build reply record
-        /// </summary>
-        public LongBuildReplyRecord(I2PBufferCursor reader)
-        {
-            // Parse options mapping
-            Options = new I2PMapping(reader);
+    /// <summary>
+    ///     Encrypt the reply record using ChaCha20 (no authentication for replies)
+    /// </summary>
+    public byte[] Encrypt(byte[] replyKey, byte[] replyIV)
+    {
+        if (replyKey == null || replyKey.Length != 32)
+            throw new ArgumentException("Reply key must be 32 bytes", nameof(replyKey));
 
-            // Skip to the reply byte at position 527
-            var currentPos = reader.BaseArrayOffset;
-            var statusPos = UnencryptedRecordSize - 1; // Last byte
+        if (replyIV == null || replyIV.Length < 12)
+            throw new ArgumentException("Reply IV must be at least 12 bytes", nameof(replyIV));
 
-            if (currentPos < statusPos)
-            {
-                // Skip padding
-                reader.Seek(statusPos - currentPos);
-            }
+        // Get plaintext
+        var plaintext = ToByteArray();
+        if (plaintext.Length != UnencryptedRecordSize)
+            throw new InvalidOperationException($"Plaintext must be exactly {UnencryptedRecordSize} bytes");
 
-            // Read reply status
-            Status = (TunnelBuildReplyStatus)reader.ReadByte();
-        }
+        // Encrypt with ChaCha20 (stream cipher, no authentication for replies)
+        var cipher = new ChaCha7539Engine();
+        var parameters = new ParametersWithIV(new KeyParameter(replyKey), replyIV, 0, 12);
+        cipher.Init(true, parameters);
 
-        /// <summary>
-        /// Parse from byte array
-        /// </summary>
-        public static LongBuildReplyRecord FromBytes(byte[] data)
-        {
-            if (data == null || data.Length < UnencryptedRecordSize)
-                throw new ArgumentException($"Data too short for long build reply record");
+        var ciphertext = new byte[UnencryptedRecordSize];
+        cipher.ProcessBytes(plaintext, 0, plaintext.Length, ciphertext, 0);
 
-            return new LongBuildReplyRecord(new I2PBufferCursor(data));
-        }
+        return ciphertext;
+    }
 
-        /// <summary>
-        /// Write the unencrypted record to a buffer
-        /// </summary>
-        public void Write(IBufferWriter<byte> dest)
-        {
-            var startCount = (dest as ArrayBufferWriter<byte>)?.WrittenCount ?? 0;
+    /// <summary>
+    ///     Decrypt a reply record using ChaCha20
+    /// </summary>
+    public static LongBuildReplyRecord Decrypt(byte[] ciphertext, byte[] replyKey, byte[] replyIV)
+    {
+        if (ciphertext == null || ciphertext.Length != EncryptedRecordSize)
+            throw new ArgumentException($"Ciphertext must be exactly {EncryptedRecordSize} bytes", nameof(ciphertext));
 
-            // Write options
-            Options.Write(dest);
+        if (replyKey == null || replyKey.Length != 32)
+            throw new ArgumentException("Reply key must be 32 bytes", nameof(replyKey));
 
-            // Pad to 527 bytes with random data
-            var written = (int)((dest as ArrayBufferWriter<byte>)?.WrittenCount ?? 0) - (int)startCount;
-            var paddingSize = (UnencryptedRecordSize - 1) - written; // -1 for reply byte
+        if (replyIV == null || replyIV.Length < 12)
+            throw new ArgumentException("Reply IV must be at least 12 bytes", nameof(replyIV));
 
-            if (paddingSize > 0)
-            {
-                var padding = BufUtils.RandomBytes(paddingSize);
-                dest.WriteBytes(padding);
-            }
+        // Decrypt with ChaCha20
+        var cipher = new ChaCha7539Engine();
+        var parameters = new ParametersWithIV(new KeyParameter(replyKey), replyIV, 0, 12);
+        cipher.Init(false, parameters);
 
-            // Write reply status at byte 527
-            dest.WriteByte((byte)Status);
-        }
+        var plaintext = new byte[UnencryptedRecordSize];
+        cipher.ProcessBytes(ciphertext, 0, ciphertext.Length, plaintext, 0);
 
-        /// <summary>
-        /// Convert to byte array
-        /// </summary>
-        public byte[] ToByteArray()
-        {
-            var stream = new ArrayBufferWriter<byte>();
-            Write(stream);
-            return stream.WrittenSpan.ToArray();
-        }
+        return FromBytes(plaintext);
+    }
 
-        /// <summary>
-        /// Encrypt the reply record using ChaCha20 (no authentication for replies)
-        /// </summary>
-        public byte[] Encrypt(byte[] replyKey, byte[] replyIV)
-        {
-            if (replyKey == null || replyKey.Length != 32)
-                throw new ArgumentException("Reply key must be 32 bytes", nameof(replyKey));
-
-            if (replyIV == null || replyIV.Length < 12)
-                throw new ArgumentException("Reply IV must be at least 12 bytes", nameof(replyIV));
-
-            // Get plaintext
-            var plaintext = ToByteArray();
-            if (plaintext.Length != UnencryptedRecordSize)
-                throw new InvalidOperationException($"Plaintext must be exactly {UnencryptedRecordSize} bytes");
-
-            // Encrypt with ChaCha20 (stream cipher, no authentication for replies)
-            var cipher = new ChaCha7539Engine();
-            var parameters = new ParametersWithIV(new KeyParameter(replyKey), replyIV, 0, 12);
-            cipher.Init(true, parameters);
-
-            var ciphertext = new byte[UnencryptedRecordSize];
-            cipher.ProcessBytes(plaintext, 0, plaintext.Length, ciphertext, 0);
-
-            return ciphertext;
-        }
-
-        /// <summary>
-        /// Decrypt a reply record using ChaCha20
-        /// </summary>
-        public static LongBuildReplyRecord Decrypt(byte[] ciphertext, byte[] replyKey, byte[] replyIV)
-        {
-            if (ciphertext == null || ciphertext.Length != EncryptedRecordSize)
-                throw new ArgumentException($"Ciphertext must be exactly {EncryptedRecordSize} bytes", nameof(ciphertext));
-
-            if (replyKey == null || replyKey.Length != 32)
-                throw new ArgumentException("Reply key must be 32 bytes", nameof(replyKey));
-
-            if (replyIV == null || replyIV.Length < 12)
-                throw new ArgumentException("Reply IV must be at least 12 bytes", nameof(replyIV));
-
-            // Decrypt with ChaCha20
-            var cipher = new ChaCha7539Engine();
-            var parameters = new ParametersWithIV(new KeyParameter(replyKey), replyIV, 0, 12);
-            cipher.Init(false, parameters);
-
-            var plaintext = new byte[UnencryptedRecordSize];
-            cipher.ProcessBytes(ciphertext, 0, ciphertext.Length, plaintext, 0);
-
-            return FromBytes(plaintext);
-        }
-
-        public override string ToString()
-        {
-            return $"LongBuildReplyRecord: Status={Status}, Options={Options.Mappings.Count} entries";
-        }
+    public override string ToString()
+    {
+        return $"LongBuildReplyRecord: Status={Status}, Options={Options.Mappings.Count} entries";
     }
 }

@@ -1,8 +1,8 @@
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.RazorPages;
-using I2PRouterWeb.Services;
 using System.Net;
 using I2PCore.SessionLayer;
+using I2PRouterWeb.Services;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.RazorPages;
 
 namespace I2PRouterWeb.Pages;
 
@@ -10,44 +10,36 @@ public class SettingsModel : PageModel
 {
     private readonly RouterService _routerService;
 
-    [BindProperty]
-    public string? ExternalAddress { get; set; }
+    public SettingsModel(RouterService routerService)
+    {
+        _routerService = routerService;
+    }
 
-    [BindProperty]
-    public int TcpPort { get; set; }
+    [BindProperty] public string? ExternalAddress { get; set; }
 
-    [BindProperty]
-    public int UdpPort { get; set; }
+    [BindProperty] public int TcpPort { get; set; }
 
-    [BindProperty]
-    public bool IsFirewalled { get; set; }
+    [BindProperty] public int UdpPort { get; set; }
 
-    [BindProperty]
-    public bool UseIPv6 { get; set; }
+    [BindProperty] public bool IsFirewalled { get; set; }
 
-    [BindProperty]
-    public bool EnableSSU2 { get; set; }
+    [BindProperty] public bool UseIPv6 { get; set; }
 
-    [BindProperty]
-    public bool FloodfillEnabled { get; set; }
+    [BindProperty] public bool EnableSSU2 { get; set; }
 
-    [BindProperty]
-    public int MaxTransitTunnels { get; set; }
+    [BindProperty] public bool FloodfillEnabled { get; set; }
 
-    [BindProperty]
-    public int MaxNtcp2InboundConnections { get; set; }
+    [BindProperty] public int MaxTransitTunnels { get; set; }
 
-    [BindProperty]
-    public int MaxNtcp2OutboundConnections { get; set; }
+    [BindProperty] public int MaxNtcp2InboundConnections { get; set; }
 
-    [BindProperty]
-    public int TransitSharePercent { get; set; }
+    [BindProperty] public int MaxNtcp2OutboundConnections { get; set; }
 
-    [BindProperty]
-    public RouterContext.HttpProxyEncryptionType ProxyEncryption { get; set; }
+    [BindProperty] public int TransitSharePercent { get; set; }
 
-    [BindProperty]
-    public int HttpProxyPort { get; set; }
+    [BindProperty] public RouterContext.HttpProxyEncryptionType ProxyEncryption { get; set; }
+
+    [BindProperty] public int HttpProxyPort { get; set; }
 
     public string? CurrentExternalAddress { get; set; }
     public string? DetectedExternalAddress { get; set; }
@@ -65,11 +57,6 @@ public class SettingsModel : PageModel
     public int CurrentHttpProxyPort { get; set; }
     public bool CurrentHttpProxyRunning { get; set; }
     public string? SuccessMessage { get; set; }
-
-    public SettingsModel(RouterService routerService)
-    {
-        _routerService = routerService;
-    }
 
     public void OnGet()
     {
@@ -101,17 +88,17 @@ public class SettingsModel : PageModel
 
         IPAddress? ipAddress = null;
         if (!string.IsNullOrWhiteSpace(ExternalAddress))
-        {
             if (!IPAddress.TryParse(ExternalAddress, out ipAddress))
             {
                 ModelState.AddModelError(nameof(ExternalAddress), "Invalid IP address format");
                 LoadCurrentSettings();
                 return Page();
             }
-        }
 
         _routerService.HttpProxyPort = HttpProxyPort;
-        _routerService.ApplySettings(ipAddress, TcpPort, UdpPort, IsFirewalled, UseIPv6, EnableSSU2, FloodfillEnabled, ProxyEncryption, MaxTransitTunnels, TransitSharePercent, MaxNtcp2InboundConnections, MaxNtcp2OutboundConnections);
+        _routerService.ApplySettings(ipAddress, TcpPort, UdpPort, IsFirewalled, UseIPv6, EnableSSU2, FloodfillEnabled,
+            ProxyEncryption, MaxTransitTunnels, TransitSharePercent, MaxNtcp2InboundConnections,
+            MaxNtcp2OutboundConnections);
 
         LoadCurrentSettings();
         SuccessMessage = "Settings applied successfully!";

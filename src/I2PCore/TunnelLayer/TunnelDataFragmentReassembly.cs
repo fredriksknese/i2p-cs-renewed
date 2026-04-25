@@ -1,192 +1,180 @@
-﻿using System;
+﻿using System.Buffers;
+using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using I2PCore.TunnelLayer.I2NP.Data;
+using I2PCore.Data;
 using I2PCore.TunnelLayer.I2NP.Messages;
 using I2PCore.Utils;
-using I2PCore.Data;
-using System.Collections.Concurrent;
-using System.Collections;
 
-namespace I2PCore.TunnelLayer
+namespace I2PCore.TunnelLayer;
+
+public class TunnelDataFragmentReassembly
 {
-    public class TunnelDataFragmentReassembly
+    public static readonly TickSpan RememberUnmatchedFragmentsFor = TickSpan.Minutes(10);
+
+    private readonly ConcurrentDictionary<uint, TunnelDataFragmentList> MessageFragments = new();
+
+    private readonly PeriodicAction RemoveUnmatchedFragments = new(RememberUnmatchedFragmentsFor);
+
+    public int BufferedFragmentCount
     {
-        public static readonly TickSpan RememberUnmatchedFragmentsFor = TickSpan.Minutes( 10 );
-
-        private class TunnelDataFragmentList: IEnumerable<TunnelDataFragment>
+        get
         {
-            public readonly TickCounter Created = new();
-            private readonly List<TunnelDataFragment> List;
-
-            public TunnelDataFragmentList()
+            lock (MessageFragments)
             {
-                List = new List<TunnelDataFragment>();
-            }
-
-            public TunnelDataFragmentList( List<TunnelDataFragment> list )
-            {
-                List = list;
-            }
-
-            public int Count { get => List.Count; }
-
-            public TunnelDataFragment this[int ix]
-            {
-                get
-                {
-                    return List[ix];
-                }
-                set
-                {
-                    if ( Count <= ix )
-                    {
-                        List.AddRange( new TunnelDataFragment[ix - Count + 1] );
-                    }
-
-                    List[ix] = value;
-                }
-            }
-
-            public IEnumerator<TunnelDataFragment> GetEnumerator()
-            {
-                return List.GetEnumerator();
-            }
-
-            IEnumerator IEnumerable.GetEnumerator()
-            {
-                return List.GetEnumerator();
+                return MessageFragments.Sum(mid => mid.Value.Count(fr => fr != null));
             }
         }
+    }
 
-        private ConcurrentDictionary<uint, TunnelDataFragmentList> MessageFragments = new();
+    public IEnumerable<TunnelMessage> Process(IEnumerable<TunnelDataMessage> tdmsgs, out bool failure)
+    {
+        var result = new List<TunnelMessage>();
+        failure = false;
 
-        public int BufferedFragmentCount
+        RemoveUnmatchedFragments.Do(() =>
         {
-            get
+            lock (MessageFragments)
             {
-                lock ( MessageFragments )
+                var remove = MessageFragments.Where(p => p.Value.Created.DeltaToNow > RememberUnmatchedFragmentsFor)
+                    .Select(p => p.Key).ToArray();
+                foreach (var key in remove)
                 {
-                    return MessageFragments.Sum( mid => mid.Value.Count( fr => fr != null ) );
+                    Logging.LogDebug($"TunnelDataFragmentReassembly: Removing old unmatched fragment for {key}");
+                    MessageFragments.TryRemove(key, out _);
                 }
             }
-        }
+        });
 
-        public TunnelDataFragmentReassembly()
+        foreach (var msg in tdmsgs)
         {
-        }
-
-        private PeriodicAction RemoveUnmatchedFragments = new( RememberUnmatchedFragmentsFor );
-
-        public IEnumerable<TunnelMessage> Process( IEnumerable<TunnelDataMessage> tdmsgs, out bool failure )
-        {
-            var result = new List<TunnelMessage>();
-            failure = false;
-
-            RemoveUnmatchedFragments.Do( () =>
+            var hash = I2PHashSha256.GetHash(msg.TunnelDataPayload, msg.Iv);
+            var eq = BufUtils.Equal(msg.Checksum.PeekBytes(0, 4), 0, hash, 0, 4);
+            if (!eq)
             {
-                lock ( MessageFragments )
-                {
-                    var remove = MessageFragments.Where( p => p.Value.Created.DeltaToNow > RememberUnmatchedFragmentsFor ).
-                        Select( p => p.Key ).ToArray();
-                    foreach ( var key in remove )
-                    {
-                        Logging.LogDebug( $"TunnelDataFragmentReassembly: Removing old unmatched fragment for {key}" );
-                        MessageFragments.TryRemove( key, out _ );
-                    }
-                }
-            } );
+                Logging.LogDebug("TunnelDataFragmentReassembly: SHA256 check failed in TunnelData.");
+                failure = true;
+                continue;
+            }
 
-            foreach ( var msg in tdmsgs )
+            var reader = new I2PBufferCursor(msg.TunnelDataPayload);
+
+            while (reader.Remaining > 0)
             {
-                var hash = I2PHashSha256.GetHash( msg.TunnelDataPayload, msg.Iv );
-                var eq = BufUtils.Equal( msg.Checksum.PeekBytes( 0, 4 ), 0, hash, 0, 4 );
-                if ( !eq )
+                var frag = new TunnelDataFragment(reader);
+
+                if (frag.FollowOnFragment)
                 {
-                    Logging.LogDebug( $"TunnelDataFragmentReassembly: SHA256 check failed in TunnelData." );
-                    failure = true;
-                    continue;
+                    var fragments = MessageFragments.GetOrAdd(frag.MessageId,
+                        id => new TunnelDataFragmentList());
+
+                    fragments[frag.FragmentNumber] = frag;
+
+                    CheckForAllFragmentsFound(result, frag.MessageId, fragments);
                 }
-
-                var reader = new I2PBufferCursor( msg.TunnelDataPayload );
-
-                while ( reader.Remaining > 0 )
+                else
                 {
-                    var frag = new TunnelDataFragment( reader );
-
-                    if ( frag.FollowOnFragment )
+                    if (frag.Fragmented)
                     {
-                        var fragments = MessageFragments.GetOrAdd( frag.MessageId,
-                                id => new TunnelDataFragmentList() );
+                        var fragments = MessageFragments.GetOrAdd(frag.MessageId,
+                            id => new TunnelDataFragmentList());
 
-                        fragments[frag.FragmentNumber] = frag;
+                        fragments[0] = frag;
 
-                        CheckForAllFragmentsFound( result, frag.MessageId, fragments );
+                        CheckForAllFragmentsFound(result, frag.MessageId, fragments);
                     }
                     else
                     {
-                        if ( frag.Fragmented )
-                        {
-                            var fragments = MessageFragments.GetOrAdd( frag.MessageId,
-                                    id => new TunnelDataFragmentList() );
-
-                            fragments[0] = frag;
-
-                            CheckForAllFragmentsFound( result, frag.MessageId, fragments );
-                        }
-                        else
-                        {
-                            AddTunnelMessage( result, frag, frag.Payload );
-                        }
+                        AddTunnelMessage(result, frag, frag.Payload);
                     }
                 }
             }
-
-            return result;
         }
 
-        private void CheckForAllFragmentsFound( List<TunnelMessage> result, uint msgid, TunnelDataFragmentList fragments )
+        return result;
+    }
+
+    private void CheckForAllFragmentsFound(List<TunnelMessage> result, uint msgid, TunnelDataFragmentList fragments)
+    {
+        var lastfound = fragments.Count > 1 && fragments[fragments.Count - 1].LastFragment;
+        if (lastfound && !fragments.Any(f => f == null))
         {
-            var lastfound = fragments.Count > 1 && fragments[fragments.Count - 1].LastFragment;
-            if ( lastfound && !fragments.Any( f => f == null ) )
+            var s = new ArrayBufferWriter<byte>();
+            for (var i = 0; i < fragments.Count; ++i)
             {
-                var s = new System.Buffers.ArrayBufferWriter<byte>();
-                for ( int i = 0; i < fragments.Count; ++i )
-                {
-                    var pl = fragments[i].Payload;
-                    s.WriteBytes( pl.ReadBytes( pl.Remaining ) );
-                }
-                AddTunnelMessage( result, fragments[0], new I2PBufferCursor( s.WrittenSpan.ToArray() ) );
-                MessageFragments.TryRemove( msgid, out _ );
+                var pl = fragments[i].Payload;
+                s.WriteBytes(pl.ReadBytes(pl.Remaining));
+            }
+
+            AddTunnelMessage(result, fragments[0], new I2PBufferCursor(s.WrittenSpan.ToArray()));
+            MessageFragments.TryRemove(msgid, out _);
+        }
+    }
+
+    private static void AddTunnelMessage(List<TunnelMessage> result, TunnelDataFragment initialfragment,
+        I2PBufferCursor buf)
+    {
+        switch (initialfragment.Delivery)
+        {
+            case TunnelMessage.DeliveryTypes.Local:
+                result.Add(
+                    new TunnelMessageLocal(
+                        I2NpMessage.ReadHeader16(buf).Message));
+                break;
+
+            case TunnelMessage.DeliveryTypes.Router:
+                result.Add(new TunnelMessageRouter(
+                    I2NpMessage.ReadHeader16(buf).Message,
+                    new I2PIdentHash(new I2PBufferCursor(initialfragment.ToHash))));
+                break;
+
+            case TunnelMessage.DeliveryTypes.Tunnel:
+                result.Add(
+                    new TunnelMessageTunnel(
+                        I2NpMessage.ReadHeader16(buf).Message,
+                        new I2PIdentHash(new I2PBufferCursor(initialfragment.ToHash)),
+                        initialfragment.Tunnel));
+                break;
+        }
+    }
+
+    private class TunnelDataFragmentList : IEnumerable<TunnelDataFragment>
+    {
+        public readonly TickCounter Created = new();
+        private readonly List<TunnelDataFragment> List;
+
+        public TunnelDataFragmentList()
+        {
+            List = new List<TunnelDataFragment>();
+        }
+
+        public TunnelDataFragmentList(List<TunnelDataFragment> list)
+        {
+            List = list;
+        }
+
+        public int Count => List.Count;
+
+        public TunnelDataFragment this[int ix]
+        {
+            get => List[ix];
+            set
+            {
+                if (Count <= ix) List.AddRange(new TunnelDataFragment[ix - Count + 1]);
+
+                List[ix] = value;
             }
         }
 
-        private static void AddTunnelMessage( List<TunnelMessage> result, TunnelDataFragment initialfragment, I2PBufferCursor buf )
+        public IEnumerator<TunnelDataFragment> GetEnumerator()
         {
-            switch ( initialfragment.Delivery )
-            {
-                case TunnelMessage.DeliveryTypes.Local:
-                    result.Add( 
-                        new TunnelMessageLocal( 
-                            I2NpMessage.ReadHeader16( buf ).Message ) );
-                    break;
-
-                case TunnelMessage.DeliveryTypes.Router:
-                    result.Add( new TunnelMessageRouter( 
-                        I2NpMessage.ReadHeader16( buf ).Message,
-                        new I2PIdentHash( new I2PBufferCursor( initialfragment.ToHash ) ) ) );
-                    break;
-
-                case TunnelMessage.DeliveryTypes.Tunnel:
-                    result.Add( 
-                        new TunnelMessageTunnel( 
-                            I2NpMessage.ReadHeader16( buf ).Message,
-                            new I2PIdentHash( new I2PBufferCursor( initialfragment.ToHash ) ),
-                            initialfragment.Tunnel ) );
-                    break;
-            }
+            return List.GetEnumerator();
         }
 
+        IEnumerator IEnumerable.GetEnumerator()
+        {
+            return List.GetEnumerator();
+        }
     }
 }

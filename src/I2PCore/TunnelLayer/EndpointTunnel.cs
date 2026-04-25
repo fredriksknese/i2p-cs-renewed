@@ -1,137 +1,124 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using I2PCore.TunnelLayer.I2NP.Messages;
 using I2PCore.Data;
 using I2PCore.TunnelLayer.I2NP.Data;
+using I2PCore.TunnelLayer.I2NP.Messages;
 using I2PCore.Utils;
-using I2PCore.TransportLayer;
-using Org.BouncyCastle.Crypto.Modes;
 using Org.BouncyCastle.Crypto.Engines;
-using Org.BouncyCastle.Crypto.Parameters;
-using I2PCore.SessionLayer;
-using System.Collections.Concurrent;
+using Org.BouncyCastle.Crypto.Modes;
 
-namespace I2PCore.TunnelLayer
+namespace I2PCore.TunnelLayer;
+
+public class EndpointTunnel : InboundTunnel
 {
-    public class EndpointTunnel: InboundTunnel
+    protected I2PIdentHash NextHop;
+    public override I2PIdentHash Destination => NextHop;
+
+    /// <summary>
+    ///     The previous hop in the tunnel (who sends data to us).
+    ///     Set from the transport-level sender of the build request.
+    /// </summary>
+    public I2PIdentHash ReceiveFrom { get; internal set; }
+
+    public override bool Established
     {
-        protected I2PIdentHash NextHop;
-        public override I2PIdentHash Destination { get { return NextHop; } }
+        get => true;
+        set => base.Established = value;
+    }
 
-        /// <summary>
-        /// The previous hop in the tunnel (who sends data to us).
-        /// Set from the transport-level sender of the build request.
-        /// </summary>
-        public I2PIdentHash ReceiveFrom { get; internal set; }
+    internal I2PTunnelId ResponseTunnelId;
+    internal uint ResponseMessageId;
 
-        public override bool Established { get => true; set => base.Established = value; }
+    private readonly I2PByteBlock IvKey;
+    private readonly I2PByteBlock LayerKey;
 
-        internal I2PTunnelId ResponseTunnelId;
-        internal uint ResponseMessageId;
+    internal BandwidthLimiter Limiter;
 
-        private I2PByteBlock IvKey;
-        private I2PByteBlock LayerKey;
+    public EndpointTunnel(ITunnelOwner owner, TunnelConfig config, BuildRequestRecord brrec)
+        : base(owner, config, 1)
+    {
+        Limiter = new BandwidthLimiter(Bandwidth.SendBandwidth, TunnelSettings.EndpointTunnelBitrateLimit);
 
-        internal BandwidthLimiter Limiter;
+        ReceiveTunnelId = new I2PTunnelId(brrec.ReceiveTunnel);
+        ResponseTunnelId = new I2PTunnelId(brrec.NextTunnel);
+        ResponseMessageId = brrec.SendMessageId;
 
-        public EndpointTunnel( ITunnelOwner owner, TunnelConfig config, BuildRequestRecord brrec )
-            : base( owner, config, 1 )
-        {
-            Limiter = new BandwidthLimiter( Bandwidth.SendBandwidth, TunnelSettings.EndpointTunnelBitrateLimit );
+        NextHop = new I2PIdentHash(new I2PBufferCursor(brrec.NextIdent.Hash.Clone()));
+        IvKey = brrec.IvKey.Clone();
+        LayerKey = brrec.LayerKey.Clone();
+    }
 
-            ReceiveTunnelId = new I2PTunnelId( brrec.ReceiveTunnel );
-            ResponseTunnelId = new I2PTunnelId( brrec.NextTunnel );
-            ResponseMessageId = brrec.SendMessageId;
-
-            NextHop = new I2PIdentHash( new I2PBufferCursor( brrec.NextIdent.Hash.Clone() ) );
-            IvKey = brrec.IvKey.Clone();
-            LayerKey = brrec.LayerKey.Clone();
-        }
-
-        public override IEnumerable<I2PRouterIdentity> TunnelMembers
-        {
-            get
-            {
-                return Enumerable.Empty<I2PRouterIdentity>();
-            }
-        }
+    public override IEnumerable<I2PRouterIdentity> TunnelMembers => Enumerable.Empty<I2PRouterIdentity>();
 
 #if LOG_ALL_TUNNEL_TRANSFER
-        ItemFilterWindow<HashedItemGroup> FilterMessageTypes = new ItemFilterWindow<HashedItemGroup>( TickSpan.Seconds( 30 ), 2 );
+        ItemFilterWindow<HashedItemGroup> FilterMessageTypes =
+ new ItemFilterWindow<HashedItemGroup>( TickSpan.Seconds( 30 ), 2 );
 #endif
 
-        private PeriodicAction FragBufferReport = new( TickSpan.Seconds( 60 ) );
+    private readonly PeriodicAction FragBufferReport = new(TickSpan.Seconds(60));
 
-        public override bool Exectue()
+    public override bool Exectue()
+    {
+        FragBufferReport.Do(delegate
         {
-            FragBufferReport.Do( delegate()
-            {
-                var fbsize = Reassembler.BufferedFragmentCount;
-                Logging.Log( "EndpointTunnel: " + Destination.Id32Short + " Fragment buffer size: " + fbsize.ToString() );
-                if ( fbsize > 2000 ) throw new Exception( "BufferedFragmentCount > 2000 !" ); // Trying to fill my memory?
-            } );
+            var fbsize = Reassembler.BufferedFragmentCount;
+            Logging.Log("EndpointTunnel: " + Destination.Id32Short + " Fragment buffer size: " + fbsize);
+            if (fbsize > 2000) throw new Exception("BufferedFragmentCount > 2000 !"); // Trying to fill my memory?
+        });
 
-            return HandleReceiveQueue();
+        return HandleReceiveQueue();
+    }
+
+    private bool HandleReceiveQueue()
+    {
+        var tdmsgs = new List<TunnelDataMessage>();
+
+        if (ReceiveQueue.IsEmpty) return true;
+
+        while (ReceiveQueue.TryDequeue(out var message))
+            if (message.MessageType == I2NpMessage.MessageTypes.TunnelData)
+                // Just drop the non-TunnelData
+                tdmsgs.Add((TunnelDataMessage)message);
+
+        if (tdmsgs.Any()) return HandleTunnelData(tdmsgs);
+
+        return true;
+    }
+
+    private readonly TunnelDataFragmentReassembly Reassembler = new();
+
+    private bool HandleTunnelData(IEnumerable<TunnelDataMessage> msgs)
+    {
+        EncryptTunnelMessages(msgs);
+
+        var newmsgs = Reassembler.Process(msgs, out var failed);
+
+        if (failed)
+        {
+            Logging.LogWarning($"{this}: Reassembler failure. Dropping tunnel.");
+            Shutdown();
         }
 
-        private bool HandleReceiveQueue()
+        var dropped = 0;
+        foreach (var one in newmsgs)
         {
-            var tdmsgs = new List<TunnelDataMessage>();
-
-            if ( ReceiveQueue.IsEmpty ) return true;
-
-            while ( ReceiveQueue.TryDequeue( out var message ) )
+            if (Limiter.DropMessage())
             {
-                if ( message.MessageType == I2NpMessage.MessageTypes.TunnelData )
-                {
-                    // Just drop the non-TunnelData
-                    tdmsgs.Add( (TunnelDataMessage)message );
-                }
+                ++dropped;
+                continue;
             }
 
-            if ( tdmsgs.Any() )
+            try
             {
-                return HandleTunnelData( tdmsgs );
+                one.Distribute(this);
             }
-
-            return true;
+            catch (Exception ex)
+            {
+                Logging.Log("EndpointTunnel", ex);
+                throw; // Kill tunnel is strange things happen
+            }
         }
-
-        private TunnelDataFragmentReassembly Reassembler = new();
-
-        private bool HandleTunnelData( IEnumerable<TunnelDataMessage> msgs )
-        {
-            EncryptTunnelMessages( msgs );
-
-            var newmsgs = Reassembler.Process( msgs, out var failed );
-
-            if ( failed )
-            {
-                Logging.LogWarning( $"{this}: Reassembler failure. Dropping tunnel." );
-                Shutdown();
-            }
-
-            var dropped = 0;
-            foreach ( var one in newmsgs )
-            {
-                if ( Limiter.DropMessage() )
-                {
-                    ++dropped;
-                    continue;
-                }
-
-                try
-                {
-                    one.Distribute( this );
-                }
-                catch ( Exception ex )
-                {
-                    Logging.Log( "EndpointTunnel", ex );
-                    throw; // Kill tunnel is strange things happen
-                }
-            }
 
 #if LOG_ALL_TUNNEL_TRANSFER
             if ( dropped > 0 )
@@ -140,25 +127,24 @@ namespace I2PCore.TunnelLayer
             }
 #endif
 
-            return true;
-        }
+        return true;
+    }
 
-        private void EncryptTunnelMessages( IEnumerable<TunnelDataMessage> msgs )
+    private void EncryptTunnelMessages(IEnumerable<TunnelDataMessage> msgs)
+    {
+        var cipher = new CbcBlockCipher(new AesEngine());
+
+        foreach (var msg in msgs)
         {
-            var cipher = new CbcBlockCipher( new AesEngine() );
+            msg.Iv.AesEcbEncrypt(IvKey.ToByteArray());
 
-            foreach ( var msg in msgs )
-            {
-                msg.Iv.AesEcbEncrypt( IvKey.ToByteArray() );
+            cipher.Init(true, LayerKey.ToParametersWithIv(msg.Iv));
+            cipher.ProcessBytes(msg.EncryptedWindow);
 
-                cipher.Init( true, LayerKey.ToParametersWithIv( msg.Iv ) );
-                cipher.ProcessBytes( msg.EncryptedWindow );
+            msg.Iv.AesEcbEncrypt(IvKey.ToByteArray());
 
-                msg.Iv.AesEcbEncrypt( IvKey.ToByteArray() );
-
-                // The 0 should be visible now
-                msg.UpdateFirstDeliveryInstructionPosition();
-            }
+            // The 0 should be visible now
+            msg.UpdateFirstDeliveryInstructionPosition();
         }
     }
 }

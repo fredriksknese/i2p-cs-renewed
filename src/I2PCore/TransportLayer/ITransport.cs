@@ -1,61 +1,56 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using I2PCore.Data;
-using I2PCore.SessionLayer;
 using System.Net;
-using I2PCore.TunnelLayer.I2NP.Messages;
+using I2PCore.Data;
 using I2PCore.TunnelLayer.I2NP.Data;
+using I2PCore.TunnelLayer.I2NP.Messages;
 
-namespace I2PCore.TransportLayer
+namespace I2PCore.TransportLayer;
+
+public interface ITransport
 {
-    public interface ITransport
-    {
-        event Action<ITransport, Exception> ConnectionException;
-        event Action<ITransport> ConnectionShutDown;
+    bool IsTerminated { get; }
 
-        /// <summary>
-        /// Protocol initial handshake is finished, and data can be sent.
-        /// </summary>
-        event Action<ITransport,I2PIdentHash> ConnectionEstablished;
+    I2PKeysAndCert RemoteRouterIdentity { get; }
+    IPAddress RemoteAddress { get; }
 
-        event Action<ITransport, Ii2NpHeader> DataBlockReceived;
+    long BytesSent { get; }
+    long BytesReceived { get; }
 
-        void Connect();
+    /// <summary>
+    ///     Instance unique identifier for debugging.<!--
+    /// </summary>
+    string DebugId { get; }
 
-        void Send( I2NpMessage msg );
+    /// <summary>
+    ///     Abbriviated unique name of the protocol implemented.
+    /// </summary>
+    string Protocol { get; }
 
-        void Terminate( string reason = null );
-        bool IsTerminated { get; }
+    bool IsOutgoing { get; }
+    bool IsPQ { get; }
+    event Action<ITransport, Exception> ConnectionException;
+    event Action<ITransport> ConnectionShutDown;
 
-        /// <summary>
-        /// Called by TransportProvider if a DatabaseStoreMessage for this transport was received.
-        /// </summary>
-        void DatabaseStoreMessageReceived( DatabaseStoreMessage dsm );
+    /// <summary>
+    ///     Protocol initial handshake is finished, and data can be sent.
+    /// </summary>
+    event Action<ITransport, I2PIdentHash> ConnectionEstablished;
 
-        I2PKeysAndCert RemoteRouterIdentity { get; }
-        IPAddress RemoteAddress { get; }
+    event Action<ITransport, Ii2NpHeader> DataBlockReceived;
 
-        long BytesSent { get; }
-        long BytesReceived { get; }
+    void Connect();
 
-        /// <summary>
-        /// Instance unique identifier for debugging.<!--
-        /// </summary>
-        string DebugId { get; }
+    void Send(I2NpMessage msg);
 
-        /// <summary>
-        /// Abbriviated unique name of the protocol implemented.
-        /// </summary>
-        string Protocol { get; }
-        
-        bool IsOutgoing { get; }
-        bool IsPQ { get; }
+    void Terminate(string reason = null);
 
-        /// <summary>
-        /// Periodic background task for the transport.
-        /// </summary>
-        void Tick();
-    }
+    /// <summary>
+    ///     Called by TransportProvider if a DatabaseStoreMessage for this transport was received.
+    /// </summary>
+    void DatabaseStoreMessageReceived(DatabaseStoreMessage dsm);
+
+    /// <summary>
+    ///     Periodic background task for the transport.
+    /// </summary>
+    void Tick();
 }

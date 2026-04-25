@@ -1,97 +1,93 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using I2PCore.TunnelLayer.I2NP.Messages;
 using I2PCore.Data;
-using I2PCore.TunnelLayer.I2NP.Data;
-using I2PCore.Utils;
 using I2PCore.TransportLayer;
-using Org.BouncyCastle.Crypto.Modes;
+using I2PCore.TunnelLayer.I2NP.Data;
+using I2PCore.TunnelLayer.I2NP.Messages;
+using I2PCore.Utils;
 using Org.BouncyCastle.Crypto.Engines;
-using Org.BouncyCastle.Crypto.Parameters;
-using I2PCore.SessionLayer;
+using Org.BouncyCastle.Crypto.Modes;
 
-namespace I2PCore.TunnelLayer
+namespace I2PCore.TunnelLayer;
+
+public class GatewayTunnel : InboundTunnel
 {
-    public class GatewayTunnel: InboundTunnel
+    protected readonly I2PIdentHash NextHop;
+    public override I2PIdentHash Destination => NextHop;
+
+    /// <summary>
+    ///     Gateways accept from any peer, so this is typically null.
+    /// </summary>
+    public I2PIdentHash ReceiveFrom { get; internal set; }
+
+    public override bool Established
     {
-        protected readonly I2PIdentHash NextHop;
-        public override I2PIdentHash Destination { get { return NextHop; } }
+        get => true;
+        set => base.Established = value;
+    }
 
-        /// <summary>
-        /// Gateways accept from any peer, so this is typically null.
-        /// </summary>
-        public I2PIdentHash ReceiveFrom { get; internal set; }
+    internal I2PTunnelId SendTunnelId;
+    private readonly I2PByteBlock IvKey;
+    private readonly I2PByteBlock LayerKey;
 
-        public override bool Established { get => true; set => base.Established = value; }
+    internal BandwidthLimiter Limiter;
 
-        internal I2PTunnelId SendTunnelId;
-        private readonly I2PByteBlock IvKey;
-        private readonly I2PByteBlock LayerKey;
+    private readonly PeriodicAction PreTunnelDataBatching = new(TickSpan.Milliseconds(500));
 
-        internal BandwidthLimiter Limiter;
+    public GatewayTunnel(ITunnelOwner owner, TunnelConfig config, BuildRequestRecord brrec)
+        : base(owner, config, 1)
+    {
+        Limiter = new BandwidthLimiter(Bandwidth.SendBandwidth, TunnelSettings.GatewayTunnelBitrateLimit);
 
-        private PeriodicAction PreTunnelDataBatching = new( TickSpan.Milliseconds( 500 ) );
+        ReceiveTunnelId = new I2PTunnelId(brrec.ReceiveTunnel);
+        SendTunnelId = new I2PTunnelId(brrec.NextTunnel);
 
-        public GatewayTunnel( ITunnelOwner owner, TunnelConfig config, BuildRequestRecord brrec )
-            : base( owner, config, 1 )
-        {
-            Limiter = new BandwidthLimiter( Bandwidth.SendBandwidth, TunnelSettings.GatewayTunnelBitrateLimit );
+        NextHop = new I2PIdentHash(new I2PBufferCursor(brrec.NextIdent.Hash.Clone()));
+        IvKey = brrec.IvKey.Clone();
+        LayerKey = brrec.LayerKey.Clone();
+    }
 
-            ReceiveTunnelId = new I2PTunnelId( brrec.ReceiveTunnel );
-            SendTunnelId = new I2PTunnelId( brrec.NextTunnel );
+    public override IEnumerable<I2PRouterIdentity> TunnelMembers => Enumerable.Empty<I2PRouterIdentity>();
 
-            NextHop = new I2PIdentHash( new I2PBufferCursor( brrec.NextIdent.Hash.Clone() ) );
-            IvKey = brrec.IvKey.Clone();
-            LayerKey = brrec.LayerKey.Clone();
-        }
+    public override bool Exectue()
+    {
+        var ok = true;
 
-        public override IEnumerable<I2PRouterIdentity> TunnelMembers
-        {
-            get
-            {
-                return Enumerable.Empty<I2PRouterIdentity>();
-            }
-        }
+        PreTunnelDataBatching.Do(() => { ok = HandleReceiveQueue(); });
 
-        public override bool Exectue()
-        {
-            var ok = true;
+        return ok;
+    }
 
-            PreTunnelDataBatching.Do( () => { ok = HandleReceiveQueue(); } );
-
-            return ok;
-        }
-
-        private bool HandleSendQueue()
-        {
-            return false;
-        }
+    private bool HandleSendQueue()
+    {
+        return false;
+    }
 
 #if LOG_ALL_TUNNEL_TRANSFER
-        ItemFilterWindow<HashedItemGroup> FilterMessageTypes = new ItemFilterWindow<HashedItemGroup>( TickSpan.Seconds( 30 ), 2 );
+        ItemFilterWindow<HashedItemGroup> FilterMessageTypes =
+ new ItemFilterWindow<HashedItemGroup>( TickSpan.Seconds( 30 ), 2 );
 #endif
 
-        private bool HandleReceiveQueue()
+    private bool HandleReceiveQueue()
+    {
+        I2NpMessage[] messages = null;
+
+        if (ReceiveQueue.IsEmpty) return true;
+
+        var msgs = new List<I2NpMessage>();
+        var dropped = 0;
+        while (ReceiveQueue.TryDequeue(out var msg))
         {
-            I2NpMessage[] messages = null;
-
-            if ( ReceiveQueue.IsEmpty ) return true;
-
-            var msgs = new List<I2NpMessage>();
-            int dropped = 0;
-            while ( ReceiveQueue.TryDequeue( out var msg ) )
+            if (Limiter.DropMessage())
             {
-                if ( Limiter.DropMessage() )
-                {
-                    ++dropped;
-                    continue;
-                }
-
-                msgs.Add( msg );
+                ++dropped;
+                continue;
             }
-            messages = msgs.ToArray();
+
+            msgs.Add(msg);
+        }
+
+        messages = msgs.ToArray();
 
 #if LOG_ALL_TUNNEL_TRANSFER
             if ( dropped > 0 )
@@ -103,13 +99,13 @@ namespace I2PCore.TunnelLayer
             }
 #endif
 
-            if ( messages == null || messages.Length == 0 ) return true;
+        if (messages == null || messages.Length == 0) return true;
 
-            var tdata = TunnelDataMessage.MakeFragments( 
-                messages.Select( msg => new TunnelMessageLocal( msg ) )
-                , SendTunnelId );
+        var tdata = TunnelDataMessage.MakeFragments(
+            messages.Select(msg => new TunnelMessageLocal(msg))
+            , SendTunnelId);
 
-            EncryptTunnelMessages( tdata );
+        EncryptTunnelMessages(tdata);
 
 #if LOG_ALL_TUNNEL_TRANSFER
             if ( FilterMessageTypes.Update( new HashedItemGroup( Destination, 0x17f3 ) ) )
@@ -117,25 +113,25 @@ namespace I2PCore.TunnelLayer
                 Logging.Log( $"GatewayTunnel {Destination.Id32Short}: TunnelData sent." );
             }
 #endif
-            foreach ( var tdmsg in tdata )
-            {
-                TransportProvider.Send( Destination, tdmsg );
-                Bandwidth.DataSent( tdmsg.Payload.Length );
-                //Logging.LogDebug( $"{this} {Destination.Id32Short}: TDM len {tdmsg.Payload.Length}." );
-            }
-            return true;
+        foreach (var tdmsg in tdata)
+        {
+            TransportProvider.Send(Destination, tdmsg);
+            Bandwidth.DataSent(tdmsg.Payload.Length);
+            //Logging.LogDebug( $"{this} {Destination.Id32Short}: TDM len {tdmsg.Payload.Length}." );
         }
 
-        private void EncryptTunnelMessages( IEnumerable<TunnelDataMessage> msgs )
-        {
-            var cipher = new CbcBlockCipher( new AesEngine() );
+        return true;
+    }
 
-            foreach ( var msg in msgs )
-            {
-                msg.Iv.AesEcbEncrypt( IvKey );
-                cipher.Encrypt( LayerKey, msg.Iv, msg.EncryptedWindow );
-                msg.Iv.AesEcbEncrypt( IvKey );
-            }
+    private void EncryptTunnelMessages(IEnumerable<TunnelDataMessage> msgs)
+    {
+        var cipher = new CbcBlockCipher(new AesEngine());
+
+        foreach (var msg in msgs)
+        {
+            msg.Iv.AesEcbEncrypt(IvKey);
+            cipher.Encrypt(LayerKey, msg.Iv, msg.EncryptedWindow);
+            msg.Iv.AesEcbEncrypt(IvKey);
         }
     }
 }

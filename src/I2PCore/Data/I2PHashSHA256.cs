@@ -1,128 +1,119 @@
 ﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.IO;
-using Org.BouncyCastle.Math;
-using Org.BouncyCastle.Security;
-using Org.BouncyCastle.Crypto.Digests;
-using Org.BouncyCastle.Crypto.Signers;
-using Org.BouncyCastle.Utilities.Encoders;
-using Org.BouncyCastle.Crypto.Parameters;
 using I2PCore.Utils;
+using Org.BouncyCastle.Crypto.Digests;
 
-namespace I2PCore.Data
+namespace I2PCore.Data;
+
+public class I2PHashSha256 : I2PType
 {
-    public class I2PHashSha256 : I2PType
+    private readonly List<I2PType> Batch;
+
+    public byte[] Hash;
+
+    private BuildMode Mode;
+
+    private byte[] SignedData;
+
+    public I2PHashSha256()
     {
-        private enum BuildMode { Constructor, BatchList, Signed }
+        Mode = BuildMode.BatchList;
+        Batch = new List<I2PType>();
+    }
 
-        private BuildMode Mode;
+    public I2PHashSha256(byte[] buf)
+    {
+        Mode = BuildMode.Constructor;
 
-        public byte[] Hash;
+        Hash = DoSign(buf);
+    }
 
-        private List<I2PType> Batch;
+    public void Write(IBufferWriter<byte> dest)
+    {
+        if (SignedData == null) throw new InvalidOperationException("No signed data available");
+        dest.WriteBytes(SignedData);
+        dest.WriteBytes(Hash);
+    }
 
-        public I2PHashSha256()
-        {
-            Mode = BuildMode.BatchList;
-            Batch = new List<I2PType>();
-        }
+    private byte[] DoSign(byte[] buf)
+    {
+        return GetHash(buf, 0, buf.Length);
+    }
 
-        public I2PHashSha256( byte[] buf )
-        {
-            Mode = BuildMode.Constructor;
+    public static byte[] GetHash(params I2PByteBlock[] bufs)
+    {
+        var sha = new Sha256Digest();
+        foreach (var buf in bufs) sha.BlockUpdate(buf.BaseArray, buf.BaseArrayOffset, buf.Length);
+        var hash = new byte[sha.GetDigestSize()];
+        sha.DoFinal(hash, 0);
+        return hash;
+    }
 
-            Hash = DoSign( buf );
-        }
+    public static byte[] GetHash(I2PByteBlock buf)
+    {
+        var sha = new Sha256Digest();
+        sha.BlockUpdate(buf.BaseArray, buf.BaseArrayOffset, buf.Length);
+        var hash = new byte[sha.GetDigestSize()];
+        sha.DoFinal(hash, 0);
+        return hash;
+    }
 
-        private byte[] DoSign( byte[] buf )
-        {
-            return GetHash( buf, 0, buf.Length );
-        }
+    public static byte[] GetHash(byte[] buf)
+    {
+        return GetHash(buf, 0, buf.Length);
+    }
 
-        public static byte[] GetHash( params I2PByteBlock[] bufs )
-        {
-            var sha = new Sha256Digest();
-            foreach ( var buf in bufs )
-            {
-                sha.BlockUpdate( buf.BaseArray, buf.BaseArrayOffset, buf.Length );
-            }
-            var hash = new byte[sha.GetDigestSize()];
-            sha.DoFinal( hash, 0 );
-            return hash;
-        }
+    public static byte[] GetHash(byte[] buf, int offset, int length)
+    {
+        var sha = new Sha256Digest();
+        sha.BlockUpdate(buf, offset, length);
+        var hash = new byte[sha.GetDigestSize()];
+        sha.DoFinal(hash, 0);
+        return hash;
+    }
 
-        public static byte[] GetHash( I2PByteBlock buf )
-        {
-            var sha = new Sha256Digest();
-            sha.BlockUpdate( buf.BaseArray, buf.BaseArrayOffset, buf.Length );
-            var hash = new byte[sha.GetDigestSize()];
-            sha.DoFinal( hash, 0 );
-            return hash;
-        }
+    public void Add(I2PType data)
+    {
+        if (Mode != BuildMode.BatchList) throw new InvalidOperationException("Cannot mix build modes");
+        Batch.Add(data);
+    }
 
-        public static byte[] GetHash( byte[] buf )
-        {
-            return GetHash( buf, 0, buf.Length );
-        }
+    public void Sign()
+    {
+        if (Mode != BuildMode.BatchList) throw new InvalidOperationException("Cannot mix build modes");
 
-        public static byte[] GetHash( byte[] buf, int offset, int length )
-        {
-            var sha = new Sha256Digest();
-            sha.BlockUpdate( buf, offset, length );
-            var hash = new byte[sha.GetDigestSize()];
-            sha.DoFinal( hash, 0 );
-            return hash;
-        }
+        var buf = new ArrayBufferWriter<byte>();
+        foreach (var data in Batch) data.Write(buf);
 
-        public void Add( I2PType data )
-        {
-            if ( Mode != BuildMode.BatchList ) throw new InvalidOperationException( "Cannot mix build modes" );
-            Batch.Add( data );
-        }
+        SignedData = buf.WrittenSpan.ToArray();
+        Hash = DoSign(SignedData);
 
-        private byte[] SignedData = null;
-        public void Sign()
-        {
-            if ( Mode != BuildMode.BatchList ) throw new InvalidOperationException( "Cannot mix build modes" );
+        Mode = BuildMode.Signed;
+    }
 
-            var buf = new ArrayBufferWriter<byte>();
-            foreach ( var data in Batch )
-            {
-                data.Write( buf );
-            }
+    public bool Verify(byte[] buf, int offset, int length)
+    {
+        if (Mode != BuildMode.Signed) throw new InvalidOperationException("No signature available");
 
-            SignedData = buf.WrittenSpan.ToArray();
-            Hash = DoSign( SignedData );
+        var hash = GetHash(buf, offset, length);
+        return Equals(Hash, hash);
+    }
 
-            Mode = BuildMode.Signed;
-        }
+    public void WriteSigOnly(IBufferWriter<byte> dest)
+    {
+        dest.WriteBytes(Hash);
+    }
 
-        public bool Verify( byte[] buf, int offset, int length )
-        {
-            if ( Mode != BuildMode.Signed ) throw new InvalidOperationException( "No signature available" );
+    public void WriteContentOnly(IBufferWriter<byte> dest)
+    {
+        dest.WriteBytes(SignedData);
+    }
 
-            var hash = GetHash( buf, offset, length );
-            return BufUtils.Equals( Hash, hash );
-        }
-
-        public void Write( IBufferWriter<byte> dest )
-        {
-            if ( SignedData == null ) throw new InvalidOperationException( "No signed data available" );
-            dest.WriteBytes( SignedData );
-            dest.WriteBytes( Hash );
-        }
-
-        public void WriteSigOnly( IBufferWriter<byte> dest )
-        {
-            dest.WriteBytes( Hash );
-        }
-
-        public void WriteContentOnly( IBufferWriter<byte> dest )
-        {
-            dest.WriteBytes( SignedData );
-        }
+    private enum BuildMode
+    {
+        Constructor,
+        BatchList,
+        Signed
     }
 }

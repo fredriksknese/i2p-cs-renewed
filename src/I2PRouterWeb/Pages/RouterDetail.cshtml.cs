@@ -1,15 +1,19 @@
-using Microsoft.AspNetCore.Mvc.RazorPages;
 using I2PCore;
-using I2PCore.Data;
 using I2PCore.TransportLayer;
 using I2PCore.TunnelLayer;
 using I2PRouterWeb.Services;
+using Microsoft.AspNetCore.Mvc.RazorPages;
 
 namespace I2PRouterWeb.Pages;
 
 public class RouterDetailModel : PageModel
 {
     private readonly RouterService _routerService;
+
+    public RouterDetailModel(RouterService routerService)
+    {
+        _routerService = routerService;
+    }
 
     public bool Found { get; set; }
     public string Hash { get; set; } = "";
@@ -64,11 +68,6 @@ public class RouterDetailModel : PageModel
     // Tunnels this router participates in
     public List<TunnelParticipation> Tunnels { get; set; } = new();
 
-    public RouterDetailModel(RouterService routerService)
-    {
-        _routerService = routerService;
-    }
-
     public void OnGet(string? hash)
     {
         if (string.IsNullOrEmpty(hash)) return;
@@ -93,19 +92,18 @@ public class RouterDetailModel : PageModel
         // Options
         if (ri.Options != null)
         {
-            Caps = ri.Options["caps"]?.ToString() ?? "";
-            Version = ri.Options["router.version"]?.ToString() ?? "";
-            NetId = ri.Options["netId"]?.ToString() ?? "";
+            Caps = ri.Options["caps"] ?? "";
+            Version = ri.Options["router.version"] ?? "";
+            NetId = ri.Options["netId"] ?? "";
             IsFloodfill = Caps.Contains('f');
 
             try
             {
-                foreach (var pair in ri.Options)
-                {
-                    Options[pair.Key?.ToString() ?? "?"] = pair.Value?.ToString() ?? "";
-                }
+                foreach (var pair in ri.Options) Options[pair.Key?.ToString() ?? "?"] = pair.Value?.ToString() ?? "";
             }
-            catch { }
+            catch
+            {
+            }
         }
 
         // Connection status
@@ -120,7 +118,6 @@ public class RouterDetailModel : PageModel
 
         // Addresses
         if (ri.Addresses != null)
-        {
             foreach (var addr in ri.Addresses)
             {
                 var detail = new AddressDetail
@@ -134,18 +131,15 @@ public class RouterDetailModel : PageModel
                 try
                 {
                     if (addr.Options != null)
-                    {
                         foreach (var opt in addr.Options)
-                        {
                             detail.Options[opt.Key?.ToString() ?? "?"] = opt.Value?.ToString() ?? "";
-                        }
-                    }
                 }
-                catch { }
+                catch
+                {
+                }
 
                 Addresses.Add(detail);
             }
-        }
 
         // Statistics
         var stats = netDb.Statistics[identHash];
@@ -184,9 +178,7 @@ public class RouterDetailModel : PageModel
         if (tp != null)
         {
             foreach (var t in tp.GetOutboundTunnels())
-            {
                 if (t.TunnelMembers?.Any(m => m.IdentHash == identHash) == true)
-                {
                     Tunnels.Add(new TunnelParticipation
                     {
                         TunnelId = t.TunnelDebugTrace,
@@ -194,12 +186,9 @@ public class RouterDetailModel : PageModel
                         Pool = t.Config?.Pool.ToString() ?? "?",
                         IsActive = t.Active
                     });
-                }
-            }
+
             foreach (var t in tp.GetInboundTunnels())
-            {
                 if (t.TunnelMembers?.Any(m => m.IdentHash == identHash) == true)
-                {
                     Tunnels.Add(new TunnelParticipation
                     {
                         TunnelId = t.TunnelDebugTrace,
@@ -207,8 +196,6 @@ public class RouterDetailModel : PageModel
                         Pool = t.Config?.Pool.ToString() ?? "?",
                         IsActive = t.Active
                     });
-                }
-            }
         }
     }
 }

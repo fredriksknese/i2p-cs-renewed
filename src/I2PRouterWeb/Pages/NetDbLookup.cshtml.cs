@@ -1,10 +1,10 @@
 using System.Diagnostics;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.RazorPages;
 using I2PCore;
 using I2PCore.Data;
-using I2PCore.SessionLayer;
+using I2PCore.Utils;
 using I2PRouterWeb.Services;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.RazorPages;
 
 namespace I2PRouterWeb.Pages;
 
@@ -12,23 +12,20 @@ public class NetDbLookupModel : PageModel
 {
     private readonly RouterService _routerService;
 
-    [BindProperty]
-    public string B32Address { get; set; } = string.Empty;
-
-    [BindProperty]
-    public int ParallelQueries { get; set; } = 6;
-
-    [BindProperty]
-    public bool DirectLookup { get; set; } = false;
-
-    public bool IsLookupInProgress { get; set; }
-    public string? ErrorMessage { get; set; }
-    public LeaseSetResult? Result { get; set; }
-
     public NetDbLookupModel(RouterService routerService)
     {
         _routerService = routerService;
     }
+
+    [BindProperty] public string B32Address { get; set; } = string.Empty;
+
+    [BindProperty] public int ParallelQueries { get; set; } = 6;
+
+    [BindProperty] public bool DirectLookup { get; set; } = false;
+
+    public bool IsLookupInProgress { get; set; }
+    public string? ErrorMessage { get; set; }
+    public LeaseSetResult? Result { get; set; }
 
     public void OnGet()
     {
@@ -50,6 +47,7 @@ public class NetDbLookupModel : PageModel
             else if (addr.EndsWith(".b32"))
                 addr += ".i2p";
         }
+
         B32Address = addr;
 
         if (!_routerService.IsRunning)
@@ -114,12 +112,14 @@ public class NetDbLookupModel : PageModel
                 if (ls != null && ls.Expire > DateTime.UtcNow)
                 {
                     Result = BuildResult(ls, sw.ElapsedMilliseconds, identHash, info);
-                    _routerService.LogActivity("NetDbLookup", $"Found LeaseSet for {identHash.Id32Short} in {sw.ElapsedMilliseconds}ms");
+                    _routerService.LogActivity("NetDbLookup",
+                        $"Found LeaseSet for {identHash.Id32Short} in {sw.ElapsedMilliseconds}ms");
                 }
                 else
                 {
                     Result = BuildResult(null, sw.ElapsedMilliseconds, identHash, info);
-                    ErrorMessage = $"LeaseSet lookup returned no valid result for {identHash.Id32Short} after {sw.ElapsedMilliseconds}ms.";
+                    ErrorMessage =
+                        $"LeaseSet lookup returned no valid result for {identHash.Id32Short} after {sw.ElapsedMilliseconds}ms.";
                 }
             }
             catch (OperationCanceledException)
@@ -129,27 +129,21 @@ public class NetDbLookupModel : PageModel
                 Result = BuildResult(null, sw.ElapsedMilliseconds, identHash, info);
 
                 // Check if lookup failed due to no tunnels being available
-                bool noTunnels = false;
+                var noTunnels = false;
                 if (info?.Attempts != null)
-                {
                     lock (info.Attempts)
                     {
                         noTunnels = info.Attempts.Any(a =>
                             a.Details != null && a.Details.Contains("no tunnels available"));
                     }
-                }
 
                 if (noTunnels)
-                {
                     ErrorMessage = $"No exploratory tunnels available for LeaseSet lookup of {identHash.Id32Short}. " +
-                        "The router needs active inbound and outbound tunnels to query floodfill routers. " +
-                        "Check the Tunnels page to verify tunnel status.";
-                }
+                                   "The router needs active inbound and outbound tunnels to query floodfill routers. " +
+                                   "Check the Tunnels page to verify tunnel status.";
                 else
-                {
                     ErrorMessage = $"LeaseSet lookup timed out after 30 seconds for {identHash.Id32Short}. " +
-                        "The destination may be offline or unreachable.";
-                }
+                                   "The destination may be offline or unreachable.";
             }
         }
         catch (Exception ex)
@@ -161,11 +155,12 @@ public class NetDbLookupModel : PageModel
         return Page();
     }
 
-    private static LeaseSetResult BuildResult(ILeaseSet? ls, long lookupMs, I2PIdentHash hash, IdentResolver.IdentUpdateRequestInfo? info)
+    private static LeaseSetResult BuildResult(ILeaseSet? ls, long lookupMs, I2PIdentHash hash,
+        IdentResolver.IdentUpdateRequestInfo? info)
     {
         var result = new LeaseSetResult
         {
-            DestinationHash = I2PCore.Utils.BufUtils.ToBase32String(hash.Hash) + ".b32.i2p",
+            DestinationHash = BufUtils.ToBase32String(hash.Hash) + ".b32.i2p",
             LeaseSetType = ls?.GetType().Name ?? "None",
             Expiration = ls?.Expire.ToString("yyyy-MM-dd HH:mm:ss UTC") ?? "N/A",
             LookupTimeMs = lookupMs,
@@ -173,29 +168,21 @@ public class NetDbLookupModel : PageModel
         };
 
         if (ls?.Leases != null)
-        {
             foreach (var lease in ls.Leases)
-            {
                 result.Leases.Add(new LeaseInfo
                 {
                     GatewayHash = lease.TunnelGw?.Id32Short ?? "unknown",
                     TunnelId = lease.TunnelId?.ToString() ?? "?",
                     EndDate = lease.Expire.ToString("yyyy-MM-dd HH:mm:ss UTC")
                 });
-            }
-        }
 
         if (ls?.PublicKeys != null)
-        {
             foreach (var key in ls.PublicKeys)
-            {
                 result.EncryptionKeys.Add(new EncryptionKeyInfo
                 {
                     KeyType = key.Certificate.PublicKeyType.ToString(),
                     KeySizeBytes = key.KeySizeBytes
                 });
-            }
-        }
 
         if (info != null)
         {
@@ -209,21 +196,26 @@ public class NetDbLookupModel : PageModel
             {
                 var attInfo = new LookupAttemptInfo
                 {
-                    StartMs = (long)I2PCore.Utils.TickCounter.TimeDelta(attempt.Start, info.Start).ToMilliseconds,
-                    OutboundTunnel = attempt.OutboundTunnelGateway != null ? $"{attempt.OutboundTunnelGateway.Id32Short} (ID: {attempt.OutboundTunnelId})" : (attempt.Details != null ? "None" : "Direct"),
-                    InboundTunnel = attempt.InboundTunnelGateway != null ? $"{attempt.InboundTunnelGateway.Id32Short} (ID: {attempt.InboundTunnelId})" : "None",
+                    StartMs = TickCounter.TimeDelta(attempt.Start, info.Start).ToMilliseconds,
+                    OutboundTunnel = attempt.OutboundTunnelGateway != null
+                        ?
+                        $"{attempt.OutboundTunnelGateway.Id32Short} (ID: {attempt.OutboundTunnelId})"
+                        : attempt.Details != null
+                            ? "None"
+                            : "Direct",
+                    InboundTunnel = attempt.InboundTunnelGateway != null
+                        ? $"{attempt.InboundTunnelGateway.Id32Short} (ID: {attempt.InboundTunnelId})"
+                        : "None",
                     Details = attempt.Details
                 };
 
                 foreach (var ff in attempt.FloodfillResponses)
-                {
                     attInfo.Floodfills.Add(new FloodfillStatusInfo
                     {
                         Floodfill = ff.Key.Id32Short,
                         Response = ff.Value.Response.ToString(),
                         Details = ff.Value.Details
                     });
-                }
                 result.History.Add(attInfo);
             }
         }

@@ -1,50 +1,45 @@
 ﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
 using I2PCore.Data;
 using I2PCore.Utils;
 
-namespace I2P.I2CP.Messages
+namespace I2P.I2CP.Messages;
+
+public class RequestLeaseSetMessage : I2CpMessage
 {
-    public class RequestLeaseSetMessage: I2CpMessage
+    public List<I2PLease> Leases = new();
+    public ushort SessionId;
+
+    public RequestLeaseSetMessage(ushort sessionid, IEnumerable<I2PLease> leases)
+        : base(ProtocolMessageType.RequestLs)
     {
-        public ushort SessionId;
-        public List<I2PLease> Leases = new();
+        SessionId = sessionid;
+        Leases.AddRange(leases);
+    }
 
-        public RequestLeaseSetMessage( ushort sessionid, IEnumerable<I2PLease> leases )
-            : base( ProtocolMessageType.RequestLs )
+    public RequestLeaseSetMessage(I2PBufferCursor reader)
+        : base(ProtocolMessageType.RequestLs)
+    {
+        SessionId = reader.ReadUInt16BigEndian();
+        var leases = reader.ReadByte();
+        for (var i = 0; i < leases; ++i) Leases.Add(new I2PLease(reader));
+    }
+
+    public override void Write(ArrayBufferWriter<byte> dest)
+    {
+        var buf = new byte[3];
+        var writer = new I2PBufferCursor(buf);
+        writer.WriteUInt16BigEndian(SessionId);
+        writer.WriteByte((byte)Leases.Count);
+        dest.Write(buf);
+
+        for (var i = 0; i < Leases.Count; ++i)
         {
-            SessionId = sessionid;
-            Leases.AddRange( leases );
+            Leases[i].TunnelGw.Write(dest);
+            Leases[i].TunnelId.Write(dest);
         }
 
-        public RequestLeaseSetMessage( I2PBufferCursor reader )
-            : base( ProtocolMessageType.RequestLs )
-        {
-            SessionId = reader.ReadUInt16BigEndian();
-            var leases = reader.ReadByte();
-            for ( int i = 0; i < leases; ++i )
-            {
-                Leases.Add( new I2PLease( reader ) );
-            }
-        }
-
-        public override void Write( ArrayBufferWriter<byte> dest )
-        {
-            var buf = new byte[3];
-            var writer = new I2PBufferCursor( buf );
-            writer.WriteUInt16BigEndian( SessionId );
-            writer.WriteByte( (byte)Leases.Count );
-            dest.Write( buf );
-
-            for ( int i = 0; i < Leases.Count; ++i )
-            {
-                Leases[i].TunnelGw.Write( dest );
-                Leases[i].TunnelId.Write( dest );
-            }
-            new I2PDate( DateTime.UtcNow.AddMinutes( 9 ) ).Write( dest );
-        }
+        new I2PDate(DateTime.UtcNow.AddMinutes(9)).Write(dest);
     }
 }

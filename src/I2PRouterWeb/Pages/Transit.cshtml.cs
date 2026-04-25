@@ -1,5 +1,5 @@
-using Microsoft.AspNetCore.Mvc.RazorPages;
 using I2PRouterWeb.Services;
+using Microsoft.AspNetCore.Mvc.RazorPages;
 
 namespace I2PRouterWeb.Pages;
 
@@ -7,17 +7,17 @@ public class TransitModel : PageModel
 {
     private readonly RouterService _routerService;
 
+    public TransitModel(RouterService routerService)
+    {
+        _routerService = routerService;
+    }
+
     public List<TransitTunnelInfo> TransitTunnels { get; set; } = new();
     public int TotalTransitTunnels => TransitTunnels.Count;
     public int InboundGatewayCount => TransitTunnels.Count(t => t.IsInboundGateway);
     public int OutboundEndpointCount => TransitTunnels.Count(t => t.IsOutboundEndpoint);
     public int TransitCount => TransitTunnels.Count(t => !t.IsOutboundEndpoint && !t.IsInboundGateway);
     public int MaxTransitTunnels => _routerService.MaxTransitTunnels;
-
-    public TransitModel(RouterService routerService)
-    {
-        _routerService = routerService;
-    }
 
     public void OnGet()
     {

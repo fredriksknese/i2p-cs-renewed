@@ -1,298 +1,289 @@
-﻿using NUnit.Framework;
-using Assert = NUnit.Framework.Legacy.ClassicAssert;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
-using I2PCore.TunnelLayer.I2NP.Messages;
 using I2PCore.Data;
 using I2PCore.TunnelLayer;
+using I2PCore.TunnelLayer.I2NP.Messages;
 using I2PCore.Utils;
+using NUnit.Framework;
+using Assert = NUnit.Framework.Legacy.ClassicAssert;
 
-namespace I2PTests
+namespace I2PTests;
+
+[TestFixture]
+public class TunnelDataFragmentationTest
 {
-    [TestFixture]
-    public class TunnelDataFragmentationTest
+    [Test]
+    public void MakeAndReadFragment()
     {
-        [Test]
-        public void MakeAndReadFragment()
+        var arec = new DatabaseLookupMessage(
+            new I2PIdentHash(true),
+            new I2PIdentHash(true),
+            DatabaseLookupMessage.LookupTypes.Normal);
+
+        var msg = new TunnelMessageRouter(
+            arec,
+            new I2PIdentHash(true));
+
+        var refmsgdata = msg.Message.CreateHeader16.HeaderAndPayload;
+
+        var fragments = TunnelDataMessage.MakeFragments(
+            new TunnelMessage[] { msg },
+            BufUtils.RandomUint());
+
+        var mkmsg = new TunnelDataFragmentReassembly();
+        var recvtmsgs = mkmsg.Process(BufUtils.Shuffle(fragments).ToArray(), out _);
+
+        foreach (var rmsg in recvtmsgs)
         {
-            var arec = new DatabaseLookupMessage(
-                new I2PIdentHash( true ),
-                new I2PIdentHash( true ),
-                DatabaseLookupMessage.LookupTypes.Normal );
+            var rmsgdata = rmsg.Message.CreateHeader16.HeaderAndPayload;
+            Assert.IsTrue(msg.Delivery == rmsg.Delivery);
+            Assert.IsTrue(refmsgdata == rmsgdata);
+        }
+    }
 
-            var msg = new TunnelMessageRouter(
-                arec,
-                new I2PIdentHash( true ) );
+    [Test]
+    public void MakeAndReadFragmentLarge()
+    {
+        var arec = new DataMessage(new I2PByteBlock(BufUtils.RandomBytes(2048)));
 
-            var refmsgdata = msg.Message.CreateHeader16.HeaderAndPayload;
+        var msg = new TunnelMessageRouter(
+            arec,
+            new I2PIdentHash(true));
 
-            var fragments = TunnelDataMessage.MakeFragments(
-                new TunnelMessage[] { msg },
-                BufUtils.RandomUint() );
+        var refmsgdata = msg.Message.CreateHeader16.HeaderAndPayload;
 
-            var mkmsg = new TunnelDataFragmentReassembly();
-            var recvtmsgs = mkmsg.Process( BufUtils.Shuffle( fragments ).ToArray(), out var _ );
+        var fragments = TunnelDataMessage.MakeFragments(
+            new TunnelMessage[] { msg },
+            BufUtils.RandomUint());
 
-            foreach ( var rmsg in recvtmsgs )
-            {
-                var rmsgdata = rmsg.Message.CreateHeader16.HeaderAndPayload;
-                Assert.IsTrue( msg.Delivery == rmsg.Delivery );
-                Assert.IsTrue( refmsgdata == rmsgdata );
-            }
+        var mkmsg = new TunnelDataFragmentReassembly();
+        var recvtmsgs = mkmsg.Process(BufUtils.Shuffle(fragments).ToArray(), out _);
+
+        foreach (var rmsg in recvtmsgs)
+        {
+            var rmsgdata = rmsg.Message.CreateHeader16.HeaderAndPayload;
+            Assert.IsTrue(msg.Delivery == rmsg.Delivery);
+            Assert.IsTrue(refmsgdata == rmsgdata);
+        }
+    }
+
+    [Test]
+    public void MakeAndReadFragments5()
+    {
+        var origmsgs = new List<TunnelMessage>();
+
+        for (var i = 0; i < 5; ++i)
+        {
+            var adatarec = new DataMessage(new I2PByteBlock(BufUtils.RandomBytes(12)));
+
+            var amsg = new TunnelMessageRouter(
+                adatarec,
+                new I2PIdentHash(true));
+
+            origmsgs.Add(amsg);
         }
 
-        [Test]
-        public void MakeAndReadFragmentLarge()
+        var msgs = TunnelDataMessage.MakeFragments(origmsgs, BufUtils.RandomUint());
+
+        var mkmsg = new TunnelDataFragmentReassembly();
+        var recvtmsgs = mkmsg.Process(BufUtils.Shuffle(msgs), out _);
+
+        Assert.IsTrue(origmsgs.All(o => recvtmsgs.Any(m =>
+            m.Delivery == o.Delivery
+            && m.Message.CreateHeader16.HeaderAndPayload == o.Message.CreateHeader16.HeaderAndPayload
+        )));
+    }
+
+    [Test]
+    public void MakeAndReadFragments5_2()
+    {
+        var origmsgs = new List<TunnelMessage>();
+        for (var i = 0; i < 5; ++i)
         {
-            var arec = new DataMessage( new I2PByteBlock( BufUtils.RandomBytes( 2048 ) ) );
+            var adatarec = new DataMessage(new I2PByteBlock(BufUtils.RandomBytes(2048)));
 
-            var msg = new TunnelMessageRouter(
-                arec,
-                new I2PIdentHash( true ) );
+            var amsg = new TunnelMessageRouter(
+                adatarec,
+                new I2PIdentHash(true));
 
-            var refmsgdata = msg.Message.CreateHeader16.HeaderAndPayload;
-
-            var fragments = TunnelDataMessage.MakeFragments(
-                new TunnelMessage[] { msg },
-                BufUtils.RandomUint() );
-
-            var mkmsg = new TunnelDataFragmentReassembly();
-            var recvtmsgs = mkmsg.Process( BufUtils.Shuffle( fragments ).ToArray(), out var _ );
-
-            foreach ( var rmsg in recvtmsgs )
-            {
-                var rmsgdata = rmsg.Message.CreateHeader16.HeaderAndPayload;
-                Assert.IsTrue( msg.Delivery == rmsg.Delivery );
-                Assert.IsTrue( refmsgdata == rmsgdata );
-            }
+            origmsgs.Add(amsg);
         }
 
-        [Test]
-        public void MakeAndReadFragments5()
+        var msgs = TunnelDataMessage.MakeFragments(origmsgs, BufUtils.RandomUint());
+
+        var mkmsg = new TunnelDataFragmentReassembly();
+        var recvtmsgs = BufUtils.Shuffle(msgs
+                .Chunk(a => 2))
+            .Select(m => mkmsg.Process(m, out _))
+            .SelectMany(b => b);
+
+        Assert.IsTrue(origmsgs.All(o => recvtmsgs.Any(m =>
+            m.Delivery == o.Delivery
+            && m.Message.CreateHeader16.HeaderAndPayload == o.Message.CreateHeader16.HeaderAndPayload
+        )));
+    }
+
+    [Test]
+    public void MakeAndReadFragments5Chunked()
+    {
+        var origmsgs = new List<TunnelMessage>();
+
+        for (var i = 0; i < 5; ++i)
         {
-            var origmsgs = new List<TunnelMessage>();
-            
-            for ( int i = 0; i < 5; ++i )
-            {
-                var adatarec = new DataMessage( new I2PByteBlock( BufUtils.RandomBytes( 12 ) ) );
+            var adatarec = new DataMessage(new I2PByteBlock(BufUtils.RandomBytes(2048)));
 
-                var amsg = new TunnelMessageRouter(
-                    adatarec,
-                    new I2PIdentHash( true ) );
+            var amsg = new TunnelMessageRouter(
+                adatarec,
+                new I2PIdentHash(true));
 
-                origmsgs.Add( amsg );
-            }
-
-            var msgs = TunnelDataMessage.MakeFragments( origmsgs, BufUtils.RandomUint() );
-
-            var mkmsg = new TunnelDataFragmentReassembly();
-            var recvtmsgs = mkmsg.Process( BufUtils.Shuffle( msgs ), out var _ );
-
-            Assert.IsTrue( origmsgs.All( o => recvtmsgs.Any( m =>
-                    m.Delivery == o.Delivery
-                    && m.Message.CreateHeader16.HeaderAndPayload == o.Message.CreateHeader16.HeaderAndPayload
-                ) ) );
+            origmsgs.Add(amsg);
         }
 
-        [Test]
-        public void MakeAndReadFragments5_2()
-        {
-            var origmsgs = new List<TunnelMessage>();
-            for ( int i = 0; i < 5; ++i )
+        var msgs = TunnelDataMessage.MakeFragments(origmsgs, BufUtils.RandomUint());
+
+        var mkmsg = new TunnelDataFragmentReassembly();
+        var recvtmsgs = mkmsg.Process(
+            BufUtils.Shuffle(
+                BufUtils.Shuffle(msgs.Chunk(a => 2 + BufUtils.RandomInt(2)))
+                    .SelectMany(c => c)), out _);
+
+        Assert.IsTrue(origmsgs.All(o => recvtmsgs.Any(m =>
+            m.Delivery == o.Delivery
+            && m.Message.CreateHeader16.HeaderAndPayload == o.Message.CreateHeader16.HeaderAndPayload
+        )));
+
+        var msgs2 = TunnelDataMessage.MakeFragments(origmsgs, BufUtils.RandomUint());
+        recvtmsgs = mkmsg.Process(
+            BufUtils.Shuffle(
+                BufUtils.Shuffle(msgs2.Chunk(a => 1 + BufUtils.RandomInt(2)))
+                    .ToArray()
+                    .SelectMany(c => c)
+                    .ToArray()
+                    .Skip(1)), out _);
+
+        Assert.IsFalse(origmsgs.All(o => recvtmsgs.Any(m =>
+            m.Delivery == o.Delivery
+            && m.Message.CreateHeader16.HeaderAndPayload == o.Message.CreateHeader16.HeaderAndPayload
+        )));
+    }
+
+    [Test]
+    public void MakeAndReadFragments100()
+    {
+        var origmsgs = new List<TunnelMessage>();
+
+        for (var i = 0; i < 100; ++i)
+            switch (BufUtils.RandomInt(3))
             {
-                var adatarec = new DataMessage( new I2PByteBlock( BufUtils.RandomBytes( 2048 ) ) );
+                case 0:
+                    var adatarec = new DataMessage(new I2PByteBlock(BufUtils.RandomBytes(2048)));
 
-                var amsg = new TunnelMessageRouter(
-                    adatarec,
-                    new I2PIdentHash( true ) );
+                    origmsgs.Add(new TunnelMessageTunnel(
+                        adatarec,
+                        new I2PIdentHash(true),
+                        BufUtils.RandomUint()));
+                    break;
 
-                origmsgs.Add( amsg );
+                case 1:
+                    var arec = new DatabaseLookupMessage(
+                        new I2PIdentHash(true),
+                        new I2PIdentHash(true),
+                        DatabaseLookupMessage.LookupTypes.Normal);
+
+                    origmsgs.Add(new TunnelMessageRouter(
+                        arec,
+                        new I2PIdentHash(true)));
+                    break;
+
+                case 2:
+                    var adatarec2 = new DataMessage(
+                        new I2PByteBlock(
+                            BufUtils.RandomBytes(2048 + BufUtils.RandomInt(1024))));
+
+                    origmsgs.Add(new TunnelMessageLocal(adatarec2));
+                    break;
             }
 
-            var msgs = TunnelDataMessage.MakeFragments( origmsgs, BufUtils.RandomUint() );
+        var msgs = TunnelDataMessage.MakeFragments(origmsgs, BufUtils.RandomUint());
+        var mkmsg = new TunnelDataFragmentReassembly();
+        var chunks = BufUtils.Shuffle(
+            BufUtils.Shuffle(msgs)
+                .ToArray()
+                .Chunk(a => 1 + BufUtils.RandomInt(10)));
 
-            var mkmsg = new TunnelDataFragmentReassembly();
-            var recvtmsgs = BufUtils.Shuffle( msgs
-                    .Chunk( a => 2 ) )
-                    .Select( m => mkmsg.Process( m, out var _ ) )
-                    .SelectMany( b => b );
+        var recvtmsgs = chunks.SelectMany(c => mkmsg.Process(c, out _)).ToArray();
 
-            Assert.IsTrue( origmsgs.All( o => recvtmsgs.Any( m =>
-                    m.Delivery == o.Delivery
-                    && m.Message.CreateHeader16.HeaderAndPayload == o.Message.CreateHeader16.HeaderAndPayload
-                ) ) );
-        }
+        Assert.IsTrue(origmsgs.All(o => recvtmsgs.Any(m =>
+            m.Delivery == o.Delivery
+            && m.Message.CreateHeader16.HeaderAndPayload == o.Message.CreateHeader16.HeaderAndPayload
+        )));
 
-        [Test]
-        public void MakeAndReadFragments5Chunked()
-        {
-            var origmsgs = new List<TunnelMessage>();
+        var mkmsg2 = new TunnelDataFragmentReassembly();
+        var chunks2 = BufUtils.Shuffle(
+            BufUtils.Shuffle(msgs)
+                .ToArray()
+                .Skip(1)
+                .Chunk(a => 1 + BufUtils.RandomInt(10)));
 
-            for ( int i = 0; i < 5; ++i )
+        var recvtmsgs2 = chunks2.SelectMany(c => mkmsg2.Process(c, out _)).ToArray();
+        Assert.IsFalse(origmsgs.All(o => recvtmsgs2.Any(m =>
+            m.Delivery == o.Delivery
+            && m.Message.CreateHeader16.HeaderAndPayload == o.Message.CreateHeader16.HeaderAndPayload
+        )));
+    }
+
+    [Test]
+    public void MakeAndReadFragmentsWithSerialize()
+    {
+        var origmsgs = new List<TunnelMessage>();
+
+        for (var i = 0; i < 200; ++i)
+            switch (BufUtils.RandomInt(3))
             {
-                var adatarec = new DataMessage( new I2PByteBlock( BufUtils.RandomBytes( 2048 ) ) );
+                case 0:
+                    var adatarec = new DataMessage(
+                        new I2PByteBlock(
+                            BufUtils.RandomBytes(2048 + BufUtils.RandomInt(1024))));
 
-                var amsg = new TunnelMessageRouter(
-                    adatarec,
-                    new I2PIdentHash( true ) );
+                    origmsgs.Add(new TunnelMessageLocal(adatarec));
+                    break;
 
-                origmsgs.Add( amsg );
+                case 1:
+                    var arec = new DatabaseLookupMessage(
+                        new I2PIdentHash(true),
+                        new I2PIdentHash(true),
+                        DatabaseLookupMessage.LookupTypes.RouterInfo);
+
+                    origmsgs.Add(new TunnelMessageRouter(
+                        arec,
+                        new I2PIdentHash(true)));
+                    break;
+
+                case 2:
+                    var adatarec2 = new DataMessage(
+                        new I2PByteBlock(
+                            BufUtils.RandomBytes(2048 + BufUtils.RandomInt(1024))));
+
+                    origmsgs.Add(new TunnelMessageTunnel(adatarec2,
+                        new I2PIdentHash(true),
+                        BufUtils.RandomUint()));
+                    break;
             }
 
-            var msgs = TunnelDataMessage.MakeFragments( origmsgs, BufUtils.RandomUint() );
+        var msgs = TunnelDataMessage.MakeFragments(origmsgs, BufUtils.RandomUint());
+        var recvlist = new List<TunnelDataMessage>();
 
-            var mkmsg = new TunnelDataFragmentReassembly();
-            var recvtmsgs = mkmsg.Process( 
-                        BufUtils.Shuffle(
-                                BufUtils.Shuffle( msgs.Chunk( a => 2 + BufUtils.RandomInt ( 2 ) ) )
-                                .SelectMany( c => c ) ), out var _ );
+        foreach (var msg in msgs)
+            recvlist.Add((TunnelDataMessage)I2NpMessage.ReadHeader16(
+                new I2PBufferCursor(msg.CreateHeader16.HeaderAndPayload)).Message);
 
-            Assert.IsTrue( origmsgs.All( o => recvtmsgs.Any( m =>
-                    m.Delivery == o.Delivery
-                    && m.Message.CreateHeader16.HeaderAndPayload == o.Message.CreateHeader16.HeaderAndPayload
-                ) ) );
+        var mkmsg = new TunnelDataFragmentReassembly();
+        var recvtmsgs = mkmsg.Process(recvlist, out _);
 
-            var msgs2 = TunnelDataMessage.MakeFragments( origmsgs, BufUtils.RandomUint() );
-            recvtmsgs = mkmsg.Process(
-                        BufUtils.Shuffle(
-                                BufUtils.Shuffle( msgs2.Chunk( a => 1 + BufUtils.RandomInt( 2 ) ) )
-                                .ToArray()
-                                .SelectMany( c => c )
-                                .ToArray()
-                                .Skip( 1 ) ), out var _ );
-
-            Assert.IsFalse( origmsgs.All( o => recvtmsgs.Any( m =>
-                    m.Delivery == o.Delivery
-                    && m.Message.CreateHeader16.HeaderAndPayload == o.Message.CreateHeader16.HeaderAndPayload
-                ) ) );
-        }
-
-        [Test]
-        public void MakeAndReadFragments100()
-        {
-            var origmsgs = new List<TunnelMessage>();
-
-            for ( int i = 0; i < 100; ++i )
-            {
-                switch ( BufUtils.RandomInt( 3 ) )
-                {
-                    case 0:
-                        var adatarec = new DataMessage( new I2PByteBlock( BufUtils.RandomBytes( 2048 ) ) );
-
-                        origmsgs.Add( new TunnelMessageTunnel(
-                            adatarec,
-                            new I2PIdentHash( true ),
-                            BufUtils.RandomUint() ) );
-                        break;
-
-                    case 1:
-                        var arec = new DatabaseLookupMessage(
-                            new I2PIdentHash( true ),
-                            new I2PIdentHash( true ),
-                            DatabaseLookupMessage.LookupTypes.Normal );
-
-                        origmsgs.Add( new TunnelMessageRouter(
-                            arec,
-                            new I2PIdentHash( true ) ) );
-                        break;
-
-                    case 2:
-                        var adatarec2 = new DataMessage(
-                            new I2PByteBlock(
-                                BufUtils.RandomBytes( 2048 + BufUtils.RandomInt( 1024 ) ) ) );
-
-                        origmsgs.Add( new TunnelMessageLocal( adatarec2 ) );
-                        break;
-                }
-            }
-
-            var msgs = TunnelDataMessage.MakeFragments( origmsgs, BufUtils.RandomUint() );
-            var mkmsg = new TunnelDataFragmentReassembly();
-            var chunks = BufUtils.Shuffle(
-                            BufUtils.Shuffle( msgs )
-                            .ToArray()
-                            .Chunk( a => 1 + BufUtils.RandomInt( 10 ) ) );
-
-            var recvtmsgs = chunks.SelectMany( c => mkmsg.Process( c, out var _ ) ).ToArray();
-
-            Assert.IsTrue( origmsgs.All( o => recvtmsgs.Any( m =>
-                    m.Delivery == o.Delivery
-                    && m.Message.CreateHeader16.HeaderAndPayload == o.Message.CreateHeader16.HeaderAndPayload
-                ) ) );
-
-            var mkmsg2 = new TunnelDataFragmentReassembly();
-            var chunks2 = BufUtils.Shuffle(
-                            BufUtils.Shuffle( msgs )
-                            .ToArray()
-                            .Skip( 1 )
-                            .Chunk( a => 1 + BufUtils.RandomInt( 10 ) ) );
-
-            var recvtmsgs2 = chunks2.SelectMany( c => mkmsg2.Process( c, out var _ ) ).ToArray();
-            Assert.IsFalse( origmsgs.All( o => recvtmsgs2.Any( m =>
-                    m.Delivery == o.Delivery
-                    && m.Message.CreateHeader16.HeaderAndPayload == o.Message.CreateHeader16.HeaderAndPayload
-                ) ) );
-        }
-
-        [Test]
-        public void MakeAndReadFragmentsWithSerialize()
-        {
-            var origmsgs = new List<TunnelMessage>();
-
-            for ( int i = 0; i < 200; ++i )
-            {
-                switch ( BufUtils.RandomInt( 3 ) )
-                {
-                    case 0:
-                        var adatarec = new DataMessage( 
-                            new I2PByteBlock( 
-                                BufUtils.RandomBytes( 2048 + BufUtils.RandomInt( 1024 ) ) ) );
-
-                        origmsgs.Add( new TunnelMessageLocal( adatarec ) );
-                        break;
-
-                    case 1:
-                        var arec = new DatabaseLookupMessage(
-                            new I2PIdentHash( true ),
-                            new I2PIdentHash( true ),
-                            DatabaseLookupMessage.LookupTypes.RouterInfo );
-
-                        origmsgs.Add( new TunnelMessageRouter( 
-                            arec, 
-                            new I2PIdentHash( true ) ) );
-                        break;
-
-                    case 2:
-                        var adatarec2 = new DataMessage( 
-                            new I2PByteBlock( 
-                                BufUtils.RandomBytes( 2048 + BufUtils.RandomInt( 1024 ) ) ) );
-
-                        origmsgs.Add( new TunnelMessageTunnel( adatarec2,
-                            new I2PIdentHash( true ),
-                            BufUtils.RandomUint() ) );
-                        break;
-                }
-            }
-
-            var msgs = TunnelDataMessage.MakeFragments( origmsgs, BufUtils.RandomUint() );
-            var recvlist = new List<TunnelDataMessage>();
-
-            foreach ( var msg in msgs )
-            {
-                recvlist.Add( (TunnelDataMessage)I2NpMessage.ReadHeader16( 
-                    new I2PBufferCursor( msg.CreateHeader16.HeaderAndPayload ) ).Message );
-            }
-
-            var mkmsg = new TunnelDataFragmentReassembly();
-            var recvtmsgs = mkmsg.Process( recvlist, out var _ );
-
-            foreach ( var rmsg in recvtmsgs )
-            {
-                Assert.IsTrue( origmsgs.SingleOrDefault( m => 
-                    m.Delivery == rmsg.Delivery &&
-                    m.Message.CreateHeader16.HeaderAndPayload == rmsg.Message.CreateHeader16.HeaderAndPayload 
-                    ) != null );
-            }
-        }
+        foreach (var rmsg in recvtmsgs)
+            Assert.IsTrue(origmsgs.SingleOrDefault(m =>
+                m.Delivery == rmsg.Delivery &&
+                m.Message.CreateHeader16.HeaderAndPayload == rmsg.Message.CreateHeader16.HeaderAndPayload
+            ) != null);
     }
 }

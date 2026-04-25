@@ -1,4 +1,5 @@
 @page
+@using System.Text.RegularExpressions
 @using I2PRouterWeb.Services
 @model NetDbLogModel
 @{
@@ -23,31 +24,31 @@
                     <div class="table-responsive">
                         <table class="table table-hover table-striped mb-0">
                             <thead>
-                                <tr>
-                                    <th style="width: 180px;">Timestamp</th>
-                                    <th style="width: 200px;">Event Type</th>
-                                    <th style="width: 150px;">Hash</th>
-                                    <th>Details</th>
-                                </tr>
+                            <tr>
+                                <th style="width: 180px;">Timestamp</th>
+                                <th style="width: 200px;">Event Type</th>
+                                <th style="width: 150px;">Hash</th>
+                                <th>Details</th>
+                            </tr>
                             </thead>
                             <tbody>
-                                @foreach (var entry in Model.Logs)
-                                {
-                                    <tr>
-                                        <td class="text-muted small">
-                                            @entry.Timestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
-                                        </td>
-                                        <td>
+                            @foreach (var entry in Model.Logs)
+                            {
+                                <tr>
+                                    <td class="text-muted small">
+                                        @entry.Timestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+                                    </td>
+                                    <td>
                                             <span class="badge bg-@GetCategoryColor(entry.Category)">
                                                 @SplitCamelCase(entry.Category.ToString())
                                             </span>
-                                        </td>
-                                        <td>
-                                            <code class="text-primary">@entry.IdentHash</code>
-                                        </td>
-                                        <td>@entry.Message</td>
-                                    </tr>
-                                }
+                                    </td>
+                                    <td>
+                                        <code class="text-primary">@entry.IdentHash</code>
+                                    </td>
+                                    <td>@entry.Message</td>
+                                </tr>
+                            }
                             </tbody>
                         </table>
                     </div>
@@ -64,6 +65,7 @@
 </div>
 
 @functions {
+
     private string GetCategoryColor(NetDbLogCategory category)
     {
         return category switch
@@ -79,7 +81,8 @@
 
     private string SplitCamelCase(string input)
     {
-        return System.Text.RegularExpressions.Regex.Replace(input, "([A-Z])", " $1", System.Text.RegularExpressions.RegexOptions.Compiled).Trim();
+        return Regex.Replace(input, "([A-Z])", " $1", RegexOptions.Compiled).Trim();
     }
+
 }
 

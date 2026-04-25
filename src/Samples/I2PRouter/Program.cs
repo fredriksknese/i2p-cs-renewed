@@ -1,43 +1,44 @@
 ﻿using System;
-using I2PCore.Data;
-using System.Threading;
-using I2PCore.Utils;
-using I2PCore.SessionLayer;
 using System.Net;
+using System.Threading;
 using I2P.I2CP;
+using I2PCore.Data;
+using I2PCore.SessionLayer;
+using I2PCore.Utils;
 
-namespace I2PRouter
+namespace I2PRouter;
+
+internal class Program
 {
-    internal class Program
+    private static bool _connected;
+
+    private static void Main(string[] args)
     {
-        private static bool _connected = false;
+        Logging.ReadAppConfig();
+        Logging.LogToDebug = false;
+        Logging.LogToConsole = true;
 
-        private static void Main( string[] args )
-        {
-            Logging.ReadAppConfig();
-            Logging.LogToDebug = false;
-            Logging.LogToConsole = true;
+        RouterContext.RouterSettingsFile = "I2PRouter.bin";
 
-            RouterContext.RouterSettingsFile = "I2PRouter.bin";
-
-            for ( int i = 0; i < args.Length; ++i )
+        for (var i = 0; i < args.Length; ++i)
+            switch (args[i])
             {
-                switch ( args[i] )
-                {
-                    case "--addr":
-                    case "--address":
-                        if ( args.Length > i + 1 )
-                        {
-                            RouterContext.Inst.DefaultExtAddress = IPAddress.Parse( args[++i] );
-                            Console.WriteLine( $"addr {RouterContext.Inst.DefaultExtAddress}" );
-                        }
-                        else
-                        {
-                            Console.WriteLine( "--addr require ip number" );
-                            return;
-                        }
-                        break;
-/*
+                case "--addr":
+                case "--address":
+                    if (args.Length > i + 1)
+                    {
+                        RouterContext.Inst.DefaultExtAddress = IPAddress.Parse(args[++i]);
+                        Console.WriteLine($"addr {RouterContext.Inst.DefaultExtAddress}");
+                    }
+                    else
+                    {
+                        Console.WriteLine("--addr require ip number");
+                        return;
+                    }
+
+                    break;
+
+                /*
                     case "--if":
                     case "--interface":
                         if ( args.Length > i + 1 )
@@ -51,101 +52,92 @@ namespace I2PRouter
                             return;
                         }
                         break;*/
-
-                    case "--port":
-                        if ( args.Length > i + 1 )
-                        {
-                            var port = int.Parse( args[++i] );
-                            RouterContext.Inst.DefaultTcpPort = port;
-                            RouterContext.Inst.DefaultUdpPort = port;
-                            Console.WriteLine( $"port {port}" );
-                        }
-                        else
-                        {
-                            Console.WriteLine( "--port require port number" );
-                            return;
-                        }
-                        break;
-
-                    case "--nofw":
-                        RouterContext.Inst.IsFirewalled = false;
-                        Console.WriteLine( $"Firewalled {RouterContext.Inst.IsFirewalled}" );
-                        break;
-
-                    case "--ipv6":
-                        RouterContext.UseIpV6 = true;
-                        Console.WriteLine( $"Using IPV6" );
-                        break;
-                        
-                    case "--mkdest":
-                    case "--create-destination":
-                        var certtype = 0;
-                        if ( args.Length > i + 1 )
-                        {
-                            certtype = int.Parse( args[++i] );
-                        }
-
-                        I2PSigningKey.SigningKeyTypes ct;
-                        I2PDestinationInfo d;
-
-                        switch ( certtype )
-                        {
-                            default:
-                            case 0:
-                                ct = I2PSigningKey.SigningKeyTypes.EdDsaSha512Ed25519;
-                                d = new I2PDestinationInfo( ct );
-                                break;
-
-                            case 1:
-                                ct = I2PSigningKey.SigningKeyTypes.DsaSha1;
-                                d = new I2PDestinationInfo( ct );
-                                break;
-
-                            case 2:
-                                ct = I2PSigningKey.SigningKeyTypes.EcdsaSha256P256;
-                                d = new I2PDestinationInfo( ct );
-                                break;
-
-                            case 3:
-                                ct = I2PSigningKey.SigningKeyTypes.EcdsaSha384P384;
-                                d = new I2PDestinationInfo( ct );
-                                break;
-                        }
-
-                        Console.WriteLine( $"New destination {ct}: {d.ToBase64()}" );
-                        return;
-
-                    default:
-                        Console.WriteLine( args[i] );
-                        Console.WriteLine( "Usage: I2P.exe --addr 12.34.56.78 --port 8081 --nofw --create-destination [0-3]" );
-                        break;
-                }
-            }
-
-            RouterContext.Inst.ApplyNewSettings();
-
-            Router.Start();
-
-            Logging.LogInformation( $"I2P router starting" );
-
-            while ( true )
-            {
-                try
-                {
-                    var i2Cp = new I2CpHost();
-
-                    _connected = true;
-
-                    while ( _connected )
+                case "--port":
+                    if (args.Length > i + 1)
                     {
-                        Thread.Sleep( 2000 );
+                        var port = int.Parse(args[++i]);
+                        RouterContext.Inst.DefaultTcpPort = port;
+                        RouterContext.Inst.DefaultUdpPort = port;
+                        Console.WriteLine($"port {port}");
                     }
-                }
-                catch ( Exception ex )
-                {
-                    Logging.Log( ex );
-                }
+                    else
+                    {
+                        Console.WriteLine("--port require port number");
+                        return;
+                    }
+
+                    break;
+
+                case "--nofw":
+                    RouterContext.Inst.IsFirewalled = false;
+                    Console.WriteLine($"Firewalled {RouterContext.Inst.IsFirewalled}");
+                    break;
+
+                case "--ipv6":
+                    RouterContext.UseIpV6 = true;
+                    Console.WriteLine("Using IPV6");
+                    break;
+
+                case "--mkdest":
+                case "--create-destination":
+                    var certtype = 0;
+                    if (args.Length > i + 1) certtype = int.Parse(args[++i]);
+
+                    I2PSigningKey.SigningKeyTypes ct;
+                    I2PDestinationInfo d;
+
+                    switch (certtype)
+                    {
+                        default:
+                        case 0:
+                            ct = I2PSigningKey.SigningKeyTypes.EdDsaSha512Ed25519;
+                            d = new I2PDestinationInfo(ct);
+                            break;
+
+                        case 1:
+                            ct = I2PSigningKey.SigningKeyTypes.DsaSha1;
+                            d = new I2PDestinationInfo(ct);
+                            break;
+
+                        case 2:
+                            ct = I2PSigningKey.SigningKeyTypes.EcdsaSha256P256;
+                            d = new I2PDestinationInfo(ct);
+                            break;
+
+                        case 3:
+                            ct = I2PSigningKey.SigningKeyTypes.EcdsaSha384P384;
+                            d = new I2PDestinationInfo(ct);
+                            break;
+                    }
+
+                    Console.WriteLine($"New destination {ct}: {d.ToBase64()}");
+                    return;
+
+                default:
+                    Console.WriteLine(args[i]);
+                    Console.WriteLine(
+                        "Usage: I2P.exe --addr 12.34.56.78 --port 8081 --nofw --create-destination [0-3]");
+                    break;
             }
-        }
+
+        RouterContext.Inst.ApplyNewSettings();
+
+        Router.Start();
+
+        Logging.LogInformation("I2P router starting");
+
+        while (true)
+            try
+            {
+                var i2Cp = new I2CpHost();
+
+                _connected = true;
+
+                while (_connected) Thread.Sleep(2000);
+            }
+            catch (Exception ex)
+            {
+                Logging.Log(ex);
+            }
     }
 }

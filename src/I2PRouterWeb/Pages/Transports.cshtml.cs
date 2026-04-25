@@ -1,12 +1,18 @@
-using Microsoft.AspNetCore.Mvc.RazorPages;
-using I2PRouterWeb.Services;
 using I2PCore.SessionLayer;
+using I2PCore.TransportLayer;
+using I2PRouterWeb.Services;
+using Microsoft.AspNetCore.Mvc.RazorPages;
 
 namespace I2PRouterWeb.Pages;
 
 public class TransportsModel : PageModel
 {
     private readonly RouterService _routerService;
+
+    public TransportsModel(RouterService routerService)
+    {
+        _routerService = routerService;
+    }
 
     public int Ntcp2Sessions { get; set; }
     public int Ntcp2Connecting { get; set; }
@@ -22,22 +28,14 @@ public class TransportsModel : PageModel
     public string FormattedBytesSent => FormatBytes(BytesSent);
     public string FormattedBytesReceived => FormatBytes(BytesReceived);
 
-    public TransportsModel(RouterService routerService)
-    {
-        _routerService = routerService;
-    }
-
     public void OnGet()
     {
         try
         {
             var ctx = RouterContext.Inst;
-            if (ctx != null)
-            {
-                IsFirewalled = ctx.IsFirewalled;
-            }
+            if (ctx != null) IsFirewalled = ctx.IsFirewalled;
 
-            var tp = I2PCore.TransportLayer.TransportProvider.Inst;
+            var tp = TransportProvider.Inst;
             if (tp != null)
             {
                 Ntcp2Sessions = tp.Ntcp2SessionCount;

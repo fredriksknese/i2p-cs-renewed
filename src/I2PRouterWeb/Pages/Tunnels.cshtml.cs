@@ -1,6 +1,6 @@
-using Microsoft.AspNetCore.Mvc.RazorPages;
 using I2PCore.TunnelLayer;
 using I2PRouterWeb.Services;
+using Microsoft.AspNetCore.Mvc.RazorPages;
 
 namespace I2PRouterWeb.Pages;
 
@@ -8,22 +8,26 @@ public class TunnelsModel : PageModel
 {
     private readonly RouterService _routerService;
 
-    public List<TunnelDisplayInfo> OutboundTunnels { get; set; } = new();
-    public List<TunnelDisplayInfo> InboundTunnels { get; set; } = new();
-    public List<TunnelDisplayInfo> PendingOutboundTunnels { get; set; } = new();
-    public List<TunnelDisplayInfo> PendingInboundTunnels { get; set; } = new();
-    public int TotalTunnels => OutboundTunnels.Count + InboundTunnels.Count + PendingOutboundTunnels.Count + PendingInboundTunnels.Count;
-    public int OutboundCount => OutboundTunnels.Count + PendingOutboundTunnels.Count;
-    public int InboundCount => InboundTunnels.Count + PendingInboundTunnels.Count;
-    public int ExploratoryCount => OutboundTunnels.Count(t => t.IsExploratory) + 
-                                   InboundTunnels.Count(t => t.IsExploratory) + 
-                                   PendingOutboundTunnels.Count(t => t.IsExploratory) + 
-                                   PendingInboundTunnels.Count(t => t.IsExploratory);
-
     public TunnelsModel(RouterService routerService)
     {
         _routerService = routerService;
     }
+
+    public List<TunnelDisplayInfo> OutboundTunnels { get; set; } = new();
+    public List<TunnelDisplayInfo> InboundTunnels { get; set; } = new();
+    public List<TunnelDisplayInfo> PendingOutboundTunnels { get; set; } = new();
+    public List<TunnelDisplayInfo> PendingInboundTunnels { get; set; } = new();
+
+    public int TotalTunnels => OutboundTunnels.Count + InboundTunnels.Count + PendingOutboundTunnels.Count +
+                               PendingInboundTunnels.Count;
+
+    public int OutboundCount => OutboundTunnels.Count + PendingOutboundTunnels.Count;
+    public int InboundCount => InboundTunnels.Count + PendingInboundTunnels.Count;
+
+    public int ExploratoryCount => OutboundTunnels.Count(t => t.IsExploratory) +
+                                   InboundTunnels.Count(t => t.IsExploratory) +
+                                   PendingOutboundTunnels.Count(t => t.IsExploratory) +
+                                   PendingInboundTunnels.Count(t => t.IsExploratory);
 
     public void OnGet()
     {
@@ -34,39 +38,31 @@ public class TunnelsModel : PageModel
 
             var outbound = tunnelProvider.GetOutboundTunnels();
             if (outbound != null)
-            {
                 OutboundTunnels = outbound
                     .Where(t => t.Config.Pool != TunnelConfig.TunnelPool.External)
                     .Select(t => BuildInfo(t, "Outbound"))
                     .ToList();
-            }
 
             var inbound = tunnelProvider.GetInboundTunnels();
             if (inbound != null)
-            {
                 InboundTunnels = inbound
                     .Where(t => t.Config.Pool != TunnelConfig.TunnelPool.External)
                     .Select(t => BuildInfo(t, "Inbound"))
                     .ToList();
-            }
 
             var pendingOut = tunnelProvider.GetPendingOutboundTunnels();
             if (pendingOut != null)
-            {
                 PendingOutboundTunnels = pendingOut
                     .Where(t => t.Config.Pool != TunnelConfig.TunnelPool.External)
                     .Select(t => BuildInfo(t, "Outbound (Pending)"))
                     .ToList();
-            }
 
             var pendingIn = tunnelProvider.GetPendingInboundTunnels();
             if (pendingIn != null)
-            {
                 PendingInboundTunnels = pendingIn
                     .Where(t => t.Config.Pool != TunnelConfig.TunnelPool.External)
                     .Select(t => BuildInfo(t, "Inbound (Pending)"))
                     .ToList();
-            }
 
             _routerService.LogActivity("Tunnels", $"Viewed tunnels: {TotalTunnels} total");
         }
@@ -82,12 +78,12 @@ public class TunnelsModel : PageModel
         try
         {
             if (tunnel.Config?.Info?.Hops != null)
-            {
                 foreach (var hop in tunnel.Config.Info.Hops)
                     hops.Add(hop.Peer.IdentHash.Id32Short);
-            }
         }
-        catch { }
+        catch
+        {
+        }
 
         if (hops.Count == 0) hops.Add("(zero-hop)");
 
@@ -100,7 +96,9 @@ public class TunnelsModel : PageModel
             sendRate = tunnel.Bandwidth?.SendBandwidth?.Bitrate ?? 0;
             recvRate = tunnel.Bandwidth?.ReceiveBandwidth?.Bitrate ?? 0;
         }
-        catch { }
+        catch
+        {
+        }
 
         var ageMs = tunnel.CreationTime.DeltaToNow.ToMilliseconds;
         var estMs = tunnel.EstablishedTime.DeltaToNow.ToMilliseconds;
@@ -115,8 +113,8 @@ public class TunnelsModel : PageModel
             IsActive = tunnel.Active,
             IsEstablished = tunnel.Established,
             ReceiveTunnelId = tunnel.ReceiveTunnelId?.ToString() ?? "",
-            AgeSeconds = (int)(ageMs / 1000),
-            EstablishedAgoSeconds = (int)(estMs / 1000),
+            AgeSeconds = ageMs / 1000,
+            EstablishedAgoSeconds = estMs / 1000,
             BytesSent = bytesSent,
             BytesReceived = bytesRecv,
             SendBitrate = sendRate,

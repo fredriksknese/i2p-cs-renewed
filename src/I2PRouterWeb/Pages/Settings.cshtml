@@ -29,7 +29,7 @@
                 <form method="post">
                     <div class="mb-3">
                         <label for="externalAddress" class="form-label">External IP Address</label>
-                        <input type="text" class="form-control" id="externalAddress" 
+                        <input type="text" class="form-control" id="externalAddress"
                                asp-for="ExternalAddress" placeholder="Leave empty for auto-detection">
                         <div class="form-text">Your external IP address. Leave blank to auto-detect.</div>
                     </div>
@@ -37,18 +37,18 @@
                     <div class="row">
                         <div class="col-md-6 mb-3">
                             <label for="tcpPort" class="form-label">TCP Port</label>
-                            <input type="number" class="form-control" id="tcpPort" 
+                            <input type="number" class="form-control" id="tcpPort"
                                    asp-for="TcpPort" min="1024" max="65535" required>
                         </div>
                         <div class="col-md-6 mb-3">
                             <label for="udpPort" class="form-label">UDP Port</label>
-                            <input type="number" class="form-control" id="udpPort" 
+                            <input type="number" class="form-control" id="udpPort"
                                    asp-for="UdpPort" min="1024" max="65535" required>
                         </div>
                     </div>
 
                     <div class="mb-3 form-check">
-                        <input type="checkbox" class="form-check-input" id="isFirewalled" 
+                        <input type="checkbox" class="form-check-input" id="isFirewalled"
                                asp-for="IsFirewalled">
                         <label class="form-check-label" for="isFirewalled">
                             Router is behind a firewall
@@ -80,10 +80,11 @@
                         <label class="form-check-label" for="floodfillEnabled">
                             Enable Floodfill
                         </label>
-                        <div class="form-text">Contribute to the network by acting as a Floodfill router (DHT node).</div>
+                        <div class="form-text">Contribute to the network by acting as a Floodfill router (DHT node).
+                        </div>
                     </div>
 
-                    <hr />
+                    <hr/>
                     <h6 class="mb-3">Connection Limits</h6>
 
                     <div class="row">
@@ -101,14 +102,15 @@
                         </div>
                     </div>
 
-                    <hr />
+                    <hr/>
                     <h6 class="mb-3">Transit Tunnels</h6>
 
                     <div class="mb-3">
                         <label for="maxTransitTunnels" class="form-label">Maximum Transit Tunnels</label>
                         <input type="number" class="form-control" id="maxTransitTunnels"
                                asp-for="MaxTransitTunnels" min="0" max="10000" required>
-                        <div class="form-text">Maximum number of concurrent transit tunnels this router will accept. Current: @Model.CurrentMaxTransitTunnels</div>
+                        <div class="form-text">Maximum number of concurrent transit tunnels this router will accept.
+                            Current: @Model.CurrentMaxTransitTunnels</div>
                     </div>
 
                     <div class="mb-3">
@@ -118,7 +120,7 @@
                         <div class="form-text">Percentage of total bandwidth allocated to transit traffic.</div>
                     </div>
 
-                    <hr />
+                    <hr/>
                     <h6 class="mb-3">HTTP Proxy</h6>
 
                     <div class="mb-3">
@@ -133,7 +135,9 @@
                         <select class="form-select" id="proxyEncryption" asp-for="ProxyEncryption">
                             <option value="@RouterContext.HttpProxyEncryptionType.Ecies">ECIES-X25519</option>
                             <option value="@RouterContext.HttpProxyEncryptionType.Mlkem">MLKEM768-X25519</option>
-                            <option value="@RouterContext.HttpProxyEncryptionType.Hybrid">ECIES-X25519 + MLKEM768-X25519 (Hybrid)</option>
+                            <option value="@RouterContext.HttpProxyEncryptionType.Hybrid">ECIES-X25519 + MLKEM768-X25519
+                                (Hybrid)
+                            </option>
                         </select>
                         <div class="form-text">Choose the cryptographic protection level for your client tunnel.</div>
                     </div>
@@ -228,7 +232,7 @@
             </div>
             <div class="card-body">
                 <p class="card-text small">
-                    <strong>Port Forwarding:</strong> If you're behind a firewall, configure port forwarding 
+                    <strong>Port Forwarding:</strong> If you're behind a firewall, configure port forwarding
                     on your router to improve connectivity.
                 </p>
                 <p class="card-text small mb-0">

@@ -42,7 +42,7 @@
     @foreach (var ls in Model.LeaseSets)
     {
         var ttl = ls.Expiration - DateTime.UtcNow;
-        var ttlClass = ttl.TotalMinutes < 2 ? "text-danger" : (ttl.TotalMinutes < 5 ? "text-warning" : "text-success");
+        var ttlClass = ttl.TotalMinutes < 2 ? "text-danger" : ttl.TotalMinutes < 5 ? "text-warning" : "text-success";
 
         <div class="card mb-3">
             <div class="card-header py-2 d-flex justify-content-between align-items-center">
@@ -69,7 +69,8 @@
                 <div class="mb-2">
                     <strong class="small text-muted">Destination (Base64):</strong>
                     <div class="bg-light border rounded p-2 mt-1" style="max-height: 80px; overflow-y: auto;">
-                        <code class="small" style="word-break: break-all; font-size: 0.7rem;">@ls.DestinationBase64</code>
+                        <code class="small"
+                              style="word-break: break-all; font-size: 0.7rem;">@ls.DestinationBase64</code>
                     </div>
                 </div>
 
@@ -90,7 +91,8 @@
                                 <div class="mb-1">
                                     <span class="badge bg-outline-secondary border text-dark small">@pk.KeyType</span>
                                     <span class="text-muted small">(@pk.KeyLength bytes)</span>
-                                    <div class="bg-light border rounded p-1 mt-1" style="max-height: 50px; overflow-y: auto;">
+                                    <div class="bg-light border rounded p-1 mt-1"
+                                         style="max-height: 50px; overflow-y: auto;">
                                         <code style="word-break: break-all; font-size: 0.65rem;">@pk.KeyBase64</code>
                                     </div>
                                 </div>
@@ -107,32 +109,33 @@
                         <div class="table-responsive mt-1">
                             <table class="table table-sm table-bordered mb-0" style="font-size: 0.8rem;">
                                 <thead class="table-light">
-                                    <tr>
-                                        <th>Tunnel Gateway</th>
-                                        <th>Gateway B32</th>
-                                        <th>Tunnel ID</th>
-                                        <th>Expires</th>
-                                        <th>TTL</th>
-                                    </tr>
+                                <tr>
+                                    <th>Tunnel Gateway</th>
+                                    <th>Gateway B32</th>
+                                    <th>Tunnel ID</th>
+                                    <th>Expires</th>
+                                    <th>TTL</th>
+                                </tr>
                                 </thead>
                                 <tbody>
-                                    @foreach (var lease in ls.Leases)
-                                    {
-                                        var leaseTtl = lease.Expiration - DateTime.UtcNow;
-                                        var leaseTtlClass = leaseTtl.TotalMinutes < 2 ? "text-danger" : (leaseTtl.TotalMinutes < 5 ? "text-warning" : "text-success");
+                                @foreach (var lease in ls.Leases)
+                                {
+                                    var leaseTtl = lease.Expiration - DateTime.UtcNow;
+                                    var leaseTtlClass = leaseTtl.TotalMinutes < 2 ? "text-danger" : leaseTtl.TotalMinutes < 5 ? "text-warning" : "text-success";
 
-                                        <tr>
-                                            <td><code>@lease.TunnelGatewayHash</code></td>
-                                            <td>
-                                                <code class="small" style="font-size: 0.7rem; word-break: break-all;">@lease.TunnelGatewayB32</code>
-                                            </td>
-                                            <td><code>@lease.TunnelId</code></td>
-                                            <td class="text-nowrap">@lease.Expiration.ToString("HH:mm:ss") UTC</td>
-                                            <td class="text-nowrap @leaseTtlClass fw-bold">
-                                                @($"{leaseTtl.Minutes:D2}m {leaseTtl.Seconds:D2}s")
-                                            </td>
-                                        </tr>
-                                    }
+                                    <tr>
+                                        <td><code>@lease.TunnelGatewayHash</code></td>
+                                        <td>
+                                            <code class="small"
+                                                  style="font-size: 0.7rem; word-break: break-all;">@lease.TunnelGatewayB32</code>
+                                        </td>
+                                        <td><code>@lease.TunnelId</code></td>
+                                        <td class="text-nowrap">@lease.Expiration.ToString("HH:mm:ss") UTC</td>
+                                        <td class="text-nowrap @leaseTtlClass fw-bold">
+                                            @($"{leaseTtl.Minutes:D2}m {leaseTtl.Seconds:D2}s")
+                                        </td>
+                                    </tr>
+                                }
                                 </tbody>
                             </table>
                         </div>

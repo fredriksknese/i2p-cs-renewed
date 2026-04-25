@@ -1,47 +1,39 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Text;
 using I2PCore.TunnelLayer.I2NP.Data;
 using I2PCore.Utils;
 
-namespace I2PCore.TunnelLayer.I2NP.Messages
+namespace I2PCore.TunnelLayer.I2NP.Messages;
+
+public class TunnelBuildReplyMessage : I2NpMessage
 {
-    public class TunnelBuildReplyMessage: I2NpMessage
+    public BuildResponseRecord[] ResponseRecords;
+
+    public TunnelBuildReplyMessage(I2PBufferCursor reader)
     {
-        public override MessageTypes MessageType { get { return MessageTypes.TunnelBuildReply; } }
+        var start = new I2PBufferCursor(reader.BaseArray, reader.BaseArrayOffset);
+        ResponseRecords = new BuildResponseRecord[8];
 
-        public BuildResponseRecord[] ResponseRecords;
+        for (var i = 0; i < 8; ++i) ResponseRecords[i] = new BuildResponseRecord(reader);
+        SetBuffer(start, reader);
+    }
 
-        public TunnelBuildReplyMessage( I2PBufferCursor reader )
-        {
-            var start = new I2PBufferCursor( reader.BaseArray, reader.BaseArrayOffset );
-            ResponseRecords = new BuildResponseRecord[8];
+    public override MessageTypes MessageType => MessageTypes.TunnelBuildReply;
 
-            for ( int i = 0; i < 8; ++i ) ResponseRecords[i] = new BuildResponseRecord( reader );
-            SetBuffer( start, reader );
-        }
+    public override string ToString()
+    {
+        var result = new StringBuilder();
 
-        public override string ToString()
-        {
-            var result = new StringBuilder();
+        result.AppendLine("TunnelBuildReply");
 
-            result.AppendLine( "TunnelBuildReply" );
-
-            if ( ResponseRecords == null )
+        if (ResponseRecords == null)
+            result.AppendLine("Content: (null)");
+        else
+            for (var i = 0; i < 8; ++i)
             {
-                result.AppendLine( "Content: (null)" );
-            }
-            else
-            {
-                for ( int i = 0; i < 8; ++i )
-                {
-                    result.AppendLine( "ResponseRecords[" + i.ToString() + "]" );
-                    result.AppendLine( ResponseRecords[i].ToString() );
-                }
+                result.AppendLine("ResponseRecords[" + i + "]");
+                result.AppendLine(ResponseRecords[i].ToString());
             }
 
-            return result.ToString();
-        }
+        return result.ToString();
     }
 }

@@ -1,21 +1,16 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using I2PCore.Utils;
+﻿using System.Collections.Generic;
 
-namespace I2PCore.Data
+namespace I2PCore.Data;
+
+public class I2PIdentHashComparer : IEqualityComparer<I2PIdentHash>
 {
-    public class I2PIdentHashComparer: IEqualityComparer<I2PIdentHash>
+    public bool Equals(I2PIdentHash x, I2PIdentHash y)
     {
-        public bool Equals( I2PIdentHash x, I2PIdentHash y )
-        {
-            return x.Hash == y.Hash;
-        }
+        return x.Hash == y.Hash;
+    }
 
-        public int GetHashCode( I2PIdentHash x )
-        {
-            return x.GetHashCode();
-        }
+    public int GetHashCode(I2PIdentHash x)
+    {
+        return x.GetHashCode();
     }
 }

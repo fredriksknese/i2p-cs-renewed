@@ -1,5 +1,3 @@
-using I2PCore.Data;
-using I2PCore.SessionLayer;
 using I2PCore.Utils;
 using I2PRouterWeb.Services;
 
@@ -12,10 +10,7 @@ Logging.LogToConsole = true;
 
 // Enable file logging - clear existing log file on startup
 var logFilePath = Path.Combine(Directory.GetCurrentDirectory(), "logs.txt");
-if (File.Exists(logFilePath))
-{
-    File.Delete(logFilePath);
-}
+if (File.Exists(logFilePath)) File.Delete(logFilePath);
 Logging.LogToFile(logFilePath);
 Logging.LogInformation($"Logging to file: {logFilePath}");
 
@@ -41,6 +36,6 @@ app.UseAuthorization();
 
 app.MapStaticAssets();
 app.MapRazorPages()
-   .WithStaticAssets();
+    .WithStaticAssets();
 
 app.Run();

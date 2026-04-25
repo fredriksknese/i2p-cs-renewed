@@ -2,10 +2,8 @@
 
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
 using System.IO;
-using System.Collections;
+using System.Linq;
 
 // [Sektor-chunk storlek: 4 bytes][ 1st sector reserved ]
 //     [Sector typ: 1 byte 0x01 = bitmap]
@@ -24,1075 +22,1002 @@ using System.Collections;
 // bit -> sector: 16 + bit * Sektor-chunk
 // Sector pos -> bit : ( Sector-pos - 16 ) / Sector chunk.
 
-namespace I2PCore.Utils
+namespace I2PCore.Utils;
+
+internal class BitmapSector
 {
-    internal class BitmapSector
+    private readonly int SectorSize;
+    private readonly Store TheStore;
+
+    private BitmapSector NextBitmap;
+
+    private byte[] SectorData;
+
+    public BitmapSector(Store thestore, int ix, int sectorsize)
     {
-        private Store TheStore;
+        if (ix < 0) throw new ArgumentException("Starting sector needed");
 
-        private byte[] SectorData;
+        SectorSize = sectorsize;
+        Ix = ix;
+        TheStore = thestore;
 
-        private int SectorSize;
+        Load();
+    }
 
-        private int StoreIx = -1; // -1 Not initialized
+    internal int Ix { get; set; } = -1;
 
-        internal int Ix
+    internal int BitsPerSector => SectorData.Length * 8;
+    internal int TotalBitCount => NextBitmap != null ? NextBitmap.TotalBitCount + BitsPerSector : BitsPerSector;
+
+    public bool this[int ix]
+    {
+        get
         {
-            get { return StoreIx; }
-            set { StoreIx = value; }
-        }
-
-        private BitmapSector NextBitmap = null;
-
-        public BitmapSector( Store thestore, int ix, int sectorsize )
-        {
-            if ( ix < 0 ) throw new ArgumentException( "Starting sector needed" );
-
-            SectorSize = sectorsize;
-            Ix = ix;
-            TheStore = thestore;
-
-            Load();
-        }
-
-        private void Load()
-        {
-            if ( TheStore.TheFile.Length >= BitmapToPos( Ix + 1 ) )
+            if (ix >= BitsPerSector)
             {
-                TheStore.TheFile.Position = BitmapToPos( Ix );
+                if (NextBitmap == null)
+                    // Never allocated
+                    return false;
 
-                if ( StreamUtils.ReadInt8( TheStore.TheFile ) != (byte)Store.SectorTypes.Bitmap )
-                {
-                    InitializeBitmapSector();
-                    return;
-                }
-
-				var nextix = StreamUtils.ReadInt32( TheStore.TheFile );
-				SectorData = StreamUtils.Read( TheStore.TheFile, (int)TheStore.SectorDataSize );
-
-                if ( nextix != Store.LastSectorInChainTag )
-                {
-                    NextBitmap = new BitmapSector( TheStore, nextix, SectorSize );
-                }
-                else
-                {
-                    NextBitmap = null;
-                }
+                return NextBitmap[ix - BitsPerSector];
             }
-            else
+
+            return ((SectorData[ix / 8] >> (ix % 8)) & 0x01) != 0;
+        }
+        set
+        {
+            if (ix >= BitsPerSector)
+            {
+                if (NextBitmap == null)
+                {
+                    if (!value) return; // Already not unallocated
+
+                    throw new NullReferenceException("Bitmap should always be pre allocated!");
+                }
+
+                NextBitmap[ix - BitsPerSector] = value;
+                return;
+            }
+
+            var offset = ix / 8;
+            var bit = ix % 8;
+            var mask = 0x01 << bit;
+            var result = (byte)((SectorData[offset] & ~mask) | (value ? mask : 0));
+            SectorData[offset] = result;
+
+            TheStore.TheFile.Position = BitmapToPos(Ix) + Store.SectorHeaderSize + offset;
+            TheStore.TheFile.WriteByte(result);
+        }
+    }
+
+    private void Load()
+    {
+        if (TheStore.TheFile.Length >= BitmapToPos(Ix + 1))
+        {
+            TheStore.TheFile.Position = BitmapToPos(Ix);
+
+            if (StreamUtils.ReadInt8(TheStore.TheFile) != (byte)Store.SectorTypes.Bitmap)
             {
                 InitializeBitmapSector();
+                return;
             }
+
+            var nextix = StreamUtils.ReadInt32(TheStore.TheFile);
+            SectorData = StreamUtils.Read(TheStore.TheFile, (int)TheStore.SectorDataSize);
+
+            if (nextix != Store.LastSectorInChainTag)
+                NextBitmap = new BitmapSector(TheStore, nextix, SectorSize);
+            else
+                NextBitmap = null;
         }
-
-        private void InitializeBitmapSector()
+        else
         {
-            TheStore.TheFile.Position = BitmapToPos( Ix );
-
-            StreamUtils.WriteUInt8( TheStore.TheFile, (byte)Store.SectorTypes.Bitmap );
-            StreamUtils.WriteInt32( TheStore.TheFile, Store.LastSectorInChainTag );
-            NextBitmap = null;
-
-            SectorData = new byte[(int)TheStore.SectorDataSize];
-            StreamUtils.Write( TheStore.TheFile, SectorData );
+            InitializeBitmapSector();
         }
+    }
 
-        internal int BitsPerSector { get { return SectorData.Length * 8; } }
-        internal int TotalBitCount { get { return NextBitmap != null ? NextBitmap.TotalBitCount + BitsPerSector: BitsPerSector; } }
+    private void InitializeBitmapSector()
+    {
+        TheStore.TheFile.Position = BitmapToPos(Ix);
 
-        public bool this[int ix]
-        {
-            get
-            {
-                if ( ix >= BitsPerSector )
-                {
-                    if ( NextBitmap == null )
-                    {
-                        // Never allocated
-                        return false;
-                    }
+        TheStore.TheFile.WriteUInt8((byte)Store.SectorTypes.Bitmap);
+        TheStore.TheFile.WriteInt32(Store.LastSectorInChainTag);
+        NextBitmap = null;
 
-                    return NextBitmap[ix - BitsPerSector];
-                }
+        SectorData = new byte[(int)TheStore.SectorDataSize];
+        StreamUtils.Write(TheStore.TheFile, SectorData);
+    }
 
-                return ( ( SectorData[ix / 8] >> ( ix % 8 ) ) & 0x01 ) != 0;
-            }
-            set
-            {
-                if ( ix >= BitsPerSector )
-                {
-                    if ( NextBitmap == null )
-                    {
-                        if ( !value ) return; // Already not unallocated
+    internal int ExtendBitmapSpace()
+    {
+        var ix = TotalBitCount;
+        TheStore.TheFile.Position = BitmapToPos(ix);
+        TheStore.TheFile.WriteByte((byte)Store.SectorTypes.Unallocated);
 
-                        throw new NullReferenceException( "Bitmap should always be pre allocated!" );
-                    }
-                    NextBitmap[ix - BitsPerSector] = value;
-                    return;
-                }
-
-                var offset = ix / 8;
-                var bit = ix % 8;
-                var mask = 0x01 << bit;
-                var result = (byte)( ( SectorData[offset] & ( ~mask ) ) | ( value ? mask : 0 ) );
-                SectorData[offset] = result;
-
-                TheStore.TheFile.Position = BitmapToPos( Ix ) + Store.SectorHeaderSize + offset;
-                TheStore.TheFile.WriteByte( result );
-            }
-        }
-
-        internal int ExtendBitmapSpace()
-        {
-            var ix = TotalBitCount;
-            TheStore.TheFile.Position = BitmapToPos( ix );
-            TheStore.TheFile.WriteByte( (byte)Store.SectorTypes.Unallocated );
-
-            var next = new BitmapSector( TheStore, ix, SectorSize );
+        var next = new BitmapSector(TheStore, ix, SectorSize);
 
 #if STORE_DETAILED_TRACE_LOGS
             System.Diagnostics.Debug.WriteLine( "ExtendBitmapSpace: " + ix.ToString() );
 #endif
 
-            // Its now reserving space for itself
-            next[0] = true;
+        // Its now reserving space for itself
+        next[0] = true;
 
-            var lastbitmapsector = TheStore.Bits;
-            while ( lastbitmapsector.NextBitmap != null ) lastbitmapsector = lastbitmapsector.NextBitmap;
-            lastbitmapsector.NextBitmap = next;
-            TheStore.TheFile.Position = BitmapToPos( lastbitmapsector.Ix ) + 1;
-            StreamUtils.WriteInt32( TheStore.TheFile, next.Ix );
+        var lastbitmapsector = TheStore.Bits;
+        while (lastbitmapsector.NextBitmap != null) lastbitmapsector = lastbitmapsector.NextBitmap;
+        lastbitmapsector.NextBitmap = next;
+        TheStore.TheFile.Position = BitmapToPos(lastbitmapsector.Ix) + 1;
+        TheStore.TheFile.WriteInt32(next.Ix);
 
-            return ix;
-        }
+        return ix;
+    }
 
-        internal bool FindFreeSector( out int ix, int offset )
+    internal bool FindFreeSector(out int ix, int offset)
+    {
+        for (var i = 0; i < SectorData.Length; ++i)
         {
-            for ( int i = 0; i < SectorData.Length; ++i )
+            var val = SectorData[i];
+            if (val != 0xff)
             {
-                var val = SectorData[i];
-                if ( val != 0xff )
+                var delta = 0;
+
+                while (true)
                 {
-                    var delta = 0;
-
-                    while( true )
+                    if ((val & 0x01) == 0)
                     {
-                        if ( ( val & 0x01 ) == 0 )
-                        {
-                            ix = offset + i * 8 + delta;
-                            return true;
-                        }
-                        val >>= 1;
-                        ++delta;
-                    };
+                        ix = offset + i * 8 + delta;
+                        return true;
+                    }
+
+                    val >>= 1;
+                    ++delta;
                 }
+
+                ;
             }
-            if ( NextBitmap != null ) return NextBitmap.FindFreeSector( out ix, offset + BitsPerSector );
-
-            ix = -1;
-            return false;
         }
 
-        internal List<BitmapSector> All()
+        if (NextBitmap != null) return NextBitmap.FindFreeSector(out ix, offset + BitsPerSector);
+
+        ix = -1;
+        return false;
+    }
+
+    internal List<BitmapSector> All()
+    {
+        var result = new List<BitmapSector>();
+
+        var next = this;
+        while (next != null)
         {
-            var result = new List<BitmapSector>();
-
-            var next = this;
-            while ( next != null )
-            {
-                result.Add( next );
-                next = next.NextBitmap;
-            }
-
-            return result;
+            result.Add(next);
+            next = next.NextBitmap;
         }
 
-        private long BitmapToPos( int bit )
-        {
-            return BitmapToPos( bit, SectorSize );
-        }
+        return result;
+    }
 
-        private int PosToBitmap( long pos )
-        {
-            return PosToBitmap( pos, SectorSize );
-        }
+    private long BitmapToPos(int bit)
+    {
+        return BitmapToPos(bit, SectorSize);
+    }
 
-        public static long BitmapToPos( int bit, int sectorsize )
-        {
-            var result = ( bit + 1 ) * sectorsize;
+    private int PosToBitmap(long pos)
+    {
+        return PosToBitmap(pos, SectorSize);
+    }
+
+    public static long BitmapToPos(int bit, int sectorsize)
+    {
+        var result = (bit + 1) * sectorsize;
 #if STORE_DETAILED_TRACE_LOGS
             System.Diagnostics.Debug.WriteLine( string.Format( "BitmapToPos: Bit: {0}, sectorsize: {1}, result: {2}", bit, sectorsize, result ) );
 #endif
-            return result;
-        }
+        return result;
+    }
 
-        public static int PosToBitmap( long pos, int sectorsize )
-        {
-            var result = (int)( pos / sectorsize - 1 );
+    public static int PosToBitmap(long pos, int sectorsize)
+    {
+        var result = (int)(pos / sectorsize - 1);
 #if STORE_DETAILED_TRACE_LOGS
             System.Diagnostics.Debug.WriteLine( string.Format( "PosToBitmap: Pos: {0}, sectorsize: {1}, result: {2}", pos, sectorsize, result ) );
 #endif
-            return result;
-        }
+        return result;
+    }
+}
+
+public class Store : IDisposable
+{
+    public delegate bool KeyCheck(byte[] buffer);
+
+    /// <summary>
+    ///     "Allocated" is allocated (reserved in bitmap) but not initialized.
+    /// </summary>
+    [Flags]
+    public enum SectorTypes : byte
+    {
+        Unallocated = 0x00,
+        Bitmap = 0x01,
+        Data = 0x02,
+        Continuation = 0x04,
+        Metadata = 0x08,
+        Allocated = 0xFF
     }
 
-    public class Store: IDisposable
+    public const int MinimumSectorSize = Sector0HeaderSize;
+
+    internal const int Sector0HeaderSize =
+        4 // Sector size
+        + 8; // File format version
+
+    internal const int ReservedSectors = 2;
+    internal const int BitmapStartSector = 0;
+    internal const int MetadataStartSector = 1;
+
+    internal const int LastSectorInChainTag = -1;
+
+    internal const ulong FileFormatVersion = 1;
+    internal const ulong FileFormatMask = 0xF5CFC5F5C5F5CFC5;
+
+    public const int SectorHeaderSize =
+        sizeof(byte) // SectorTypes
+        + sizeof(int); // Next sector index
+
+    public const int FirstSectorHeaderSize =
+        SectorHeaderSize
+        + sizeof(long); // Stream length
+
+    private readonly string Filename;
+
+    private readonly bool OwnsStreamHandle;
+
+    internal BitmapSector Bits;
+    private int Chunksize;
+    private int FreeSectorSearchStartIndex;
+
+    internal Stream TheFile;
+
+    public Store(string filename, int defaultsectorsize)
     {
-        /// <summary>
-        /// "Allocated" is allocated (reserved in bitmap) but not initialized.
-        /// </summary>
-        [Flags]
-        public enum SectorTypes : byte 
-        { 
-            Unallocated = 0x00, 
-            Bitmap = 0x01, 
-            Data = 0x02, 
-            Continuation = 0x04, 
-            Metadata = 0x08, 
-            Allocated = 0xFF 
-        }
+        OwnsStreamHandle = true;
+        Filename = filename;
+        var dest = new FileStream(Filename, FileMode.OpenOrCreate, FileAccess.ReadWrite);
 
-        public delegate bool KeyCheck( byte[] buffer );
+        Initialize(dest, defaultsectorsize);
+    }
 
-        private string Filename;
+    public Store(Stream dest, int defaultsectorsize)
+    {
+        OwnsStreamHandle = false;
+        Filename = null;
 
-        internal Stream TheFile;
-        private int Chunksize;
+        Initialize(dest, defaultsectorsize);
+    }
 
-        internal BitmapSector Bits;
-        private int FreeSectorSearchStartIndex;
+    // First sector in a stream
+    public long FirstSectorDataSize => Chunksize - FirstSectorHeaderSize;
 
-        public const int MinimumSectorSize = Sector0HeaderSize;
+    // Following sectors in a stream
+    public long SectorDataSize => Chunksize - SectorHeaderSize;
 
-        internal const int Sector0HeaderSize = 
-                    4       // Sector size
-                    + 8;    // File format version
+    private void Initialize(Stream dest, int defaultsectorsize)
+    {
+        if (defaultsectorsize > 0 && defaultsectorsize < MinimumSectorSize)
+            throw new Exception($"Minimum chunk size: {MinimumSectorSize} bytes.");
 
-        internal const int ReservedSectors = 2;
-        internal const int BitmapStartSector = 0;
-        internal const int MetadataStartSector = 1;
+        Chunksize = defaultsectorsize <= 0 ? 1024 : defaultsectorsize;
 
-        internal const int LastSectorInChainTag = -1;
+        TheFile = dest;
 
-        internal const ulong FileFormatVersion = 1;
-        internal const ulong FileFormatMask = 0xF5CFC5F5C5F5CFC5;
+        InitializeChunksize();
+        Bits = new BitmapSector(this, BitmapStartSector, Chunksize);
+        FreeSectorSearchStartIndex = ReservedSectors;
 
-        private bool OwnsStreamHandle;
+        InitializeReservedSectors();
+    }
 
-        public Store( string filename, int defaultsectorsize )
+    internal long BitmapToPos(int bit)
+    {
+        return BitmapSector.BitmapToPos(bit, Chunksize);
+    }
+
+    internal long PosToBitmap(int bit)
+    {
+        return BitmapSector.PosToBitmap(bit, Chunksize);
+    }
+
+    private void InitializeChunksize()
+    {
+        if (TheFile.Length < Sector0HeaderSize)
         {
-            OwnsStreamHandle = true;
-            Filename = filename;
-            var dest = new FileStream( Filename, FileMode.OpenOrCreate, FileAccess.ReadWrite );
-
-            Initialize( dest, defaultsectorsize );
-        }
-
-        public Store( Stream dest, int defaultsectorsize )
-        {
-            OwnsStreamHandle = false;
-            Filename = null;
-
-            Initialize( dest, defaultsectorsize );
-        }
-
-        private void Initialize( Stream dest, int defaultsectorsize )
-        {
-            if ( defaultsectorsize > 0 && defaultsectorsize < MinimumSectorSize )
+            if (TheFile.CanWrite)
             {
-                throw new Exception( $"Minimum chunk size: {MinimumSectorSize} bytes." );
-            }
-
-            Chunksize = defaultsectorsize <= 0 ? 1024 : defaultsectorsize;
-
-            TheFile = dest;
-
-            InitializeChunksize();
-            Bits = new BitmapSector( this, BitmapStartSector, Chunksize );
-            FreeSectorSearchStartIndex = ReservedSectors;
-
-            InitializeReservedSectors();
-        }
-
-        public const int SectorHeaderSize = 
-                            sizeof( byte )      // SectorTypes
-                            + sizeof( int );    // Next sector index
-
-        public const int FirstSectorHeaderSize = 
-                            SectorHeaderSize 
-                            + sizeof( long );   // Stream length
-
-        // First sector in a stream
-        public long FirstSectorDataSize
-        {
-            get
-            {
-                return Chunksize - FirstSectorHeaderSize;
-            }
-        }
-
-        // Following sectors in a stream
-        public long SectorDataSize
-        {
-            get
-            {
-                return Chunksize - SectorHeaderSize;
-            }
-        }
-
-        internal long BitmapToPos( int bit )
-        {
-            return BitmapSector.BitmapToPos( bit, Chunksize );
-        }
-
-        internal long PosToBitmap( int bit )
-        {
-            return BitmapSector.PosToBitmap( bit, Chunksize );
-        }
-
-        private void InitializeChunksize()
-        {
-            if ( TheFile.Length < Sector0HeaderSize )
-            {
-                if ( TheFile.CanWrite )
-                {
-                    TheFile.Position = 0;
-                    TheFile.WriteInt32( Chunksize );
-                    TheFile.WriteUInt64( FileFormatVersion ^ FileFormatMask );
-                }
-                else
-                {
-                    throw new IOException( "Underlying stream have no Write functionality." );
-                }
+                TheFile.Position = 0;
+                TheFile.WriteInt32(Chunksize);
+                TheFile.WriteUInt64(FileFormatVersion ^ FileFormatMask);
             }
             else
             {
-                TheFile.Position = 0;
-				Chunksize = StreamUtils.ReadInt32( TheFile );
-
-                var fileformattag = StreamUtils.ReadUInt64( TheFile );
-                var fileformatversion = fileformattag ^ FileFormatMask;
-
-                if ( fileformatversion != FileFormatVersion )
-                {
-                    throw new IOException( $"File format version {fileformatversion} not supported." );
-                }
+                throw new IOException("Underlying stream have no Write functionality.");
             }
         }
-
-        public void Flush()
+        else
         {
-            TheFile.Flush();
+            TheFile.Position = 0;
+            Chunksize = StreamUtils.ReadInt32(TheFile);
+
+            var fileformattag = StreamUtils.ReadUInt64(TheFile);
+            var fileformatversion = fileformattag ^ FileFormatMask;
+
+            if (fileformatversion != FileFormatVersion)
+                throw new IOException($"File format version {fileformatversion} not supported.");
+        }
+    }
+
+    public void Flush()
+    {
+        TheFile.Flush();
+    }
+
+    private void InitializeReservedSectors()
+    {
+        if (!Bits[BitmapStartSector]) // Start bitmap sector
+        {
+            Bits[BitmapStartSector] = true;
+            TheFile.Position = BitmapToPos(BitmapStartSector);
+            TheFile.WriteUInt8((byte)SectorTypes.Bitmap);
+            TheFile.WriteInt32(LastSectorInChainTag);
         }
 
-        private void InitializeReservedSectors()
+        if (!Bits[MetadataStartSector]) // Start key / metadata sector
         {
-            if ( !Bits[BitmapStartSector] )                 // Start bitmap sector
-            {
-                Bits[BitmapStartSector] = true;
-                TheFile.Position = BitmapToPos( BitmapStartSector );
-				TheFile.WriteUInt8( (byte)SectorTypes.Bitmap );
-				TheFile.WriteInt32( LastSectorInChainTag );
-            }
+            Bits[MetadataStartSector] = true;
+            TheFile.Position = BitmapToPos(MetadataStartSector);
+            TheFile.WriteUInt8((byte)SectorTypes.Metadata);
+            TheFile.WriteInt32(LastSectorInChainTag);
+            TheFile.WriteUInt64(0L); // Might be size :P
+        }
+    }
 
-            if ( !Bits[MetadataStartSector] )                 // Start key / metadata sector
-            {
-                Bits[MetadataStartSector] = true;
-                TheFile.Position = BitmapToPos( MetadataStartSector );
-				TheFile.WriteUInt8( (byte)SectorTypes.Metadata );
-				TheFile.WriteInt32( LastSectorInChainTag );
-				TheFile.WriteUInt64( 0L ); // Might be size :P
-            }
+    public long GetDataLength(int ix)
+    {
+        if (!Bits[ix]) return 0; // Free
+
+        TheFile.Position = BitmapToPos(ix);
+
+        var sectortype = StreamUtils.ReadInt8(TheFile);
+        if ((SectorTypes)sectortype != SectorTypes.Data) return 0;
+
+        var nextsector = StreamUtils.ReadInt32(TheFile);
+        return StreamUtils.ReadInt64(TheFile);
+    }
+
+    internal int AllocateFreeSector()
+    {
+        int freesector;
+        if (!Bits.FindFreeSector(out freesector, 0))
+        {
+            Bits.ExtendBitmapSpace();
+
+            if (!Bits.FindFreeSector(out freesector, 0))
+                throw new InternalBufferOverflowException("You have found a bug in this class");
         }
 
-        public long GetDataLength( int ix )
-        {
-            if ( !Bits[ix] ) return 0; // Free
+        Bits[freesector] = true;
+        FreeSectorSearchStartIndex = freesector + 1;
 
-            TheFile.Position = BitmapToPos( ix );
-
-			var sectortype = StreamUtils.ReadInt8( TheFile );
-            if ( (Store.SectorTypes)sectortype != Store.SectorTypes.Data ) return 0;
-
-			var nextsector = StreamUtils.ReadInt32( TheFile );
-			return StreamUtils.ReadInt64( TheFile );
-        }
-
-        internal int AllocateFreeSector()
-        {
-            int freesector;
-            if ( !Bits.FindFreeSector( out freesector, 0 ) )
-            {
-                Bits.ExtendBitmapSpace();
-
-                if ( !Bits.FindFreeSector( out freesector, 0 ) )
-                {
-                    throw new InternalBufferOverflowException( "You have found a bug in this class" );
-                }
-            }
-
-            Bits[freesector] = true;
-            FreeSectorSearchStartIndex = freesector + 1;
-
-            TheFile.Position = BitmapToPos( freesector );
-            TheFile.WriteByte( (byte)Store.SectorTypes.Allocated );
+        TheFile.Position = BitmapToPos(freesector);
+        TheFile.WriteByte((byte)SectorTypes.Allocated);
 
 #if STORE_DETAILED_TRACE_LOGS
             System.Diagnostics.Debug.WriteLine( "AllocateFreeSector: " + freesector.ToString() );
 #endif
-            return freesector;
-        }
+        return freesector;
+    }
 
-        public int Next( int previx )
-        {
-            for ( int i = previx + 1; i < Bits.TotalBitCount; ++i )
+    public int Next(int previx)
+    {
+        for (var i = previx + 1; i < Bits.TotalBitCount; ++i)
+            if (Bits[i])
             {
-                if ( Bits[i] )
-                {
-                    TheFile.Position = BitmapToPos( i );
-                    if ( (Store.SectorTypes)TheFile.ReadByte() == Store.SectorTypes.Data ) return i;
-                }
+                TheFile.Position = BitmapToPos(i);
+                if ((SectorTypes)TheFile.ReadByte() == SectorTypes.Data) return i;
             }
 
-            return -1;
+        return -1;
+    }
+
+    public void Delete(int ix)
+    {
+        if (ix < ReservedSectors) throw new Exception("Cannot delete reserved indexes!");
+        if (!Bits[ix]) return;
+
+        TheFile.Position = BitmapToPos(ix);
+
+        var sectortype = (SectorTypes)StreamUtils.ReadInt8(TheFile);
+        if (sectortype != SectorTypes.Data) throw new Exception("Index is not pointing to a data index!");
+
+        DeleteFrom(ix);
+    }
+
+    /// <summary>
+    ///     Truncate the link of sectors starting with sector ix. The sector refering to sector ix (if any) will not be
+    ///     updated.
+    /// </summary>
+    /// <param name="ix"></param>
+    protected void DeleteFrom(int ix)
+    {
+        Bits[ix] = false;
+        if (FreeSectorSearchStartIndex > ix) FreeSectorSearchStartIndex = ix;
+
+        TheFile.Position = BitmapToPos(ix);
+        TheFile.WriteUInt8((byte)SectorTypes.Unallocated);
+        var nextsector = StreamUtils.ReadInt32(TheFile);
+
+        while (nextsector != LastSectorInChainTag)
+        {
+            Bits[nextsector] = false;
+            if (FreeSectorSearchStartIndex > nextsector) FreeSectorSearchStartIndex = nextsector;
+
+            TheFile.Position = BitmapToPos(nextsector);
+            TheFile.WriteUInt8((byte)SectorTypes.Unallocated);
+            nextsector = StreamUtils.ReadInt32(TheFile);
+        }
+    }
+
+    public void Delete(IEnumerable<int> ixs)
+    {
+        foreach (var ix in ixs) Delete(ix);
+    }
+
+    public StoreStream IndexStream()
+    {
+        return IndexStream(0L);
+    }
+
+    public StoreStream IndexStream(long offset)
+    {
+        var ix = AllocateFreeSector();
+
+        TheFile.Position = BitmapToPos(ix);
+        TheFile.WriteUInt8((byte)SectorTypes.Data);
+        TheFile.WriteInt32(LastSectorInChainTag);
+        TheFile.WriteInt64(0L);
+
+        return new StoreStream(this, ix, offset);
+    }
+
+    public StoreStream IndexStream(bool reservefirstsector)
+    {
+        var ix = AllocateFreeSector();
+
+        TheFile.Position = BitmapToPos(ix);
+        TheFile.WriteUInt8((byte)SectorTypes.Data);
+        TheFile.WriteInt32(LastSectorInChainTag);
+        TheFile.WriteInt64(0L);
+
+        return new StoreStream(this, ix, reservefirstsector);
+    }
+
+    public StoreStream IndexStream(int ix)
+    {
+        return new StoreStream(this, ix);
+    }
+
+    public StoreStream IndexStream(int ix, long offset)
+    {
+        return new StoreStream(this, ix, offset);
+    }
+
+    public StoreStream IndexStream(int ix, bool reservefirstsector)
+    {
+        return new StoreStream(this, ix, reservefirstsector);
+    }
+
+    public IList<KeyValuePair<int, byte[]>> ReadAll()
+    {
+        var result = new List<KeyValuePair<int, byte[]>>();
+
+        var ix = ReservedSectors - 1;
+        while ((ix = Next(ix)) > 0) result.Add(new KeyValuePair<int, byte[]>(ix, Read(ix)));
+
+        return result;
+    }
+
+    public byte[] Read(int ix)
+    {
+        return Read(ix, -1);
+    }
+
+    public byte[] Read(int ix, long maxlen)
+    {
+        if (ix < ReservedSectors) throw new Exception("Reading of non-data sectors.");
+
+        return ReadInternal(ix, maxlen);
+    }
+
+    public byte[] ReadMetadataIndex()
+    {
+        return ReadInternal(MetadataStartSector, -1);
+    }
+
+    public byte[] ReadMetadataIndex(long maxlen)
+    {
+        return ReadInternal(MetadataStartSector, maxlen);
+    }
+
+    private byte[] ReadInternal(int ix, long maxlen)
+    {
+        TheFile.Position = BitmapToPos(ix);
+
+        var sectortype = (SectorTypes)StreamUtils.ReadInt8(TheFile);
+        if (sectortype != SectorTypes.Data) throw new Exception("Trying to read in non data area");
+        var nextsector = StreamUtils.ReadInt32(TheFile);
+        var totallen = StreamUtils.ReadInt64(TheFile);
+
+        if (maxlen > 0) totallen = Math.Min(totallen, maxlen);
+
+        var result = new byte[totallen];
+        var resultpos = 0;
+        var buflen = FirstSectorDataSize;
+
+        while (resultpos < totallen)
+        {
+            var len = (int)Math.Min(totallen - resultpos, buflen);
+            var readlen = TheFile.Read(result, resultpos, len);
+
+            if (nextsector == LastSectorInChainTag)
+            {
+                var curlen = resultpos + readlen;
+                if (totallen > curlen)
+                {
+                    Logging.LogWarning("Store: Warning! Stored length of the chain is faulty!");
+                    return result.Copy(0, curlen);
+                }
+
+                break;
+            }
+
+            TheFile.Position = BitmapToPos(nextsector);
+
+            var stype = (SectorTypes)StreamUtils.ReadInt8(TheFile);
+            if (stype != SectorTypes.Continuation) throw new Exception("Trying to read in non data area");
+            nextsector = StreamUtils.ReadInt32(TheFile);
+
+            resultpos += readlen;
+            buflen = SectorDataSize;
         }
 
-        public void Delete( int ix )
+        return result;
+    }
+
+    public void Write(byte[] data, int ix)
+    {
+        if (ix < ReservedSectors) throw new Exception("Writing of non-data sectors.");
+        WriteInternal(new I2PByteBlock[] { new(data) }, ix);
+    }
+
+    public void Write(IEnumerable<I2PByteBlock> datasectors, int ix)
+    {
+        if (ix < ReservedSectors) throw new Exception("Writing of non-data sectors.");
+        WriteInternal(datasectors, ix);
+    }
+
+    private void WriteInternal(IEnumerable<I2PByteBlock> datablocks, int ix)
+    {
+        var thissector = ix;
+
+        if (!Bits[ix]) throw new Exception("Cannot update an unallocated sector!");
+        TheFile.Position = BitmapToPos(thissector);
+
+        if ((SectorTypes)StreamUtils.ReadInt8(TheFile) != SectorTypes.Data)
+            throw new Exception("Trying to write in non data area");
+        var nextsector = StreamUtils.ReadInt32(TheFile);
+        TheFile.WriteInt64(datablocks.Sum(r => (long)r.Length));
+
+        var sectorspaceleft = FirstSectorDataSize;
+
+        foreach (var datab in datablocks)
         {
-            if ( ix < ReservedSectors ) throw new Exception( "Cannot delete reserved indexes!" );
-            if ( !Bits[ix] ) return;
+            var data = new I2PBufferCursor(datab);
 
-            TheFile.Position = BitmapToPos( ix );
+            while (data.Remaining > 0)
+            {
+                var len = (int)Math.Min(data.Remaining, sectorspaceleft);
+                TheFile.Write(data.BaseArray, data.BaseArrayOffset, len);
 
-			var sectortype = (Store.SectorTypes)StreamUtils.ReadInt8( TheFile );
-            if ( sectortype != Store.SectorTypes.Data ) throw new Exception( "Index is not pointing to a data index!" );
+                data.Seek(len);
+                sectorspaceleft -= len;
 
-            DeleteFrom( ix );
+                if (data.Remaining == 0) break;
+
+                if (sectorspaceleft == 0)
+                {
+                    if (nextsector != LastSectorInChainTag)
+                    {
+                        if (!Bits[nextsector]) throw new Exception("Cannot update an unallocated sector!");
+                        TheFile.Position = BitmapToPos(nextsector);
+
+                        if ((SectorTypes)StreamUtils.ReadInt8(TheFile) != SectorTypes.Continuation)
+                            throw new Exception("Trying to update a sector outside of the allocated sector chain!");
+
+                        thissector = nextsector;
+                        nextsector = StreamUtils.ReadInt32(TheFile);
+                    }
+                    else
+                    {
+                        thissector = ExtendLastSector(thissector);
+                        nextsector = LastSectorInChainTag;
+                    }
+
+                    sectorspaceleft = SectorDataSize;
+                }
+            }
+        }
+    }
+
+    public int Write(byte[] data)
+    {
+        return WriteInternal(new I2PByteBlock[] { new(data) });
+    }
+
+    public int Write(IEnumerable<I2PByteBlock> datasectors)
+    {
+        return WriteInternal(datasectors);
+    }
+
+    private int WriteInternal(IEnumerable<I2PByteBlock> datablocks)
+    {
+        var result = 0;
+
+        var thissector = AllocateFreeSector();
+
+        TheFile.Position = BitmapToPos(thissector);
+        TheFile.WriteUInt8((byte)SectorTypes.Data);
+        TheFile.WriteInt32(LastSectorInChainTag);
+        TheFile.WriteInt64(datablocks.Sum(r => (long)r.Length));
+
+        result = thissector;
+
+        var sectorspaceleft = FirstSectorDataSize;
+
+        foreach (var datab in datablocks)
+        {
+            var data = new I2PBufferCursor(datab);
+
+            while (data.Remaining > 0)
+            {
+                var len = (int)Math.Min(data.Remaining, sectorspaceleft);
+                TheFile.Write(data.BaseArray, data.BaseArrayOffset, len);
+
+                data.Seek(len);
+                sectorspaceleft -= len;
+
+                if (data.Remaining == 0) break;
+
+                if (sectorspaceleft == 0)
+                {
+                    var nextsector = ExtendLastSector(thissector);
+
+                    thissector = nextsector;
+                    sectorspaceleft = SectorDataSize;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private int ExtendLastSector(int thissector)
+    {
+        var nextsector = AllocateFreeSector();
+
+#if DEBUG
+        TheFile.Position = BitmapToPos(thissector) + 1;
+        var ns = StreamUtils.ReadInt32(TheFile);
+        if (ns != LastSectorInChainTag) throw new ArgumentException("Store: Sector passed is not last in chain!");
+#endif
+        TheFile.Position = BitmapToPos(thissector) + 1;
+        TheFile.WriteInt32(nextsector);
+
+        TheFile.Position = BitmapToPos(nextsector);
+        TheFile.WriteUInt8((byte)SectorTypes.Continuation);
+        TheFile.WriteInt32(LastSectorInChainTag);
+        return nextsector;
+    }
+
+    public IList<KeyValuePair<int, byte[]>> GetMatching(KeyCheck eval, int bytes)
+    {
+        var result = new List<KeyValuePair<int, byte[]>>();
+
+        var ix = ReservedSectors - 1;
+        while ((ix = Next(ix)) > 0)
+        {
+            var one = Read(ix, bytes);
+            if (eval(one))
+                result.Add(new KeyValuePair<int, byte[]>(ix, Read(ix)));
+        }
+
+        return result;
+    }
+
+    public IList<int> GetMatchingIx(KeyCheck eval, int bytes)
+    {
+        var result = new List<int>();
+
+        var ix = ReservedSectors - 1;
+        while ((ix = Next(ix)) > 0)
+        {
+            var one = Read(ix, bytes);
+            if (eval(one)) result.Add(ix);
+        }
+
+        return result;
+    }
+
+    #region Stream
+
+    public class StoreStream : Stream, IDisposable
+    {
+        private readonly long PositionOffset;
+
+        private long CurrentLength;
+
+        private long CurrentPosition;
+
+        private List<int> Sectors = new();
+        private Store TheStore;
+
+        public StoreStream(Store store, int ix, bool reseverfirstsector)
+            : this(store, ix, reseverfirstsector ? store.FirstSectorDataSize : 0L)
+        {
+        }
+
+        public StoreStream(Store store, int ix)
+            : this(store, ix, 0L)
+        {
+        }
+
+        public StoreStream(Store store, int ix, long offset)
+        {
+            TheStore = store;
+            StoreIndex = ix;
+
+            if (offset < 0) throw new ArgumentException("offset must be >= 0!");
+            PositionOffset = offset;
+
+            var file = TheStore.TheFile;
+
+            // Get current state
+            file.Position = TheStore.BitmapToPos(ix);
+
+            var sectortype = (SectorTypes)StreamUtils.ReadInt8(file);
+            if (sectortype != SectorTypes.Data) throw new Exception("Trying to read in non data area");
+            var nextsector = StreamUtils.ReadInt32(file);
+            var currentLength = StreamUtils.ReadInt64(file);
+
+            while (sectortype == SectorTypes.Data || sectortype == SectorTypes.Continuation)
+            {
+                Sectors.Add(ix);
+
+                if (nextsector == LastSectorInChainTag) break;
+                file.Position = TheStore.BitmapToPos(nextsector);
+                ix = nextsector;
+
+                sectortype = (SectorTypes)StreamUtils.ReadInt8(file);
+                if (sectortype != SectorTypes.Data && sectortype != SectorTypes.Continuation)
+                    throw new Exception("Trying to read in non data area");
+                nextsector = StreamUtils.ReadInt32(file);
+            }
+        }
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => true;
+
+        public override bool CanWrite => true;
+
+        public int StoreIndex { get; }
+
+        private int CurrentSector => GetSectorFromPosition(CurrentPosition);
+
+        private int CurrentSectorOffset => GetSectorOffsetFromPosition(CurrentPosition);
+        public override long Length => CurrentLength;
+
+        public override long Position
+        {
+            get => CurrentPosition;
+            set => CurrentPosition = value;
+        }
+
+        public override void Flush()
+        {
+            TheStore.Flush();
+        }
+
+        internal int GetSectorFromPosition(long pos)
+        {
+            if (pos + PositionOffset < TheStore.FirstSectorDataSize) return Sectors[0];
+
+            return Sectors[
+                1 + (int)Math.Floor((pos + PositionOffset - TheStore.FirstSectorDataSize) /
+                                    (float)TheStore.SectorDataSize)];
         }
 
         /// <summary>
-        /// Truncate the link of sectors starting with sector ix. The sector refering to sector ix (if any) will not be updated.
+        ///     Returns the offset of the stream data position relative the sector start.
         /// </summary>
-        /// <param name="ix"></param>
-        protected void DeleteFrom( int ix )
+        /// <param name="pos"></param>
+        /// <returns></returns>
+        internal int GetSectorOffsetFromPosition(long pos)
         {
-            Bits[ix] = false;
-            if ( FreeSectorSearchStartIndex > ix ) FreeSectorSearchStartIndex = ix;
+            if (pos + PositionOffset < TheStore.FirstSectorDataSize)
+                return (int)(pos + PositionOffset) + FirstSectorHeaderSize;
 
-            TheFile.Position = BitmapToPos( ix );
-            StreamUtils.WriteUInt8( TheFile, (byte)SectorTypes.Unallocated );
-            var nextsector = StreamUtils.ReadInt32( TheFile );
+            return (int)((pos + PositionOffset - TheStore.FirstSectorDataSize) % TheStore.SectorDataSize) +
+                   SectorHeaderSize;
+        }
 
-            while ( nextsector != LastSectorInChainTag )
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            switch (origin)
             {
-                Bits[nextsector] = false;
-                if ( FreeSectorSearchStartIndex > nextsector ) FreeSectorSearchStartIndex = nextsector;
-
-                TheFile.Position = BitmapToPos( nextsector );
-                StreamUtils.WriteUInt8( TheFile, (byte)SectorTypes.Unallocated );
-                nextsector = StreamUtils.ReadInt32( TheFile );
-            }
-        }
-
-        public void Delete( IEnumerable<int> ixs )
-        {
-            foreach ( var ix in ixs )
-            {
-                Delete( ix );
-            }
-        }
-
-        public StoreStream IndexStream()
-        {
-            return IndexStream( 0L );
-        }
-
-        public StoreStream IndexStream( long offset )
-        {
-            var ix = AllocateFreeSector();
-
-            TheFile.Position = BitmapToPos( ix );
-            TheFile.WriteUInt8( (byte)Store.SectorTypes.Data );
-            TheFile.WriteInt32( LastSectorInChainTag );
-            TheFile.WriteInt64( 0L );
-
-            return new StoreStream( this, ix, offset );
-        }
-
-        public StoreStream IndexStream( bool reservefirstsector )
-        {
-            var ix = AllocateFreeSector();
-
-            TheFile.Position = BitmapToPos( ix );
-            TheFile.WriteUInt8( (byte)Store.SectorTypes.Data );
-            TheFile.WriteInt32( LastSectorInChainTag );
-            TheFile.WriteInt64( 0L );
-
-            return new StoreStream( this, ix, reservefirstsector );
-        }
-
-        public StoreStream IndexStream( int ix )
-        {
-            return new StoreStream( this, ix );
-        }
-
-        public StoreStream IndexStream( int ix, long offset )
-        {
-            return new StoreStream( this, ix, offset );
-        }
-
-        public StoreStream IndexStream( int ix, bool reservefirstsector )
-        {
-            return new StoreStream( this, ix, reservefirstsector );
-        }
-
-        public IList<KeyValuePair<int, byte[]>> ReadAll()
-        {
-            var result = new List<KeyValuePair<int,byte[]>>();
-
-            var ix = ReservedSectors - 1;
-            while ( ( ix = Next( ix ) ) > 0 )
-            {
-                result.Add( new KeyValuePair<int, byte[]>( ix, Read( ix ) ) );
-            }
-
-            return result;
-        }
-
-        public byte[] Read( int ix )
-        {
-            return Read( ix, -1 );
-        }
-
-        public byte[] Read( int ix, long maxlen )
-        {
-            if ( ix < ReservedSectors ) throw new Exception( "Reading of non-data sectors." );
-
-            return ReadInternal( ix, maxlen );
-        }
-
-        public byte[] ReadMetadataIndex()
-        {
-            return ReadInternal( MetadataStartSector, -1 );
-        }
-
-        public byte[] ReadMetadataIndex( long maxlen )
-        {
-            return ReadInternal( MetadataStartSector, maxlen );
-        }
-
-        private byte[] ReadInternal( int ix, long maxlen )
-        {
-            TheFile.Position = BitmapToPos( ix );
-
-			var sectortype = (Store.SectorTypes)StreamUtils.ReadInt8( TheFile );
-            if ( sectortype != Store.SectorTypes.Data ) throw new Exception( "Trying to read in non data area" );
-			var nextsector = StreamUtils.ReadInt32( TheFile );
-			var totallen = StreamUtils.ReadInt64( TheFile );
-
-            if ( maxlen > 0 ) totallen = Math.Min( totallen, maxlen );
-            
-            var result = new byte[totallen];
-            var resultpos = 0;
-            var buflen = FirstSectorDataSize;
-
-            while ( resultpos < totallen )
-            {
-                var len = (int)Math.Min( totallen - resultpos, buflen );
-				var readlen = TheFile.Read( result, resultpos, len );
-
-                if ( nextsector == LastSectorInChainTag )
-                {
-                    var curlen = resultpos + readlen;
-                    if ( totallen > curlen )
-                    {
-                        Logging.LogWarning( "Store: Warning! Stored length of the chain is faulty!" );
-                        return result.Copy( 0, curlen );
-                    }
+                case SeekOrigin.Begin:
+                    Position = offset;
                     break;
-                }
-                TheFile.Position = BitmapToPos( nextsector );
 
-                var stype = (Store.SectorTypes)StreamUtils.ReadInt8( TheFile );
-				if ( stype != Store.SectorTypes.Continuation ) throw new Exception( "Trying to read in non data area" );
-				nextsector = StreamUtils.ReadInt32( TheFile );
+                case SeekOrigin.Current:
+                    Position = Position + offset;
+                    break;
 
-                resultpos += readlen;
-                buflen = SectorDataSize;
+                case SeekOrigin.End:
+                    Position = Length + offset - 1;
+                    break;
             }
 
-            return result;
+            return Position;
         }
 
-        public void Write( byte[] data, int ix )
+        public override int Read(byte[] buffer, int offset, int maxlen)
         {
-            if ( ix < ReservedSectors ) throw new Exception( "Writing of non-data sectors." );
-            WriteInternal( new I2PByteBlock[] { new( data ) }, ix );
-        }
+            var totallen = (int)Math.Min(buffer.Length - offset, Math.Min(Length - Position, maxlen));
 
-        public void Write( IEnumerable<I2PByteBlock> datasectors, int ix )
-        {
-            if ( ix < ReservedSectors ) throw new Exception( "Writing of non-data sectors." );
-            WriteInternal( datasectors, ix );
-        }
+            var resultpos = offset;
+            var readlensum = 0L;
 
-        private void WriteInternal( IEnumerable<I2PByteBlock> datablocks, int ix )
-        {
-            var thissector = ix;
-
-            if ( !Bits[ix] ) throw new Exception( "Cannot update an unallocated sector!" );
-            TheFile.Position = BitmapToPos( thissector );
-
-			if ( (Store.SectorTypes)StreamUtils.ReadInt8( TheFile ) != Store.SectorTypes.Data ) throw new Exception( "Trying to write in non data area" );
-			var nextsector = StreamUtils.ReadInt32( TheFile );
-            TheFile.WriteInt64( datablocks.Sum( r => (long)r.Length ) );
-
-            var sectorspaceleft = FirstSectorDataSize;
-
-            foreach ( var datab in datablocks )
+            while (readlensum < totallen)
             {
-                var data = new I2PBufferCursor( datab );
-
-                while ( data.Remaining > 0 )
+                while (TheStore.Chunksize - CurrentSectorOffset > 0 && readlensum < totallen)
                 {
-                    var len = (int)Math.Min( data.Remaining, sectorspaceleft );
-                    TheFile.Write( data.BaseArray, data.BaseArrayOffset, len );
+                    TheStore.TheFile.Position = TheStore.BitmapToPos(CurrentSector) + CurrentSectorOffset;
 
-                    data.Seek( len );
-                    sectorspaceleft -= len;
+                    var len = (int)Math.Min(TheStore.Chunksize - CurrentSectorOffset, totallen - readlensum);
+                    var readlen = TheStore.TheFile.Read(buffer, resultpos, len);
 
-                    if ( data.Remaining == 0 ) break;
-
-                    if ( sectorspaceleft == 0 )
-                    {
-                        if ( nextsector != LastSectorInChainTag )
-                        {
-                            if ( !Bits[nextsector] ) throw new Exception( "Cannot update an unallocated sector!" );
-                            TheFile.Position = BitmapToPos( nextsector );
-
-                            if ( (Store.SectorTypes)StreamUtils.ReadInt8( TheFile ) != Store.SectorTypes.Continuation )
-                                throw new Exception( "Trying to update a sector outside of the allocated sector chain!" );
-
-                            thissector = nextsector;
-                            nextsector = StreamUtils.ReadInt32( TheFile );
-                        }
-                        else
-                        {
-                            thissector = ExtendLastSector( thissector );
-                            nextsector = LastSectorInChainTag;
-                        }
-
-                        sectorspaceleft = SectorDataSize;
-                    }
+                    Position += readlen;
+                    resultpos += readlen;
+                    readlensum += readlen;
                 }
+
+                TheStore.TheFile.Position = TheStore.BitmapToPos(CurrentSector) + CurrentSectorOffset;
+            }
+
+            return totallen;
+        }
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            var writelen = Math.Min(count, buffer.Length - offset);
+            var spaceneeded = Position + writelen;
+            if (spaceneeded > Length) SetLength(spaceneeded);
+
+            while (writelen > 0)
+            {
+                TheStore.TheFile.Position = TheStore.BitmapToPos(CurrentSector) + CurrentSectorOffset;
+
+                var len = Math.Min(TheStore.Chunksize - CurrentSectorOffset, writelen);
+                TheStore.TheFile.Write(buffer, offset, len);
+
+                offset += len;
+                writelen -= len;
+                Position += len;
             }
         }
 
-        public int Write( byte[] data )
+        public override void SetLength(long value)
         {
-            return WriteInternal( new I2PByteBlock[] { new( data ) } );
-        }
+            if (value == Length) return;
 
-        public int Write( IEnumerable<I2PByteBlock> datasectors )
-        {
-            return WriteInternal( datasectors );
-        }
-
-        private int WriteInternal( IEnumerable<I2PByteBlock> datablocks )
-        {
-            int result = 0;
-
-            var thissector = AllocateFreeSector();
-
-            TheFile.Position = BitmapToPos( thissector );
-			TheFile.WriteUInt8( (byte)Store.SectorTypes.Data );
-			TheFile.WriteInt32( LastSectorInChainTag );
-            TheFile.WriteInt64( datablocks.Sum( r => (long)r.Length ) );
-
-            result = thissector;
-
-            var sectorspaceleft = FirstSectorDataSize;
-
-            foreach ( var datab in datablocks )
+            if (value > Length)
             {
-                var data = new I2PBufferCursor( datab );
-
-                while ( data.Remaining > 0 )
+                while (value > Length)
                 {
-                    var len = (int)Math.Min( data.Remaining, sectorspaceleft );
-                    TheFile.Write( data.BaseArray, data.BaseArrayOffset, len );
+                    var newix = TheStore.AllocateFreeSector();
+                    if (newix < 0) throw new IOException("Unable to grow Store");
+                    Sectors.Add(newix);
 
-                    data.Seek( len );
-                    sectorspaceleft -= len;
+                    CurrentLength += Sectors.Count == 1 ? TheStore.FirstSectorDataSize : TheStore.SectorDataSize;
 
-                    if ( data.Remaining == 0 ) break;
-
-                    if ( sectorspaceleft == 0 )
+                    if (Sectors.Count > 1)
                     {
-                        var nextsector = ExtendLastSector( thissector );
-
-                        thissector = nextsector;
-                        sectorspaceleft = SectorDataSize;
+                        TheStore.TheFile.Position = TheStore.BitmapToPos(Sectors[Sectors.Count - 2]) + 1;
+                        TheStore.TheFile.WriteInt32(newix);
                     }
+
+                    TheStore.TheFile.Position = TheStore.BitmapToPos(newix);
+                    TheStore.TheFile.WriteUInt8(
+                        (byte)(Sectors.Count == 1 ? SectorTypes.Data : SectorTypes.Continuation));
+                    TheStore.TheFile.WriteInt32(LastSectorInChainTag);
                 }
             }
-
-            return result;
-        }
-
-        private int ExtendLastSector( int thissector )
-        {
-            var nextsector = AllocateFreeSector();
-
-#if DEBUG
-            TheFile.Position = BitmapToPos( thissector ) + 1;
-            var ns = StreamUtils.ReadInt32( TheFile );
-            if ( ns != LastSectorInChainTag ) throw new ArgumentException( "Store: Sector passed is not last in chain!" );
-#endif
-            TheFile.Position = BitmapToPos( thissector ) + 1;
-            TheFile.WriteInt32( nextsector );
-
-            TheFile.Position = BitmapToPos( nextsector );
-            TheFile.WriteUInt8( (byte)Store.SectorTypes.Continuation );
-            TheFile.WriteInt32( LastSectorInChainTag );
-            return nextsector;
-        }
-
-        public IList<KeyValuePair<int, byte[]>> GetMatching( KeyCheck eval, int bytes )
-        {
-            var result = new List<KeyValuePair<int, byte[]>>();
-
-            var ix = ReservedSectors - 1;
-            while ( ( ix = Next( ix ) ) > 0 )
+            else
             {
-                var one = Read( ix, bytes );
-                if ( eval( one ) )
-                    result.Add( new KeyValuePair<int, byte[]>( ix, Read( ix ) ) );
+                int sectorsneeded;
+
+                if (value <= TheStore.FirstSectorDataSize)
+                    sectorsneeded = 1;
+                else
+                    sectorsneeded = (int)((value - TheStore.FirstSectorDataSize) / TheStore.SectorDataSize + 1);
+
+                if (sectorsneeded < Sectors.Count)
+                {
+                    TheStore.DeleteFrom(Sectors[sectorsneeded]);
+                    while (Sectors.Count > sectorsneeded) Sectors.Remove(Sectors.Count - 1);
+                }
+
+                CurrentLength = value;
             }
 
-            return result;
+            TheStore.TheFile.Position = TheStore.BitmapToPos(Sectors[0]) + SectorHeaderSize;
+            TheStore.TheFile.WriteInt64(Length);
         }
-
-        public IList<int> GetMatchingIx( KeyCheck eval, int bytes )
-        {
-            var result = new List<int>();
-
-            var ix = ReservedSectors - 1;
-            while ( ( ix = Next( ix ) ) > 0 )
-            {
-                var one = Read( ix, bytes );
-                if ( eval( one ) ) result.Add( ix );
-            }
-
-            return result;
-        }
-
 
         #region IDisposable Members
 
-        public void Dispose()
+        public new void Dispose()
         {
-            Dispose( true );
-            GC.SuppressFinalize( this );
+            Dispose(true);
+            base.Dispose();
+            GC.SuppressFinalize(this);
         }
 
-        protected virtual void Dispose( bool disposing )
+        protected override void Dispose(bool disposing)
         {
-            if ( disposing )
+            if (disposing)
             {
                 // free managed resources
-                if ( TheFile != null )
-                {
-                    if ( OwnsStreamHandle ) TheFile.Dispose();
-                    TheFile = null;
-                }
+                Flush();
+                TheStore = null;
+                Sectors = null;
             }
             // free native resources if there are any.
-
-        }
-        #endregion
-
-        #region Stream
-        public class StoreStream : Stream, IDisposable
-        {
-            private Store TheStore;
-            private int Ix;
-
-            private List<int> Sectors = new();
-            private long PositionOffset = 0L;
-
-            public StoreStream( Store store, int ix, bool reseverfirstsector )
-                : this( store, ix, reseverfirstsector ? store.FirstSectorDataSize : 0L )
-            {
-            }
-
-            public StoreStream( Store store, int ix )
-                : this( store, ix, 0L )
-            {
-            }
-
-            public StoreStream( Store store, int ix, long offset )
-            {
-                TheStore = store;
-                Ix = ix;
-
-                if ( offset < 0 ) throw new ArgumentException( "offset must be >= 0!" );
-                PositionOffset = offset;
-
-                var file = TheStore.TheFile;
-
-                // Get current state
-                file.Position = TheStore.BitmapToPos( ix );
-
-                var sectortype = (Store.SectorTypes)StreamUtils.ReadInt8( file );
-                if ( sectortype != Store.SectorTypes.Data ) throw new Exception( "Trying to read in non data area" );
-                var nextsector = StreamUtils.ReadInt32( file );
-                var currentLength = StreamUtils.ReadInt64( file );
-
-                while ( sectortype == SectorTypes.Data || sectortype == SectorTypes.Continuation )
-                {
-                    Sectors.Add( ix );
-
-                    if ( nextsector == LastSectorInChainTag ) break;
-                    file.Position = TheStore.BitmapToPos( nextsector );
-                    ix = nextsector;
-
-                    sectortype = (Store.SectorTypes)StreamUtils.ReadInt8( file );
-                    if ( sectortype != Store.SectorTypes.Data && sectortype != SectorTypes.Continuation ) 
-                        throw new Exception( "Trying to read in non data area" );
-                    nextsector = StreamUtils.ReadInt32( file );
-                }
-            }
-
-            public override bool CanRead
-            {
-                get { return true; }
-            }
-
-            public override bool CanSeek
-            {
-                get { return true; }
-            }
-
-            public override bool CanWrite
-            {
-                get { return true; }
-            }
-
-            public override void Flush()
-            {
-                TheStore.Flush();
-            }
-
-            public int StoreIndex
-            {
-                get
-                {
-                    return Ix;
-                }
-            }
-
-            internal int GetSectorFromPosition( long pos )
-            {
-                if ( ( pos + PositionOffset ) < TheStore.FirstSectorDataSize )
-                {
-                    return Sectors[0];
-                }
-                else
-                {
-                    return Sectors[1 + (int)Math.Floor( ( ( pos + PositionOffset ) - TheStore.FirstSectorDataSize ) / (float)TheStore.SectorDataSize )];
-                }
-            }
-
-            private int CurrentSector
-            {
-                get
-                {
-                    return GetSectorFromPosition( CurrentPosition );
-                }
-            }
-
-            /// <summary>
-            /// Returns the offset of the stream data position relative the sector start.
-            /// </summary>
-            /// <param name="pos"></param>
-            /// <returns></returns>
-            internal int GetSectorOffsetFromPosition( long pos )
-            {
-                if ( ( pos + PositionOffset ) < TheStore.FirstSectorDataSize )
-                {
-                    return (int)( pos + PositionOffset ) + FirstSectorHeaderSize;
-                }
-                else
-                {
-                    return (int)( ( pos + PositionOffset - TheStore.FirstSectorDataSize ) % TheStore.SectorDataSize ) + SectorHeaderSize;
-                }
-            }
-
-            private int CurrentSectorOffset
-            {
-                get
-                {
-                    return GetSectorOffsetFromPosition( CurrentPosition );
-                }
-            }
-
-            private long CurrentLength = 0;
-            public override long Length
-            {
-                get { return CurrentLength; }
-            }
-
-            private long CurrentPosition = 0;
-            public override long Position
-            {
-                get
-                {
-                    return CurrentPosition;
-                }
-                set
-                {
-                    CurrentPosition = value;
-                }
-            }
-
-            public override long Seek( long offset, SeekOrigin origin )
-            {
-                switch ( origin )
-                {
-                    case SeekOrigin.Begin:
-                        Position = offset;
-                        break;
-
-                    case SeekOrigin.Current:
-                        Position = Position + offset;
-                        break;
-
-                    case SeekOrigin.End:
-                        Position = Length + offset - 1;
-                        break;
-                }
-
-                return Position;
-            }
-
-            public override int Read( byte[] buffer, int offset, int maxlen )
-            {
-                var totallen = (int)Math.Min( buffer.Length - offset, Math.Min( Length - Position, maxlen ) );
-                
-                var resultpos = offset;
-                var readlensum = 0L;
-
-                while ( readlensum < totallen )
-                {
-                    while ( TheStore.Chunksize - CurrentSectorOffset > 0 && readlensum < totallen )
-                    {
-                        TheStore.TheFile.Position = TheStore.BitmapToPos( CurrentSector ) + CurrentSectorOffset;
-
-                        var len = (int)Math.Min( TheStore.Chunksize - CurrentSectorOffset, totallen - readlensum );
-                        var readlen = TheStore.TheFile.Read( buffer, resultpos, len );
-
-                        Position += readlen;
-                        resultpos += readlen;
-                        readlensum += readlen;
-                    }
-
-                    TheStore.TheFile.Position = TheStore.BitmapToPos( CurrentSector ) + CurrentSectorOffset;
-                }
-
-                return totallen;
-            }
-
-            public override void Write( byte[] buffer, int offset, int count )
-            {
-                var writelen = Math.Min( count, buffer.Length - offset );
-                var spaceneeded = Position + writelen;
-                if ( spaceneeded > Length ) SetLength( spaceneeded );
-
-                while ( writelen > 0 )
-                {
-                    TheStore.TheFile.Position = TheStore.BitmapToPos( CurrentSector ) + CurrentSectorOffset;
-
-                    var len = Math.Min( TheStore.Chunksize - CurrentSectorOffset, writelen );
-                    TheStore.TheFile.Write( buffer, offset, len );
-
-                    offset += len;
-                    writelen -= len;
-                    Position += len;
-                }
-            }
-
-            public override void SetLength( long value )
-            {
-                if ( value == Length ) return;
-
-                if ( value > Length )
-                {
-                    while ( value > Length )
-                    {
-                        var newix = TheStore.AllocateFreeSector();
-                        if ( newix < 0 ) throw new IOException( "Unable to grow Store" );
-                        Sectors.Add( newix );
-
-                        CurrentLength += ( Sectors.Count == 1 ) ? TheStore.FirstSectorDataSize : TheStore.SectorDataSize;
-
-                        if ( Sectors.Count > 1 )
-                        {
-                            TheStore.TheFile.Position = TheStore.BitmapToPos( Sectors[Sectors.Count - 2] ) + 1;
-                            TheStore.TheFile.WriteInt32( newix );
-                        }
-
-                        TheStore.TheFile.Position = TheStore.BitmapToPos( newix );
-                        TheStore.TheFile.WriteUInt8( (byte)( Sectors.Count == 1 ? Store.SectorTypes.Data: SectorTypes.Continuation ) );
-                        TheStore.TheFile.WriteInt32( LastSectorInChainTag );
-                    }
-                }
-                else
-                {
-                    int sectorsneeded;
-
-                    if ( value <= TheStore.FirstSectorDataSize )
-                        sectorsneeded = 1;
-                    else
-                        sectorsneeded = (int)( ( value - TheStore.FirstSectorDataSize ) / TheStore.SectorDataSize + 1 );
-
-                    if ( sectorsneeded < Sectors.Count )
-                    {
-                        TheStore.DeleteFrom( Sectors[sectorsneeded] );
-                        while ( Sectors.Count > sectorsneeded ) Sectors.Remove( Sectors.Count - 1 );
-                    }
-
-                    CurrentLength = value;
-                }
-
-                TheStore.TheFile.Position = TheStore.BitmapToPos( Sectors[0] ) + SectorHeaderSize;
-                TheStore.TheFile.WriteInt64( Length );
-            }
-
-            #region IDisposable Members
-
-            public new void Dispose()
-            {
-                Dispose( true );
-                base.Dispose();
-                GC.SuppressFinalize( this );
-            }
-
-            protected override void Dispose( bool disposing )
-            {
-                if ( disposing )
-                {
-                    // free managed resources
-                    Flush();
-                    TheStore = null;
-                    Sectors = null;
-                }
-                // free native resources if there are any.
-
-            }
-            #endregion
         }
 
         #endregion
     }
+
+    #endregion
+
+
+    #region IDisposable Members
+
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (disposing)
+            // free managed resources
+            if (TheFile != null)
+            {
+                if (OwnsStreamHandle) TheFile.Dispose();
+                TheFile = null;
+            }
+        // free native resources if there are any.
+    }
+
+    #endregion
 }

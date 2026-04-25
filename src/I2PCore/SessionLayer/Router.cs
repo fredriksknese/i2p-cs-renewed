@@ -1,832 +1,813 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text;
-using I2PCore.TunnelLayer;
-using I2PCore.Utils;
-using I2PCore.TransportLayer;
-using I2PCore.Data;
 using System.Threading;
+using I2PCore.Client;
+using I2PCore.Crypto;
+using I2PCore.Data;
+using I2PCore.SessionLayer.ECIES;
+using I2PCore.TransportLayer;
+using I2PCore.TunnelLayer;
+using I2PCore.TunnelLayer.I2NP;
 using I2PCore.TunnelLayer.I2NP.Data;
 using I2PCore.TunnelLayer.I2NP.Messages;
+using I2PCore.Utils;
 using static I2PCore.SessionLayer.ClientDestination;
-using System.Collections.Concurrent;
-using I2PCore.Crypto;
 
-namespace I2PCore.SessionLayer
+namespace I2PCore.SessionLayer;
+
+public static class Router
 {
-    public static class Router
+    private static readonly object StartedLock = new();
+
+    private static Thread _worker;
+
+    private static bool _terminated;
+
+    private static readonly ConcurrentDictionary<I2PDestination, ClientDestination> RunningDestinations = new();
+
+    // ECIES router processor for modern garlic messages (lazy-initialized after RouterContext)
+    private static ECIESRouterProcessor _eciesRouterProcessor;
+    public static bool Started { get; private set; }
+
+    public static ClientTunnelProvider ClientTunnelMgr { get; private set; }
+
+    public static TunnelPoolManager ExplorationTunnelMgr { get; private set; }
+
+    public static TransitTunnelProvider TransitTunnelMgr { get; private set; }
+
+    public static FloodfillServer FloodfillServer { get; private set; }
+
+    /// <summary>
+    ///     Graceful shutdown timeout - how long to wait for existing tunnels to drain.
+    ///     i2pd uses up to 10 minutes; we default to 2 minutes for a reasonable balance.
+    /// </summary>
+    public static TimeSpan GracefulShutdownTimeout { get; set; } = TimeSpan.FromMinutes(2);
+
+    public static ECIESRouterProcessor EciesRouterProcessor
     {
-        private static readonly object StartedLock = new();
-        public static bool Started { get; private set; }
-
-        private static ClientTunnelProvider _clientMgr;
-        private static TunnelPoolManager _explorationMgr;
-        private static TransitTunnelProvider _transitTunnelMgr;
-        private static FloodfillServer _floodfillServer;
-
-        public static ClientTunnelProvider ClientTunnelMgr { get => _clientMgr; }
-        public static TunnelPoolManager ExplorationTunnelMgr { get => _explorationMgr; }
-        public static TransitTunnelProvider TransitTunnelMgr { get => _transitTunnelMgr; }
-        public static FloodfillServer FloodfillServer { get => _floodfillServer; }
-
-        private static Thread _worker;
-
-        public static event Action<Ii2NpHeader,InboundTunnel> UnhandledI2NpMessage;
-
-        internal static event Action<DeliveryStatusMessage,InboundTunnel> DeliveryStatusReceived;
-
-        /// <summary>
-        /// Start the router with the current RouterContext settings.
-        /// </summary>
-        public static void Start()
+        get
         {
-            lock ( StartedLock )
-            {
-                if ( Started ) return;
-
+            if (_eciesRouterProcessor == null)
                 try
                 {
-                    var rci = RouterContext.Inst;
-                    NetDb.Start();
-
-                    // Load peer profiles from disk
-                    var profilesDir = Path.Combine( RouterContext.RouterPath, "peerProfiles" );
-                    RouterProfileManager.Instance.LoadAll( profilesDir );
-
-                    Logging.Log( $"I: {RouterContext.Inst.MyRouterInfo}" );
-                    Logging.Log( $"Published: {RouterContext.Inst.Published}" );
-
-                    Logging.Log( "Connecting..." );
-                    TransportProvider.Start();
-                    TunnelProvider.Start();
-
-                    _clientMgr = new ClientTunnelProvider( TunnelProvider.Inst );
-                    _explorationMgr = new TunnelPoolManager( TunnelProvider.Inst );
-                    _transitTunnelMgr = new TransitTunnelProvider( TunnelProvider.Inst );
-
-                    _floodfillServer = new FloodfillServer();
-                    _floodfillServer.DatabaseLookupReceived += ( lookup, from, result ) =>
-                        NetDb.Inst?.InvokeDatabaseLookupReceived( lookup, from, result );
-
-                    if ( rci.FloodfillEnabled )
+                    var ctx = RouterContext.Inst;
+                    if (ctx?.MyRouterIdentity?.IdentHash != null)
                     {
-                        _floodfillServer.Start();
-                    }
-
-                    _worker = new Thread( Run )
-                    {
-                        Name = "Router",
-                        IsBackground = true
-                    };
-                    _worker.Start();
-
-                    NetDb.Inst.IdentHashLookup.LeaseSetReceived += IdentHashLookup_LeaseSetReceived;
-                    NetDb.Inst.IdentHashLookup.LookupFailure += IdentHashLookup_LookupFailure;
-
-                    Started = true;
-                }
-                catch ( Exception ex )
-                {
-                    Logging.Log( ex );
-                }
-            }
-        }
-
-        /// <summary>
-        /// Graceful shutdown timeout - how long to wait for existing tunnels to drain.
-        /// i2pd uses up to 10 minutes; we default to 2 minutes for a reasonable balance.
-        /// </summary>
-        public static TimeSpan GracefulShutdownTimeout { get; set; } = TimeSpan.FromMinutes( 2 );
-
-        /// <summary>
-        /// Reload configuration without full restart.
-        /// Applies changes to bandwidth, floodfill mode, and logging levels.
-        /// Can be triggered by SIGHUP via DaemonHelper.OnReload().
-        /// </summary>
-        /// <summary>
-        /// Reload configuration without full restart.
-        /// Applies changes to bandwidth, router context, and logging levels.
-        /// Can be triggered by SIGHUP via DaemonHelper.OnReload().
-        /// </summary>
-        public static void ReloadConfig()
-        {
-            if ( !Started ) return;
-
-            try
-            {
-                Logging.LogInformation( "Router: Reloading configuration..." );
-
-                // Apply router context settings (bandwidth, ports, etc.)
-                if ( RouterContext.Inst != null )
-                {
-                    RouterContext.Inst.ApplyNewSettings();
-                    Logging.LogInformation( "Router: RouterContext settings reloaded" );
-                }
-
-                // Reload logging settings
-                Logging.ReadAppConfig();
-
-                Logging.LogInformation( "Router: Configuration reloaded successfully" );
-            }
-            catch ( Exception ex )
-            {
-                Logging.LogWarning( $"Router: Config reload failed: {ex.Message}" );
-            }
-        }
-
-        /// <summary>
-        /// Gracefully stop the router and all services.
-        /// Shutdown order: client services -> destinations -> graceful drain -> tunnels -> transports -> netdb
-        /// </summary>
-        public static void Stop()
-        {
-            lock ( StartedLock )
-            {
-                if ( !Started ) return;
-
-                Logging.LogInformation( "Router: Stopping..." );
-                _terminated = true;
-
-                try
-                {
-                    // 1. Stop client services first (SAM, proxies, etc.)
-                    try
-                    {
-                        Client.ClientContext.Inst?.Stop();
-                    }
-                    catch ( Exception ex )
-                    {
-                        Logging.LogWarning( $"Router: Error stopping client services: {ex.Message}" );
-                    }
-
-                    // 2. Save peer profiles to disk
-                    try
-                    {
-                        var profilesDir = Path.Combine( RouterContext.RouterPath, "peerProfiles" );
-                        RouterProfileManager.Instance.SaveAll( profilesDir );
-                    }
-                    catch ( Exception ex )
-                    {
-                        Logging.LogWarning( $"Router: Error saving profiles: {ex.Message}" );
-                    }
-
-                    // 3. Stop all running destinations (no new outbound traffic)
-                    foreach ( var kvp in RunningDestinations.ToArray() )
-                    {
-                        try { kvp.Value.Shutdown(); } catch { }
-                    }
-                    RunningDestinations.Clear();
-
-                    // 5. Graceful tunnel drain - wait for existing tunnels to expire
-                    var drainMs = (int)GracefulShutdownTimeout.TotalMilliseconds;
-                    if ( drainMs > 0 )
-                    {
-                        Logging.LogInformation( $"Router: Waiting up to {GracefulShutdownTimeout.TotalSeconds}s for tunnel drain..." );
-
-                        var drainStart = DateTime.UtcNow;
-                        while ( DateTime.UtcNow - drainStart < GracefulShutdownTimeout )
+                        // Extract X25519 static key from router context
+                        // Use the last 32 bytes of the private key to match RouterContext.X25519PrivateKey
+                        var privKey = ctx.PrivateKey?.ToByteArray();
+                        if (privKey != null && privKey.Length >= 32)
                         {
-                            var transitCount = _transitTunnelMgr?.TransitTunnelCount ?? 0;
-                            if ( transitCount == 0 ) break;
-
-                            Logging.LogDebug( $"Router: Draining {transitCount} transit tunnels..." );
-                            Thread.Sleep( Math.Min( 5000, drainMs ) );
+                            var x25519Priv = new byte[32];
+                            Array.Copy(privKey, privKey.Length - 32, x25519Priv, 0, 32);
+                            var x25519Pub = X25519.GetPublicKey(x25519Priv);
+                            _eciesRouterProcessor = new ECIESRouterProcessor(
+                                ctx.MyRouterIdentity.IdentHash,
+                                x25519Priv,
+                                x25519Pub);
+                            Logging.LogDebug(
+                                $"Router: Initialized ECIES processor for {ctx.MyRouterIdentity.IdentHash}");
                         }
                     }
-
-                    // 6. Wait for worker thread
-                    _worker?.Join( 10000 );
-
-                    // 7. Stop transport layer
-                    try
-                    {
-                        TransportProvider.Stop();
-                    }
-                    catch ( Exception ex )
-                    {
-                        Logging.LogWarning( $"Router: Error stopping transports: {ex.Message}" );
-                    }
-
-                    // 8. Stop tunnel provider
-                    try
-                    {
-                        TunnelProvider.Stop();
-                    }
-                    catch ( Exception ex )
-                    {
-                        Logging.LogWarning( $"Router: Error stopping tunnels: {ex.Message}" );
-                    }
-
-                    // 9. Stop network database
-                    try
-                    {
-                        NetDb.Stop();
-                    }
-                    catch ( Exception ex )
-                    {
-                        Logging.LogWarning( $"Router: Error stopping NetDb: {ex.Message}" );
-                    }
-
-                    // 10. Reset router context for re-startability
-                    try
-                    {
-                        RouterContext.Reset();
-                    }
-                    catch ( Exception ex )
-                    {
-                        Logging.LogWarning( $"Router: Error resetting context: {ex.Message}" );
-                    }
-
-                    // Clear references
-                    _clientMgr = null;
-                    _explorationMgr = null;
-                    _transitTunnelMgr = null;
-                    _floodfillServer = null;
-                    _terminated = false;
-
-                    Started = false;
-                    Logging.LogInformation( "Router: Stopped." );
                 }
-                catch ( Exception ex )
+                catch (Exception ex)
                 {
-                    Logging.Log( "Router: Stop failed", ex );
+                    Logging.LogDebug($"Router: Failed to initialize ECIES processor: {ex.Message}");
                 }
-            }
-        }
 
-        private static bool _terminated;
-        private static void Run()
+            return _eciesRouterProcessor;
+        }
+    }
+
+    public static event Action<Ii2NpHeader, InboundTunnel> UnhandledI2NpMessage;
+
+    internal static event Action<DeliveryStatusMessage, InboundTunnel> DeliveryStatusReceived;
+
+    /// <summary>
+    ///     Start the router with the current RouterContext settings.
+    /// </summary>
+    public static void Start()
+    {
+        lock (StartedLock)
         {
-            TunnelProvider.I2NpMessageReceived += HandleI2NpMessageReceived;
+            if (Started) return;
+
             try
             {
-                Thread.Sleep( 2000 );
+                var rci = RouterContext.Inst;
+                NetDb.Start();
 
-                while ( !_terminated )
+                // Load peer profiles from disk
+                var profilesDir = Path.Combine(RouterContext.RouterPath, "peerProfiles");
+                RouterProfileManager.Instance.LoadAll(profilesDir);
+
+                Logging.Log($"I: {RouterContext.Inst.MyRouterInfo}");
+                Logging.Log($"Published: {RouterContext.Inst.Published}");
+
+                Logging.Log("Connecting...");
+                TransportProvider.Start();
+                TunnelProvider.Start();
+
+                ClientTunnelMgr = new ClientTunnelProvider(TunnelProvider.Inst);
+                ExplorationTunnelMgr = new TunnelPoolManager(TunnelProvider.Inst);
+                TransitTunnelMgr = new TransitTunnelProvider(TunnelProvider.Inst);
+
+                FloodfillServer = new FloodfillServer();
+                FloodfillServer.DatabaseLookupReceived += (lookup, from, result) =>
+                    NetDb.Inst?.InvokeDatabaseLookupReceived(lookup, from, result);
+
+                if (rci.FloodfillEnabled) FloodfillServer.Start();
+
+                _worker = new Thread(Run)
                 {
+                    Name = "Router",
+                    IsBackground = true
+                };
+                _worker.Start();
+
+                NetDb.Inst.IdentHashLookup.LeaseSetReceived += IdentHashLookup_LeaseSetReceived;
+                NetDb.Inst.IdentHashLookup.LookupFailure += IdentHashLookup_LookupFailure;
+
+                Started = true;
+            }
+            catch (Exception ex)
+            {
+                Logging.Log(ex);
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Reload configuration without full restart.
+    ///     Applies changes to bandwidth, floodfill mode, and logging levels.
+    ///     Can be triggered by SIGHUP via DaemonHelper.OnReload().
+    /// </summary>
+    /// <summary>
+    ///     Reload configuration without full restart.
+    ///     Applies changes to bandwidth, router context, and logging levels.
+    ///     Can be triggered by SIGHUP via DaemonHelper.OnReload().
+    /// </summary>
+    public static void ReloadConfig()
+    {
+        if (!Started) return;
+
+        try
+        {
+            Logging.LogInformation("Router: Reloading configuration...");
+
+            // Apply router context settings (bandwidth, ports, etc.)
+            if (RouterContext.Inst != null)
+            {
+                RouterContext.Inst.ApplyNewSettings();
+                Logging.LogInformation("Router: RouterContext settings reloaded");
+            }
+
+            // Reload logging settings
+            Logging.ReadAppConfig();
+
+            Logging.LogInformation("Router: Configuration reloaded successfully");
+        }
+        catch (Exception ex)
+        {
+            Logging.LogWarning($"Router: Config reload failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    ///     Gracefully stop the router and all services.
+    ///     Shutdown order: client services -> destinations -> graceful drain -> tunnels -> transports -> netdb
+    /// </summary>
+    public static void Stop()
+    {
+        lock (StartedLock)
+        {
+            if (!Started) return;
+
+            Logging.LogInformation("Router: Stopping...");
+            _terminated = true;
+
+            try
+            {
+                // 1. Stop client services first (SAM, proxies, etc.)
+                try
+                {
+                    ClientContext.Inst?.Stop();
+                }
+                catch (Exception ex)
+                {
+                    Logging.LogWarning($"Router: Error stopping client services: {ex.Message}");
+                }
+
+                // 2. Save peer profiles to disk
+                try
+                {
+                    var profilesDir = Path.Combine(RouterContext.RouterPath, "peerProfiles");
+                    RouterProfileManager.Instance.SaveAll(profilesDir);
+                }
+                catch (Exception ex)
+                {
+                    Logging.LogWarning($"Router: Error saving profiles: {ex.Message}");
+                }
+
+                // 3. Stop all running destinations (no new outbound traffic)
+                foreach (var kvp in RunningDestinations.ToArray())
                     try
                     {
-                        _clientMgr.Execute();
-                        _explorationMgr.Execute();
-                        _transitTunnelMgr.Execute();
-
-                        Thread.Sleep( 500 );
+                        kvp.Value.Shutdown();
                     }
-                    catch ( ThreadAbortException ex )
+                    catch
                     {
-                        Logging.Log( ex );
                     }
-                    catch ( Exception ex )
+
+                RunningDestinations.Clear();
+
+                // 5. Graceful tunnel drain - wait for existing tunnels to expire
+                var drainMs = (int)GracefulShutdownTimeout.TotalMilliseconds;
+                if (drainMs > 0)
+                {
+                    Logging.LogInformation(
+                        $"Router: Waiting up to {GracefulShutdownTimeout.TotalSeconds}s for tunnel drain...");
+
+                    var drainStart = DateTime.UtcNow;
+                    while (DateTime.UtcNow - drainStart < GracefulShutdownTimeout)
                     {
-                        Logging.Log( ex );
+                        var transitCount = TransitTunnelMgr?.TransitTunnelCount ?? 0;
+                        if (transitCount == 0) break;
+
+                        Logging.LogDebug($"Router: Draining {transitCount} transit tunnels...");
+                        Thread.Sleep(Math.Min(5000, drainMs));
                     }
                 }
-            }
-            finally
-            {
-                _terminated = true;
 
-                NetDb.Inst.IdentHashLookup.LeaseSetReceived -= IdentHashLookup_LeaseSetReceived;
-                NetDb.Inst.IdentHashLookup.LookupFailure -= IdentHashLookup_LookupFailure;
-            }
-        }
+                // 6. Wait for worker thread
+                _worker?.Join(10000);
 
-        private static readonly ConcurrentDictionary<I2PDestination, ClientDestination> RunningDestinations = new();
-
-        /// <summary>
-        /// Create the destination. New lease sets will be automatically signed
-        /// with the key in I2PDestinationInfo.
-        /// </summary>
-        /// <returns>The destination.</returns>
-        /// <param name="destinfo">Destinfo.</param>
-        /// <param name="publish">If set to <c>true</c> publish.</param>
-        /// <param name="alreadyrunning">If set to <c>true</c> alreadyrunning.</param>
-        public static ClientDestination CreateDestination(
-                I2PDestinationInfo destinfo,
-                bool publish,
-                out bool alreadyrunning )
-        {
-            lock ( RunningDestinations )
-            {
-                if ( RunningDestinations.TryGetValue( destinfo.Destination, out var runninginst ) )
+                // 7. Stop transport layer
+                try
                 {
-                    alreadyrunning = true;
-                    return runninginst;
+                    TransportProvider.Stop();
+                }
+                catch (Exception ex)
+                {
+                    Logging.LogWarning($"Router: Error stopping transports: {ex.Message}");
                 }
 
-                var newclient = new ClientDestination( destinfo, publish );
-                RunningDestinations[destinfo.Destination] = newclient;
-                _clientMgr.AttachClient( newclient );
-                alreadyrunning = false;
-                return newclient;
-            }
-        }
-
-        /// <summary>
-        /// Creates the destination without a private key for signing lease sets.
-        /// Using this constructor you have to subsribe to SignLeasesRequest events
-        /// and sign new lease sets, and update PrivateKeys as needed.
-        /// </summary>
-        /// <returns>The destination.</returns>
-        /// <param name="dest">Destination.</param>
-        /// <param name="publish">If set to <c>true</c> publish.</param>
-        /// <param name="alreadyrunning">If set to <c>true</c> alreadyrunning.</param>
-        public static ClientDestination CreateDestination(
-                I2PDestination dest,
-                bool publish,
-                out bool alreadyrunning )
-        {
-            lock ( RunningDestinations )
-            {
-                if ( RunningDestinations.TryGetValue( dest, out var runninginst ) )
+                // 8. Stop tunnel provider
+                try
                 {
-                    alreadyrunning = true;
-                    return runninginst;
+                    TunnelProvider.Stop();
+                }
+                catch (Exception ex)
+                {
+                    Logging.LogWarning($"Router: Error stopping tunnels: {ex.Message}");
                 }
 
-                var newclient = new ClientDestination( dest, publish );
-                RunningDestinations[dest] = newclient;
-                _clientMgr.AttachClient( newclient );
-                alreadyrunning = false;
-                return newclient;
+                // 9. Stop network database
+                try
+                {
+                    NetDb.Stop();
+                }
+                catch (Exception ex)
+                {
+                    Logging.LogWarning($"Router: Error stopping NetDb: {ex.Message}");
+                }
+
+                // 10. Reset router context for re-startability
+                try
+                {
+                    RouterContext.Reset();
+                }
+                catch (Exception ex)
+                {
+                    Logging.LogWarning($"Router: Error resetting context: {ex.Message}");
+                }
+
+                // Clear references
+                ClientTunnelMgr = null;
+                ExplorationTunnelMgr = null;
+                TransitTunnelMgr = null;
+                FloodfillServer = null;
+                _terminated = false;
+
+                Started = false;
+                Logging.LogInformation("Router: Stopped.");
+            }
+            catch (Exception ex)
+            {
+                Logging.Log("Router: Stop failed", ex);
             }
         }
+    }
 
-        internal static void ShutdownClient( ClientDestination dest )
+    private static void Run()
+    {
+        TunnelProvider.I2NpMessageReceived += HandleI2NpMessageReceived;
+        try
         {
-            _clientMgr.DetachClient( dest );
-            RunningDestinations.TryRemove( dest.Destination, out _ );
+            Thread.Sleep(2000);
+
+            while (!_terminated)
+                try
+                {
+                    ClientTunnelMgr.Execute();
+                    ExplorationTunnelMgr.Execute();
+                    TransitTunnelMgr.Execute();
+
+                    Thread.Sleep(500);
+                }
+                catch (ThreadAbortException ex)
+                {
+                    Logging.Log(ex);
+                }
+                catch (Exception ex)
+                {
+                    Logging.Log(ex);
+                }
         }
-
-        public static ClientDestination GetClientDestination( I2PIdentHash hash )
+        finally
         {
-            return RunningDestinations.Values.FirstOrDefault( d => d.Destination.IdentHash == hash );
+            _terminated = true;
+
+            NetDb.Inst.IdentHashLookup.LeaseSetReceived -= IdentHashLookup_LeaseSetReceived;
+            NetDb.Inst.IdentHashLookup.LookupFailure -= IdentHashLookup_LookupFailure;
         }
+    }
 
-        static internal void HandleI2NpMessageReceived( Ii2NpHeader msg, InboundTunnel from )
+    /// <summary>
+    ///     Create the destination. New lease sets will be automatically signed
+    ///     with the key in I2PDestinationInfo.
+    /// </summary>
+    /// <returns>The destination.</returns>
+    /// <param name="destinfo">Destinfo.</param>
+    /// <param name="publish">If set to <c>true</c> publish.</param>
+    /// <param name="alreadyrunning">If set to <c>true</c> alreadyrunning.</param>
+    public static ClientDestination CreateDestination(
+        I2PDestinationInfo destinfo,
+        bool publish,
+        out bool alreadyrunning)
+    {
+        lock (RunningDestinations)
         {
-            switch ( msg.MessageType )
+            if (RunningDestinations.TryGetValue(destinfo.Destination, out var runninginst))
             {
-                case I2NpMessage.MessageTypes.DatabaseStore:
-                    var ds = (DatabaseStoreMessage)msg.Message;
+                alreadyrunning = true;
+                return runninginst;
+            }
+
+            var newclient = new ClientDestination(destinfo, publish);
+            RunningDestinations[destinfo.Destination] = newclient;
+            ClientTunnelMgr.AttachClient(newclient);
+            alreadyrunning = false;
+            return newclient;
+        }
+    }
+
+    /// <summary>
+    ///     Creates the destination without a private key for signing lease sets.
+    ///     Using this constructor you have to subsribe to SignLeasesRequest events
+    ///     and sign new lease sets, and update PrivateKeys as needed.
+    /// </summary>
+    /// <returns>The destination.</returns>
+    /// <param name="dest">Destination.</param>
+    /// <param name="publish">If set to <c>true</c> publish.</param>
+    /// <param name="alreadyrunning">If set to <c>true</c> alreadyrunning.</param>
+    public static ClientDestination CreateDestination(
+        I2PDestination dest,
+        bool publish,
+        out bool alreadyrunning)
+    {
+        lock (RunningDestinations)
+        {
+            if (RunningDestinations.TryGetValue(dest, out var runninginst))
+            {
+                alreadyrunning = true;
+                return runninginst;
+            }
+
+            var newclient = new ClientDestination(dest, publish);
+            RunningDestinations[dest] = newclient;
+            ClientTunnelMgr.AttachClient(newclient);
+            alreadyrunning = false;
+            return newclient;
+        }
+    }
+
+    internal static void ShutdownClient(ClientDestination dest)
+    {
+        ClientTunnelMgr.DetachClient(dest);
+        RunningDestinations.TryRemove(dest.Destination, out _);
+    }
+
+    public static ClientDestination GetClientDestination(I2PIdentHash hash)
+    {
+        return RunningDestinations.Values.FirstOrDefault(d => d.Destination.IdentHash == hash);
+    }
+
+    internal static void HandleI2NpMessageReceived(Ii2NpHeader msg, InboundTunnel from)
+    {
+        switch (msg.MessageType)
+        {
+            case I2NpMessage.MessageTypes.DatabaseStore:
+                var ds = (DatabaseStoreMessage)msg.Message;
 #if LOG_ALL_TUNNEL_TRANSFER
                     Logging.Log( $"Router: DatabaseStore : {ds.Key.Id32Short}" );
 #endif
-                    HandleDatabaseStore( ds, from );
-                    break;
+                HandleDatabaseStore(ds, from);
+                break;
 
-                case I2NpMessage.MessageTypes.DatabaseSearchReply:
-                    var dsr = (DatabaseSearchReplyMessage)msg.Message;
+            case I2NpMessage.MessageTypes.DatabaseSearchReply:
+                var dsr = (DatabaseSearchReplyMessage)msg.Message;
 #if LOG_ALL_TUNNEL_TRANSFER
                     Logging.Log( $"Router: DatabaseSearchReply: {dsr}" );
 #endif
-                    NetDb.Inst.AddDatabaseSearchReply( dsr );
-                    break;
+                NetDb.Inst.AddDatabaseSearchReply(dsr);
+                break;
 
-                case I2NpMessage.MessageTypes.DeliveryStatus:
+            case I2NpMessage.MessageTypes.DeliveryStatus:
 #if LOG_ALL_TUNNEL_TRANSFER || LOG_ALL_LEASE_MGMT
                     Logging.LogDebug( $"Router: DeliveryStatus: {msg.Message}" );
 #endif
 
-                    var dsmsg = (DeliveryStatusMessage)msg.Message;
-                    DeliveryStatusReceived?.Invoke( dsmsg, from );
-                    break;
+                var dsmsg = (DeliveryStatusMessage)msg.Message;
+                DeliveryStatusReceived?.Invoke(dsmsg, from);
+                break;
 
-                case I2NpMessage.MessageTypes.Garlic:
+            case I2NpMessage.MessageTypes.Garlic:
 #if LOG_ALL_TUNNEL_TRANSFER
                     Logging.LogDebug( $"Router: Garlic: {msg.Message}" );
 #endif
-                    HandleGarlic( (GarlicMessage)msg.Message, from );
-                    break;
+                HandleGarlic((GarlicMessage)msg.Message, from);
+                break;
 
-                case I2NpMessage.MessageTypes.VariableTunnelBuildReply:
+            case I2NpMessage.MessageTypes.VariableTunnelBuildReply:
 #if LOG_ALL_TUNNEL_TRANSFER
                     Logging.LogDebug( $"{this}: VariableTunnelBuildReply: {msg}" );
 #endif
-                    ThreadPool.QueueUserWorkItem( cb =>
-                            TunnelProvider.Inst.HandleVariableTunnelBuildReply( (VariableTunnelBuildReplyMessage)msg.Message ) );
-                    break;
+                ThreadPool.QueueUserWorkItem(cb =>
+                    TunnelProvider.Inst.HandleVariableTunnelBuildReply((VariableTunnelBuildReplyMessage)msg.Message));
+                break;
 
-                case I2NpMessage.MessageTypes.ShortTunnelBuildReply:
+            case I2NpMessage.MessageTypes.ShortTunnelBuildReply:
 #if LOG_ALL_TUNNEL_TRANSFER
                     Logging.LogDebug( $"{this}: ShortTunnelBuildReply: {msg}" );
 #endif
-                    ThreadPool.QueueUserWorkItem( cb =>
-                            TunnelProvider.Inst.HandleShortTunnelBuildReply( (ShortTunnelBuildReplyMessage)msg.Message ) );
-                    break;
+                ThreadPool.QueueUserWorkItem(cb =>
+                    TunnelProvider.Inst.HandleShortTunnelBuildReply((ShortTunnelBuildReplyMessage)msg.Message));
+                break;
 
-                case I2NpMessage.MessageTypes.DatabaseLookup:
-                    var dlm = (DatabaseLookupMessage)msg.Message;
-                    HandleDatabaseLookup( dlm, from );
-                    break;
+            case I2NpMessage.MessageTypes.DatabaseLookup:
+                var dlm = (DatabaseLookupMessage)msg.Message;
+                HandleDatabaseLookup(dlm, from);
+                break;
 
-                default:
-                    if ( UnhandledI2NpMessage is null )
-                    {
-                        Logging.LogDebug( $"Router: I2NPMessageReceived: Unhandled message ({msg.Message})" );
-                    }
-                    else
-                    {
-                        ThreadPool.QueueUserWorkItem( a => UnhandledI2NpMessage?.Invoke( msg, from ) );
-                    }
-                    break;
-            }
+            default:
+                if (UnhandledI2NpMessage is null)
+                    Logging.LogDebug($"Router: I2NPMessageReceived: Unhandled message ({msg.Message})");
+                else
+                    ThreadPool.QueueUserWorkItem(a => UnhandledI2NpMessage?.Invoke(msg, from));
+                break;
+        }
+    }
+
+    internal static void HandleDatabaseStore(DatabaseStoreMessage ds, InboundTunnel from)
+    {
+        if (RouterContext.Inst.FloodfillEnabled && FloodfillServer != null)
+        {
+            FloodfillServer.HandleDatabaseStore(ds, from?.Destination);
+            return;
         }
 
-        internal static void HandleDatabaseStore( DatabaseStoreMessage ds, InboundTunnel from )
+        if (ds?.RouterInfo == null && ds?.LeaseSet == null)
         {
-            if ( RouterContext.Inst.FloodfillEnabled && _floodfillServer != null )
-            {
-                _floodfillServer.HandleDatabaseStore( ds, from?.Destination );
-                return;
-            }
+            Logging.LogDebug("DatabaseStore without Router or Lease info!");
+            return;
+        }
 
-            if ( ds?.RouterInfo == null && ds?.LeaseSet == null )
-            {
-                Logging.LogDebug( "DatabaseStore without Router or Lease info!" );
-                return;
-            }
-
-            if ( ds.RouterInfo != null )
-            {
+        if (ds.RouterInfo != null)
+        {
 #if LOG_ALL_TUNNEL_TRANSFER
                 Logging.Log( $"HandleDatabaseStore: DatabaseStore RouterInfo {ds}" );
 #endif
-                // var stat = NetDb.Inst.Statistics[ds.RouterInfo.Identity.IdentHash];
-                // if ( stat == null || !NetDb.Inst.Statistics.NodeInactive( stat ) )
-                {
-                    NetDb.Inst.AddRouterInfo( ds.RouterInfo );
-                }
-            }
-            else
+            // var stat = NetDb.Inst.Statistics[ds.RouterInfo.Identity.IdentHash];
+            // if ( stat == null || !NetDb.Inst.Statistics.NodeInactive( stat ) )
             {
+                NetDb.Inst.AddRouterInfo(ds.RouterInfo);
+            }
+        }
+        else
+        {
 #if LOG_ALL_TUNNEL_TRANSFER
                 Logging.Log( $"HandleDatabaseStore: DatabaseStore LeaseSet {ds}" );
 #endif
-                NetDb.Inst.AddLeaseSet( ds.LeaseSet );
-            }
-
-            if ( ds.ReplyToken != 0 && from == null )
-            {
-                if ( ds.ReplyTunnelId != 0 )
-                {
-                    var outtunnel = TunnelProvider.Inst.GetEstablishedOutboundTunnel( TunnelPoolSelection.RequireExploratory );
-                    if ( outtunnel != null )
-                    {
-                        outtunnel.Send( new TunnelMessageRouter(
-                            ( new TunnelGatewayMessage(
-                                new DeliveryStatusMessage( ds.ReplyToken ),
-                                ds.ReplyTunnelId ) ),
-                            ds.ReplyGateway ) );
-                    }
-                }
-                else
-                {
-                    TransportProvider.Send( ds.ReplyGateway,
-                        new DeliveryStatusMessage( ds.ReplyToken ) );
-                }
-            }
+            NetDb.Inst.AddLeaseSet(ds.LeaseSet);
         }
 
-        /// <summary>
-        /// Handle incoming DatabaseLookup messages for non-floodfill routers.
-        /// Returns closest known floodfill routers as a DatabaseSearchReply.
-        /// </summary>
-        internal static void HandleDatabaseLookup( DatabaseLookupMessage dlm, InboundTunnel from )
+        if (ds.ReplyToken != 0 && from == null)
         {
-            if ( RouterContext.Inst.FloodfillEnabled && _floodfillServer != null )
+            if (ds.ReplyTunnelId != 0)
             {
-                _floodfillServer.HandleDatabaseLookup( dlm, from?.Destination );
-                return;
-            }
-
-            if ( dlm?.Key == null || dlm.From == null ) return;
-
-            Logging.LogDebug( $"Router: DatabaseLookup for {dlm.Key.Id32Short}" );
-
-            // For non-floodfill routers, respond with closest known floodfills
-            var closestFloodfills = NetDb.Inst?.GetClosestFloodfill(
-                dlm.Key, 3,
-                null ) ?? Array.Empty<I2PIdentHash>();
-
-            var reply = new DatabaseSearchReplyMessage(
-                dlm.Key,
-                closestFloodfills,
-                RouterContext.Inst.MyRouterIdentity.IdentHash );
-
-            // Send reply back through the reply tunnel if specified (Tunnel flag set)
-            if ( ( dlm.LookupType & DatabaseLookupMessage.LookupTypes.Tunnel ) != 0
-                && dlm.TunnelId != null )
-            {
-                var outtunnel = TunnelProvider.Inst.GetEstablishedOutboundTunnel(
-                    TunnelPoolSelection.RequireExploratory );
-
-                if ( outtunnel != null )
-                {
-                    outtunnel.Send( new TunnelMessageRouter(
-                        new TunnelGatewayMessage( reply, dlm.TunnelId ),
-                        dlm.From ) );
-                }
+                var outtunnel =
+                    TunnelProvider.Inst.GetEstablishedOutboundTunnel(TunnelPoolSelection.RequireExploratory);
+                if (outtunnel != null)
+                    outtunnel.Send(new TunnelMessageRouter(
+                        new TunnelGatewayMessage(
+                            new DeliveryStatusMessage(ds.ReplyToken),
+                            ds.ReplyTunnelId),
+                        ds.ReplyGateway));
             }
             else
             {
-                TransportProvider.Send( dlm.From, reply );
+                TransportProvider.Send(ds.ReplyGateway,
+                    new DeliveryStatusMessage(ds.ReplyToken));
             }
         }
+    }
 
-        // ECIES router processor for modern garlic messages (lazy-initialized after RouterContext)
-        private static ECIES.ECIESRouterProcessor _eciesRouterProcessor;
-        public static ECIES.ECIESRouterProcessor EciesRouterProcessor
+    /// <summary>
+    ///     Handle incoming DatabaseLookup messages for non-floodfill routers.
+    ///     Returns closest known floodfill routers as a DatabaseSearchReply.
+    /// </summary>
+    internal static void HandleDatabaseLookup(DatabaseLookupMessage dlm, InboundTunnel from)
+    {
+        if (RouterContext.Inst.FloodfillEnabled && FloodfillServer != null)
         {
-            get
-            {
-                if ( _eciesRouterProcessor == null )
-                {
-                    try
-                    {
-                        var ctx = RouterContext.Inst;
-                        if ( ctx?.MyRouterIdentity?.IdentHash != null )
-                        {
-                            // Extract X25519 static key from router context
-                            // Use the last 32 bytes of the private key to match RouterContext.X25519PrivateKey
-                            var privKey = ctx.PrivateKey?.ToByteArray();
-                            if ( privKey != null && privKey.Length >= 32 )
-                            {
-                                var x25519Priv = new byte[32];
-                                Array.Copy( privKey, privKey.Length - 32, x25519Priv, 0, 32 );
-                                var x25519Pub = X25519.GetPublicKey( x25519Priv );
-                                _eciesRouterProcessor = new ECIES.ECIESRouterProcessor(
-                                    ctx.MyRouterIdentity.IdentHash,
-                                    x25519Priv,
-                                    x25519Pub );
-                                Logging.LogDebug( $"Router: Initialized ECIES processor for {ctx.MyRouterIdentity.IdentHash}" );
-                            }
-                        }
-                    }
-                    catch ( Exception ex )
-                    {
-                        Logging.LogDebug( $"Router: Failed to initialize ECIES processor: {ex.Message}" );
-                    }
-                }
-                return _eciesRouterProcessor;
-            }
+            FloodfillServer.HandleDatabaseLookup(dlm, from?.Destination);
+            return;
         }
 
-        private static void HandleGarlic( GarlicMessage garlicmsg, InboundTunnel from )
+        if (dlm?.Key == null || dlm.From == null) return;
+
+        Logging.LogDebug($"Router: DatabaseLookup for {dlm.Key.Id32Short}");
+
+        // For non-floodfill routers, respond with closest known floodfills
+        var closestFloodfills = NetDb.Inst?.GetClosestFloodfill(
+            dlm.Key, 3,
+            null) ?? Array.Empty<I2PIdentHash>();
+
+        var reply = new DatabaseSearchReplyMessage(
+            dlm.Key,
+            closestFloodfills,
+            RouterContext.Inst.MyRouterIdentity.IdentHash);
+
+        // Send reply back through the reply tunnel if specified (Tunnel flag set)
+        if ((dlm.LookupType & DatabaseLookupMessage.LookupTypes.Tunnel) != 0
+            && dlm.TunnelId != null)
         {
-            try
-            {
-                // Try tunnel build reply garlic first (matched by tag)
-                if ( TunnelProvider.Inst.TryHandleBuildReplyGarlic( garlicmsg, from ) )
-                    return;
+            var outtunnel = TunnelProvider.Inst.GetEstablishedOutboundTunnel(
+                TunnelPoolSelection.RequireExploratory);
 
-                // Try ECIES decryption first (modern path)
-                if ( TryHandleECIESGarlic( garlicmsg, from ) )
-                    return;
+            if (outtunnel != null)
+                outtunnel.Send(new TunnelMessageRouter(
+                    new TunnelGatewayMessage(reply, dlm.TunnelId),
+                    dlm.From));
+        }
+        else
+        {
+            TransportProvider.Send(dlm.From, reply);
+        }
+    }
 
-                // Fallback: Try all client destinations
-                foreach ( var dest in ClientDestination.AllDestinations.Keys )
-                {
-                    try
-                    {
-                        var decr = dest.DecryptGarlic( garlicmsg );
-                        if ( decr != null )
-                        {
-                            Logging.LogDebug( $"Router: Garlic decrypted by client destination {dest.Destination.IdentHash.Id32Short}" );
-                            dest.HandleDecryptedGarlic( decr, from );
-                            return;
-                        }
-                    }
-                    catch { /* ignore */ }
-                }
+    private static void HandleGarlic(GarlicMessage garlicmsg, InboundTunnel from)
+    {
+        try
+        {
+            // Try tunnel build reply garlic first (matched by tag)
+            if (TunnelProvider.Inst.TryHandleBuildReplyGarlic(garlicmsg, from))
+                return;
 
-                // Fall back to ElGamal (legacy path)
-                I2PCore.TunnelLayer.I2NP.Data.GarlicAesBlock aesblock;
+            // Try ECIES decryption first (modern path)
+            if (TryHandleECIESGarlic(garlicmsg, from))
+                return;
+
+            // Fallback: Try all client destinations
+            foreach (var dest in AllDestinations.Keys)
                 try
                 {
-                    (aesblock, _) = Garlic.EgDecryptGarlic(
-                        garlicmsg,
-                        RouterContext.Inst.PrivateKey );
+                    var decr = dest.DecryptGarlic(garlicmsg);
+                    if (decr != null)
+                    {
+                        Logging.LogDebug(
+                            $"Router: Garlic decrypted by client destination {dest.Destination.IdentHash.Id32Short}");
+                        dest.HandleDecryptedGarlic(decr, from);
+                        return;
+                    }
                 }
-                catch ( ChecksumFailureException )
+                catch
                 {
-                    // Expected if it was actually an unsupported ECIES message or just invalid data
-                    return;
-                }
-                catch ( ArgumentException )
-                {
-                    // Likely data length mismatch for ElGamal
-                    return;
+                    /* ignore */
                 }
 
-                if ( aesblock == null )
-                {
-                    return;
-                }
-
-                var garlic = new Garlic( new I2PBufferCursor( aesblock.Payload ) );
-                ProcessGarlicCloves( garlic, from );
-            }
-            catch ( Exception ex )
+            // Fall back to ElGamal (legacy path)
+            GarlicAesBlock aesblock;
+            try
             {
-                Logging.Log( "Router: HandleGarlic", ex );
+                (aesblock, _) = Garlic.EgDecryptGarlic(
+                    garlicmsg,
+                    RouterContext.Inst.PrivateKey);
             }
-        }
+            catch (ChecksumFailureException)
+            {
+                // Expected if it was actually an unsupported ECIES message or just invalid data
+                return;
+            }
+            catch (ArgumentException)
+            {
+                // Likely data length mismatch for ElGamal
+                return;
+            }
 
-        private static void ProcessGarlicCloves( Garlic garlic, InboundTunnel from )
+            if (aesblock == null) return;
+
+            var garlic = new Garlic(new I2PBufferCursor(aesblock.Payload));
+            ProcessGarlicCloves(garlic, from);
+        }
+        catch (Exception ex)
         {
+            Logging.Log("Router: HandleGarlic", ex);
+        }
+    }
+
+    private static void ProcessGarlicCloves(Garlic garlic, InboundTunnel from)
+    {
 #if LOG_ALL_LEASE_MGMT
             Logging.LogDebug( $"Router: ProcessGarlicCloves: {garlic}" );
 #endif
-            foreach ( var clove in garlic.Cloves )
-            {
-                try
-                {
-                    switch ( clove.Delivery.Delivery )
-                    {
-                        case GarlicCloveDelivery.DeliveryMethod.Local:
-                            Logging.LogDebug(
-                                $"Router: ProcessGarlicCloves: Delivered Local: {clove.Message}" );
-
-                            TunnelProvider.Inst.HandleIncomingMessage( clove.Message.CreateHeader16, from );
-                            break;
-
-                        default:
-                            Logging.LogDebug( $"Router: ProcessGarlicCloves: Dropped clove ({clove})" );
-                            break;
-                    }
-                }
-                catch ( Exception ex )
-                {
-                    Logging.Log( "Router: ProcessGarlicCloves switch", ex );
-                }
-            }
-        }
-
-        /// <summary>
-        /// Try to handle a garlic message using ECIES decryption.
-        /// Returns true if successfully handled, false if should fall back to ElGamal.
-        /// </summary>
-        private static bool TryHandleECIESGarlic( GarlicMessage garlicmsg, InboundTunnel from )
-        {
+        foreach (var clove in garlic.Cloves)
             try
             {
-                var egdata = garlicmsg.EgData;
-                if ( egdata.IsEmpty || egdata.Length < ECIES.ECIESExistingSessionMessage.MinimumSize )
-                    return false;
-                var data = egdata.ToByteArray();
-
-                var ecies = EciesRouterProcessor;
-                if ( ecies == null ) return false;
-
-                var result = ecies.ProcessMessage( data );
-                if ( result == null || result.Payload == null )
-                    return false;
-
-                Logging.LogDebug( $"Router: HandleGarlic: ECIES decryption successful" );
-
-                // Parse ECIES blocks and process garlic cloves
-                // For router-level garlic, we process the payload as ECIES block format
-                // which contains I2NP blocks, garlic blocks, etc.
-                var blocks = ECIES.ECIESBlockFormat.ParseBlocks( result.Payload );
-
-                foreach ( var block in blocks )
+                switch (clove.Delivery.Delivery)
                 {
-                    try
-                    {
-                        if ( block is ECIES.GarlicCloveBlock garlicClove )
-                        {
-                            var cloveBuf = new I2PBufferCursor( garlicClove.Data );
-                            var di = GarlicCloveDelivery.CreateGarlicCloveDelivery( cloveBuf );
+                    case GarlicCloveDelivery.DeliveryMethod.Local:
+                        Logging.LogDebug(
+                            $"Router: ProcessGarlicCloves: Delivered Local: {clove.Message}");
 
-                            // ECIES Garlic Message format: type(1) + ID(4) + expiration(4) + payload
-                            var msgType = (TunnelLayer.I2NP.Messages.I2NpMessage.MessageTypes)cloveBuf.ReadByte();
-                            var msgId = cloveBuf.ReadUInt32BigEndian();
-                            var expirationSeconds = cloveBuf.ReadUInt32BigEndian();
+                        TunnelProvider.Inst.HandleIncomingMessage(clove.Message.CreateHeader16, from);
+                        break;
 
-                            // I2NpUtil.GetMessage requires 16 bytes of headroom in front of the payload buffer.
-                            var payloadWithHeadroom = new byte[cloveBuf.Remaining + 16];
-                            cloveBuf.ReadBytes( payloadWithHeadroom, 16, cloveBuf.Remaining );
-                            var msg = TunnelLayer.I2NP.I2NpUtil.GetMessage( msgType, new I2PBufferCursor( payloadWithHeadroom, 16 ), msgId );
-
-                            if ( msg != null )
-                            {
-                                msg.Expiration = new I2PDate( (ulong)expirationSeconds * 1000 );
-                                TunnelProvider.Inst.HandleIncomingMessage( msg.CreateHeader16, from );
-                            }
-                        }
-                        else if ( block is ECIES.NextKeyBlock nextKey )
-                        {
-                            Logging.LogDebug( $"Router: ECIES NextKey block: keyID={nextKey.KeyID}, reverse={nextKey.IsReverseKey}, keyPresent={nextKey.IsKeyPresent}" );
-                            // Forward NextKey to the ECIES processor for ratchet advancement
-                            ecies.HandleNextKey( nextKey );
-                        }
-                        else if ( block is ECIES.AckBlock ack )
-                        {
-                            Logging.LogDebug( $"Router: ECIES Ack block: {ack.Acks.Count} acks" );
-                        }
-                    }
-                    catch ( Exception ex )
-                    {
-                        Logging.Log( "Router: HandleGarlic ECIES block", ex );
-                    }
-                }
-
-                return true;
-            }
-            catch ( Exception )
-            {
-                // ECIES decryption failed - not an ECIES message, try EG
-                return false;
-            }
-        }
-
-        #region DestLookup
-
-        private class DestinationLookupEntry
-        {
-            public I2PIdentHash Id;
-            public DestinationLookupResult Callback;
-            public object Tag;
-        }
-
-        private static readonly List<DestinationLookupEntry> UnresolvedDestinations = new();
-
-        internal static bool StartDestLookup(
-                I2PIdentHash hash,
-                DestinationLookupResult cb,
-                object tag,
-                ClientDestination clientContext = null )
-        {
-            var result = NetDb.Inst.IdentHashLookup.LookupLeaseSet( hash, clientContext );
-
-            if ( result )
-            {
-                lock ( UnresolvedDestinations )
-                {
-                    UnresolvedDestinations.Add( new DestinationLookupEntry()
-                    {
-                        Id = hash,
-                        Callback = cb,
-                        Tag = tag,
-                    } );
+                    default:
+                        Logging.LogDebug($"Router: ProcessGarlicCloves: Dropped clove ({clove})");
+                        break;
                 }
             }
-
-            return result;
-        }
-
-        public static void LookupDestination( 
-                I2PIdentHash hash, 
-                DestinationLookupResult cb,
-                object tag = null )
-        {
-            if ( cb == null ) return;
-            StartDestLookup( hash, cb, tag );
-        }
-
-        private static void IdentHashLookup_LookupFailure( I2PIdentHash key )
-        {
-            lock ( UnresolvedDestinations )
+            catch (Exception ex)
             {
-                var cbs = UnresolvedDestinations
-                    .Where( e => e.Id == key )
-                    .ToArray();
-
-                foreach ( var cbe in cbs )
-                {
-                    if ( UnresolvedDestinations.Remove( cbe ) )
-                    {
-                        ThreadPool.QueueUserWorkItem( a =>
-                            cbe.Callback.Invoke( cbe.Id, null, cbe.Tag ) );
-                    }
-                }
+                Logging.Log("Router: ProcessGarlicCloves switch", ex);
             }
-        }
-
-        private static void IdentHashLookup_LeaseSetReceived( ILeaseSet ls )
-        {
-            var key = ls.Destination.IdentHash;
-
-            lock ( UnresolvedDestinations )
-            {
-                var cbs = UnresolvedDestinations
-                    .Where( e => e.Id == key )
-                    .ToArray();
-
-                foreach ( var cbe in cbs )
-                {
-                    if ( UnresolvedDestinations.Remove( cbe ) )
-                    {
-                        ThreadPool.QueueUserWorkItem( a =>
-                            cbe.Callback.Invoke( cbe.Id, ls, cbe.Tag ) );
-                    }
-                }
-            }
-        }
-
-        #endregion
     }
+
+    /// <summary>
+    ///     Try to handle a garlic message using ECIES decryption.
+    ///     Returns true if successfully handled, false if should fall back to ElGamal.
+    /// </summary>
+    private static bool TryHandleECIESGarlic(GarlicMessage garlicmsg, InboundTunnel from)
+    {
+        try
+        {
+            var egdata = garlicmsg.EgData;
+            if (egdata.IsEmpty || egdata.Length < ECIESExistingSessionMessage.MinimumSize)
+                return false;
+            var data = egdata.ToByteArray();
+
+            var ecies = EciesRouterProcessor;
+            if (ecies == null) return false;
+
+            var result = ecies.ProcessMessage(data);
+            if (result == null || result.Payload == null)
+                return false;
+
+            Logging.LogDebug("Router: HandleGarlic: ECIES decryption successful");
+
+            // Parse ECIES blocks and process garlic cloves
+            // For router-level garlic, we process the payload as ECIES block format
+            // which contains I2NP blocks, garlic blocks, etc.
+            var blocks = ECIESBlockFormat.ParseBlocks(result.Payload);
+
+            foreach (var block in blocks)
+                try
+                {
+                    if (block is GarlicCloveBlock garlicClove)
+                    {
+                        var cloveBuf = new I2PBufferCursor(garlicClove.Data);
+                        var di = GarlicCloveDelivery.CreateGarlicCloveDelivery(cloveBuf);
+
+                        // ECIES Garlic Message format: type(1) + ID(4) + expiration(4) + payload
+                        var msgType = (I2NpMessage.MessageTypes)cloveBuf.ReadByte();
+                        var msgId = cloveBuf.ReadUInt32BigEndian();
+                        var expirationSeconds = cloveBuf.ReadUInt32BigEndian();
+
+                        // I2NpUtil.GetMessage requires 16 bytes of headroom in front of the payload buffer.
+                        var payloadWithHeadroom = new byte[cloveBuf.Remaining + 16];
+                        cloveBuf.ReadBytes(payloadWithHeadroom, 16, cloveBuf.Remaining);
+                        var msg = I2NpUtil.GetMessage(msgType, new I2PBufferCursor(payloadWithHeadroom, 16), msgId);
+
+                        if (msg != null)
+                        {
+                            msg.Expiration = new I2PDate((ulong)expirationSeconds * 1000);
+                            TunnelProvider.Inst.HandleIncomingMessage(msg.CreateHeader16, from);
+                        }
+                    }
+                    else if (block is NextKeyBlock nextKey)
+                    {
+                        Logging.LogDebug(
+                            $"Router: ECIES NextKey block: keyID={nextKey.KeyID}, reverse={nextKey.IsReverseKey}, keyPresent={nextKey.IsKeyPresent}");
+                        // Forward NextKey to the ECIES processor for ratchet advancement
+                        ecies.HandleNextKey(nextKey);
+                    }
+                    else if (block is AckBlock ack)
+                    {
+                        Logging.LogDebug($"Router: ECIES Ack block: {ack.Acks.Count} acks");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logging.Log("Router: HandleGarlic ECIES block", ex);
+                }
+
+            return true;
+        }
+        catch (Exception)
+        {
+            // ECIES decryption failed - not an ECIES message, try EG
+            return false;
+        }
+    }
+
+    #region DestLookup
+
+    private class DestinationLookupEntry
+    {
+        public DestinationLookupResult Callback;
+        public I2PIdentHash Id;
+        public object Tag;
+    }
+
+    private static readonly List<DestinationLookupEntry> UnresolvedDestinations = new();
+
+    internal static bool StartDestLookup(
+        I2PIdentHash hash,
+        DestinationLookupResult cb,
+        object tag,
+        ClientDestination clientContext = null)
+    {
+        var result = NetDb.Inst.IdentHashLookup.LookupLeaseSet(hash, clientContext);
+
+        if (result)
+            lock (UnresolvedDestinations)
+            {
+                UnresolvedDestinations.Add(new DestinationLookupEntry
+                {
+                    Id = hash,
+                    Callback = cb,
+                    Tag = tag
+                });
+            }
+
+        return result;
+    }
+
+    public static void LookupDestination(
+        I2PIdentHash hash,
+        DestinationLookupResult cb,
+        object tag = null)
+    {
+        if (cb == null) return;
+        StartDestLookup(hash, cb, tag);
+    }
+
+    private static void IdentHashLookup_LookupFailure(I2PIdentHash key)
+    {
+        lock (UnresolvedDestinations)
+        {
+            var cbs = UnresolvedDestinations
+                .Where(e => e.Id == key)
+                .ToArray();
+
+            foreach (var cbe in cbs)
+                if (UnresolvedDestinations.Remove(cbe))
+                    ThreadPool.QueueUserWorkItem(a =>
+                        cbe.Callback.Invoke(cbe.Id, null, cbe.Tag));
+        }
+    }
+
+    private static void IdentHashLookup_LeaseSetReceived(ILeaseSet ls)
+    {
+        var key = ls.Destination.IdentHash;
+
+        lock (UnresolvedDestinations)
+        {
+            var cbs = UnresolvedDestinations
+                .Where(e => e.Id == key)
+                .ToArray();
+
+            foreach (var cbe in cbs)
+                if (UnresolvedDestinations.Remove(cbe))
+                    ThreadPool.QueueUserWorkItem(a =>
+                        cbe.Callback.Invoke(cbe.Id, ls, cbe.Tag));
+        }
+    }
+
+    #endregion
 }

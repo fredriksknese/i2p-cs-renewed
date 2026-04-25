@@ -1,4 +1,3 @@
-
 using I2PCore.Utils;
 
 public class DatabaseLookupKeyInfo

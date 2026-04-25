@@ -44,7 +44,12 @@
                                 <tr data-bs-toggle="collapse" data-bs-target="#rawData-@log.Id" style="cursor: pointer;">
                                     <td><small class="text-muted">@log.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff")</small></td>
                                     <td>
-                                        <span class="badge @(log.Method == "CONNECT" ? "bg-dark" : "bg-secondary")">@log.Method</span>
+                                        <span class="badge @(log.Method switch {
+                                            "CONNECT" => "bg-dark",
+                                            "GARLIC" => "bg-purple text-white",
+                                            "OUTPROXY" => "bg-warning text-dark",
+                                            _ => "bg-secondary"
+                                        })" @(log.Method == "GARLIC" ? "style=background-color:#6f42c1!important" : "")>@log.Method</span>
                                     </td>
                                     <td class="text-truncate" style="max-width: 250px;" title="@log.Target">
                                         @log.Target
@@ -54,8 +59,12 @@
                                             "Received" => "bg-info",
                                             "Lookup" => "bg-primary",
                                             "Connecting" => "bg-warning text-dark",
+                                            "Streaming" => "bg-info",
                                             "Completed" => "bg-success",
                                             "Error" => "bg-danger",
+                                            "Encryption" => "bg-dark",
+                                            "Decrypted" => "bg-success",
+                                            "LeaseSet" => "bg-primary",
                                             _ => "bg-secondary"
                                         })">@log.Status</span>
                                     </td>

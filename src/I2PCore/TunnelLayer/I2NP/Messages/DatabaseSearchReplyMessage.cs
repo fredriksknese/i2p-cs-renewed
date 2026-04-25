@@ -1,72 +1,63 @@
-using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Text;
-using I2PCore.Utils;
 using I2PCore.Data;
-using I2PCore.TunnelLayer.I2NP.Messages;
+using I2PCore.Utils;
 
-namespace I2PCore.TunnelLayer.I2NP.Messages
+namespace I2PCore.TunnelLayer.I2NP.Messages;
+
+public class DatabaseSearchReplyMessage : I2NpMessage
 {
-    public class DatabaseSearchReplyMessage : I2NpMessage
+    public readonly I2PIdentHash From;
+
+    public readonly I2PIdentHash Key;
+    public readonly List<I2PIdentHash> Peers = new();
+
+    /// <summary>
+    ///     Create a DatabaseSearchReply message to send
+    /// </summary>
+    public DatabaseSearchReplyMessage(I2PIdentHash key, IEnumerable<I2PIdentHash> peers, I2PIdentHash from)
     {
-        public override MessageTypes MessageType { get { return MessageTypes.DatabaseSearchReply; } }
+        Key = key;
+        From = from;
+        if (peers != null)
+            Peers.AddRange(peers);
 
-        public readonly I2PIdentHash Key;
-        public readonly List<I2PIdentHash> Peers = new();
-        public readonly I2PIdentHash From;
+        // Build binary form
+        AllocateBuffer(32 + 1 + Peers.Count * 32 + 32);
+        var writer = new I2PBufferCursor(Payload);
 
-        /// <summary>
-        /// Create a DatabaseSearchReply message to send
-        /// </summary>
-        public DatabaseSearchReplyMessage( I2PIdentHash key, IEnumerable<I2PIdentHash> peers, I2PIdentHash from )
-        {
-            Key = key;
-            From = from;
-            if ( peers != null )
-                Peers.AddRange( peers );
+        writer.WriteBlock(Key.Hash);
+        writer.WriteByte((byte)Peers.Count);
+        foreach (var peer in Peers)
+            writer.WriteBlock(peer.Hash);
+        writer.WriteBlock(From.Hash);
+    }
 
-            // Build binary form
-            AllocateBuffer( 32 + 1 + Peers.Count * 32 + 32 );
-            var writer = new I2PBufferCursor( Payload );
+    public DatabaseSearchReplyMessage(I2PBufferCursor reader)
+    {
+        var start = new I2PBufferCursor(reader.BaseArray, reader.BaseArrayOffset);
 
-            writer.WriteBlock( Key.Hash );
-            writer.WriteByte( (byte)Peers.Count );
-            foreach ( var peer in Peers )
-                writer.WriteBlock( peer.Hash );
-            writer.WriteBlock( From.Hash );
-        }
+        Key = new I2PIdentHash(reader);
 
-        public DatabaseSearchReplyMessage( I2PBufferCursor reader )
-        {
-            var start = new I2PBufferCursor( reader.BaseArray, reader.BaseArrayOffset );
+        var peercount = reader.ReadByte();
+        for (var i = 0; i < peercount; ++i) Peers.Add(new I2PIdentHash(reader));
 
-            Key = new I2PIdentHash( reader );
+        From = new I2PIdentHash(reader);
 
-            var peercount = reader.ReadByte();
-            for ( int i = 0; i < peercount; ++i )
-            {
-                Peers.Add( new I2PIdentHash( reader ) );
-            }
+        SetBuffer(start, reader);
+    }
 
-            From = new I2PIdentHash( reader );
+    public override MessageTypes MessageType => MessageTypes.DatabaseSearchReply;
 
-            SetBuffer( start, reader );
-        }
+    public override string ToString()
+    {
+        var result = new StringBuilder();
 
-        public override string ToString()
-        {
-            var result = new StringBuilder();
+        result.AppendLine("DatabaseSearchReplyMessage");
+        result.AppendLine("Peer count   : " + (Peers == null ? "(null)" : Peers.Count.ToString()));
 
-            result.AppendLine( "DatabaseSearchReplyMessage" );
-            result.AppendLine( "Peer count   : " + ( Peers == null ? "(null)" : Peers.Count.ToString() ) );
+        foreach (var one in Peers) result.AppendLine(one.ToString());
 
-            foreach ( var one in Peers )
-            {
-                result.AppendLine( one.ToString() );
-            }
-
-            return result.ToString();
-        }
+        return result.ToString();
     }
 }
