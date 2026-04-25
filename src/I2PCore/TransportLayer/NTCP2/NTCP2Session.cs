@@ -299,10 +299,22 @@ namespace I2PCore.TransportLayer.NTCP2
 
         public void Tick()
         {
-            if (IsTerminated || State != NTCP2SessionState.Established) return;
+            if (IsTerminated) return;
+
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+            if (State != NTCP2SessionState.Established)
+            {
+                // Handshake timeout (30 seconds)
+                if (now - LastActivityTime > 30)
+                {
+                    Logging.LogInformation($"{DebugId}: Handshake timeout (30 seconds) in state {State}");
+                    Terminate("Handshake timeout (30s)");
+                }
+                return;
+            }
 
             // Inactivity timeout (5 minutes)
-            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             if (now - LastActivityTime > 300)
             {
                 Logging.LogInformation($"{DebugId}: Inactivity timeout (5 minutes)");

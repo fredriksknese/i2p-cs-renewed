@@ -84,6 +84,41 @@
                     </div>
 
                     <hr />
+                    <h6 class="mb-3">Connection Limits</h6>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="maxNtcp2Inbound" class="form-label">Max Inbound NTCP2</label>
+                            <input type="number" class="form-control" id="maxNtcp2Inbound"
+                                   asp-for="MaxNtcp2InboundConnections" min="1" max="10000" required>
+                            <div class="form-text">Limit for incoming NTCP2 sessions.</div>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="maxNtcp2Outbound" class="form-label">Max Outbound NTCP2</label>
+                            <input type="number" class="form-control" id="maxNtcp2Outbound"
+                                   asp-for="MaxNtcp2OutboundConnections" min="1" max="10000" required>
+                            <div class="form-text">Limit for outgoing NTCP2 sessions.</div>
+                        </div>
+                    </div>
+
+                    <hr />
+                    <h6 class="mb-3">Transit Tunnels</h6>
+
+                    <div class="mb-3">
+                        <label for="maxTransitTunnels" class="form-label">Maximum Transit Tunnels</label>
+                        <input type="number" class="form-control" id="maxTransitTunnels"
+                               asp-for="MaxTransitTunnels" min="0" max="10000" required>
+                        <div class="form-text">Maximum number of concurrent transit tunnels this router will accept. Current: @Model.CurrentMaxTransitTunnels</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="transitSharePercent" class="form-label">Transit Bandwidth Share (%)</label>
+                        <input type="number" class="form-control" id="transitSharePercent"
+                               asp-for="TransitSharePercent" min="0" max="100" required>
+                        <div class="form-text">Percentage of total bandwidth allocated to transit traffic.</div>
+                    </div>
+
+                    <hr />
                     <h6 class="mb-3">HTTP Proxy</h6>
 
                     <div class="mb-3">
@@ -137,6 +172,9 @@
 
                     <dt class="col-sm-6">UDP Port:</dt>
                     <dd class="col-sm-6">@Model.CurrentUdpPort</dd>
+
+                    <dt class="col-sm-6">Max NTCP2 In/Out:</dt>
+                    <dd class="col-sm-6">@Model.CurrentMaxNtcp2InboundConnections / @Model.CurrentMaxNtcp2OutboundConnections</dd>
 
                     <dt class="col-sm-6">Firewalled:</dt>
                     <dd class="col-sm-6">

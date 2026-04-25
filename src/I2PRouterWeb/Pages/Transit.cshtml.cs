@@ -12,6 +12,7 @@ public class TransitModel : PageModel
     public int InboundGatewayCount => TransitTunnels.Count(t => t.IsInboundGateway);
     public int OutboundEndpointCount => TransitTunnels.Count(t => t.IsOutboundEndpoint);
     public int TransitCount => TransitTunnels.Count(t => !t.IsOutboundEndpoint && !t.IsInboundGateway);
+    public int MaxTransitTunnels => _routerService.MaxTransitTunnels;
 
     public TransitModel(RouterService routerService)
     {

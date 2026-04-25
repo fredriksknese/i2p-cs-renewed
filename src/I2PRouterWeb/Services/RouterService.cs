@@ -28,6 +28,10 @@ public class RouterService
     public bool UseIPv6 { get; set; } = false;
     public bool EnableSSU2 { get; set; } = true;
     public bool FloodfillEnabled { get; set; } = false;
+    public int MaxTransitTunnels { get; set; } = 10000;
+    public int MaxNtcp2InboundConnections { get; set; } = 2500;
+    public int MaxNtcp2OutboundConnections { get; set; } = 2500;
+    public int TransitSharePercent { get; set; } = 80;
     public RouterContext.HttpProxyEncryptionType ProxyEncryption { get; set; } = RouterContext.HttpProxyEncryptionType.Hybrid;
     public int HttpProxyPort { get; set; } = 4445;
 
@@ -85,6 +89,10 @@ public class RouterService
         RouterContext.UseIpV6 = UseIPv6;
         RouterContext.Inst.EnableSSU2 = EnableSSU2;
         RouterContext.Inst.FloodfillEnabled = FloodfillEnabled;
+        RouterContext.Inst.MaxTransitTunnels = MaxTransitTunnels;
+        RouterContext.Inst.MaxNtcp2InboundConnections = MaxNtcp2InboundConnections;
+        RouterContext.Inst.MaxNtcp2OutboundConnections = MaxNtcp2OutboundConnections;
+        RouterContext.Inst.TransitSharePercent = TransitSharePercent;
         RouterContext.Inst.ProxyEncryption = ProxyEncryption;
 
         RouterContext.Inst.ApplyNewSettings();
@@ -155,7 +163,7 @@ public class RouterService
         Logging.LogInformation("HTTP proxy stopped");
     }
 
-    public void ApplySettings(IPAddress? externalAddress, int tcpPort, int udpPort, bool isFirewalled, bool useIPv6, bool enableSSU2, bool floodfillEnabled, RouterContext.HttpProxyEncryptionType proxyEncryption)
+    public void ApplySettings(IPAddress? externalAddress, int tcpPort, int udpPort, bool isFirewalled, bool useIPv6, bool enableSSU2, bool floodfillEnabled, RouterContext.HttpProxyEncryptionType proxyEncryption, int? maxTransitTunnels = null, int? transitSharePercent = null, int? maxNtcp2Inbound = null, int? maxNtcp2Outbound = null)
     {
         ExternalAddress = externalAddress;
         TcpPort = tcpPort;
@@ -165,6 +173,10 @@ public class RouterService
         EnableSSU2 = enableSSU2;
         FloodfillEnabled = floodfillEnabled;
         ProxyEncryption = proxyEncryption;
+        if (maxTransitTunnels.HasValue) MaxTransitTunnels = maxTransitTunnels.Value;
+        if (transitSharePercent.HasValue) TransitSharePercent = transitSharePercent.Value;
+        if (maxNtcp2Inbound.HasValue) MaxNtcp2InboundConnections = maxNtcp2Inbound.Value;
+        if (maxNtcp2Outbound.HasValue) MaxNtcp2OutboundConnections = maxNtcp2Outbound.Value;
 
         var proxyEncryptionChanged = RouterContext.Inst.ProxyEncryption != ProxyEncryption;
         var proxyRunning = IsHttpProxyRunning;
@@ -185,6 +197,10 @@ public class RouterService
         RouterContext.UseIpV6 = UseIPv6;
         RouterContext.Inst.EnableSSU2 = EnableSSU2;
         RouterContext.Inst.FloodfillEnabled = FloodfillEnabled;
+        RouterContext.Inst.MaxTransitTunnels = MaxTransitTunnels;
+        RouterContext.Inst.MaxNtcp2InboundConnections = MaxNtcp2InboundConnections;
+        RouterContext.Inst.MaxNtcp2OutboundConnections = MaxNtcp2OutboundConnections;
+        RouterContext.Inst.TransitSharePercent = TransitSharePercent;
         RouterContext.Inst.ProxyEncryption = ProxyEncryption;
 
         RouterContext.Inst.ApplyNewSettings();
@@ -194,7 +210,7 @@ public class RouterService
             StartHttpProxy();
         }
 
-        LogActivity("Settings", $"Applied new settings: Port {TcpPort}, Firewalled: {IsFirewalled}, SSU2: {EnableSSU2}, Floodfill: {FloodfillEnabled}, Encryption: {ProxyEncryption}");
+        LogActivity("Settings", $"Applied new settings: Port {TcpPort}, Firewalled: {IsFirewalled}, SSU2: {EnableSSU2}, Floodfill: {FloodfillEnabled}, Encryption: {ProxyEncryption}, Max Transit Tunnels: {MaxTransitTunnels}, NTCP2 In/Out: {MaxNtcp2InboundConnections}/{MaxNtcp2OutboundConnections}");
     }
 
     public void LogActivity(string category, string message)

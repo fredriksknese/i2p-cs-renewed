@@ -54,6 +54,53 @@ namespace I2PCore.TransportLayer.NTCP2
                 IsBackground = true
             };
             Worker.Start();
+
+            // Background task for periodic session cleanup and handshaking timeouts
+            Task.Run(PeriodicCleanupLoop);
+        }
+
+        private async Task PeriodicCleanupLoop()
+        {
+            while (!MyCancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(10000, MyCancellationToken);
+                    CleanupSessions();
+                }
+                catch (OperationCanceledException) { break; }
+                catch (Exception ex)
+                {
+                    Logging.LogWarning($"NTCP2Host: PeriodicCleanupLoop error: {ex.Message}");
+                }
+            }
+        }
+
+        private void CleanupSessions()
+        {
+            lock (SessionsLock)
+            {
+                var allSessions = Sessions.ToArray();
+                foreach (var session in allSessions)
+                {
+                    try
+                    {
+                        // Tick handles both inactivity and handshake timeouts
+                        session.Tick();
+
+                        if (session.IsTerminated)
+                        {
+                            Sessions.Remove(session);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logging.LogDebug($"NTCP2Host: Error ticking session {session.DebugId}: {ex.Message}");
+                        session.Terminate("Tick error");
+                        Sessions.Remove(session);
+                    }
+                }
+            }
         }
 
         private void InitializeStaticKeys()
@@ -159,9 +206,10 @@ namespace I2PCore.TransportLayer.NTCP2
                             // Inbound connection limit check
                             int inboundCount;
                             lock (SessionsLock) { inboundCount = Sessions.Count(s => !s.IsOutgoing); }
-                            if (inboundCount >= MaxInboundConnections)
+                            var maxInbound = RouterContext.Inst.MaxNtcp2InboundConnections;
+                            if (inboundCount >= maxInbound)
                             {
-                                Logging.LogWarning($"NTCP2Host: TERMINATION REASON [C#-BOB]: Inbound connection limit reached ({MaxInboundConnections}), rejecting {remoteEP}");
+                                Logging.LogWarning($"NTCP2Host: TERMINATION REASON [C#-BOB]: Inbound connection limit reached ({maxInbound}), rejecting {remoteEP}");
                                 client.Close();
                                 continue;
                             }
@@ -178,9 +226,6 @@ namespace I2PCore.TransportLayer.NTCP2
 
                             // Start async receive for handshake
                             StartAsyncReceive(session);
-
-                            // Periodic cleanup of terminated sessions
-                            CleanupTerminatedSessions();
                         }
                     }
                     catch (Exception ex)
@@ -206,14 +251,7 @@ namespace I2PCore.TransportLayer.NTCP2
 
         private void CleanupTerminatedSessions()
         {
-            lock (SessionsLock)
-            {
-                var terminated = Sessions.Where(s => s.IsTerminated).ToArray();
-                foreach (var one in terminated)
-                {
-                    Sessions.Remove(one);
-                }
-            }
+            CleanupSessions();
         }
 
         private TcpListener CreateListener()
@@ -315,9 +353,10 @@ namespace I2PCore.TransportLayer.NTCP2
             // Outbound connection limit check
             int outboundCount;
             lock (SessionsLock) { outboundCount = Sessions.Count(s => s.IsOutgoing); }
-            if (outboundCount >= MaxOutboundConnections)
+            var maxOutbound = RouterContext.Inst.MaxNtcp2OutboundConnections;
+            if (outboundCount >= maxOutbound)
             {
-                Logging.LogWarning($"NTCP2Host: TERMINATION REASON [C#-BOB]: Outbound connection limit reached ({MaxOutboundConnections}), rejecting outbound to {router.Identity?.IdentHash?.Id32Short}");
+                Logging.LogWarning($"NTCP2Host: TERMINATION REASON [C#-BOB]: Outbound connection limit reached ({maxOutbound}), rejecting outbound to {router.Identity?.IdentHash?.Id32Short}");
                 return null;
             }
 
@@ -337,10 +376,6 @@ namespace I2PCore.TransportLayer.NTCP2
         // IP blocking
         private readonly DecayingIpBlockFilter _ipBlockFilter = new();
         public int BlockedRemoteAddressesCount => _ipBlockFilter.Count;
-
-        // Connection limits
-        public int MaxInboundConnections { get; set; } = 2500;
-        public int MaxOutboundConnections { get; set; } = 2500;
 
         /// <summary>
         /// Report a problem with a remote address for potential blocking

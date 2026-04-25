@@ -19,8 +19,6 @@ namespace I2PCore.TunnelLayer
         private static readonly TickSpan BlockRecentTunnelsWindow = Tunnel.TunnelLifetime * 3;
         public const int BlockRecentTunnelsCount = 2;
 
-        private int MaxRunningTransitTunnels = 300;
-
         private TunnelProvider TunnelMgr;
 
         private ConcurrentDictionary<Tunnel, byte> RunningGatewayTunnels = new();
@@ -204,7 +202,7 @@ namespace I2PCore.TunnelLayer
         {
             if ( !string.IsNullOrWhiteSpace( CM.AppSettings["MaxTransitTunnels"] ) )
             {
-                MaxRunningTransitTunnels = int.Parse( CM.AppSettings["MaxTransitTunnels"] );
+                RouterContext.Inst.MaxTransitTunnels = int.Parse( CM.AppSettings["MaxTransitTunnels"] );
             }
         }
 
@@ -413,6 +411,7 @@ namespace I2PCore.TunnelLayer
             }
 
             var currenttunnelcount = TransitTunnelCount;
+            RouterContext.Inst.CurrentTransitTunnelCount = currenttunnelcount;
 
             // Reject if we've seen the same next-hop destination too many times recently
             if ( nextIdent != null && !NextHopFilter.Update( nextIdent ) )
@@ -422,7 +421,7 @@ namespace I2PCore.TunnelLayer
                 return false;
             }
 
-            var result = currenttunnelcount < MaxRunningTransitTunnels;
+            var result = currenttunnelcount < RouterContext.Inst.MaxTransitTunnels;
             result &= TunnelMgr.AcceptTransitTunnels;
 
             Logging.LogDebug( $"TransitProvider AcceptingTunnels: Running tunnels: {currenttunnelcount}. Accept: {result}." );

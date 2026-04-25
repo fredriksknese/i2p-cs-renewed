@@ -32,6 +32,18 @@ public class SettingsModel : PageModel
     public bool FloodfillEnabled { get; set; }
 
     [BindProperty]
+    public int MaxTransitTunnels { get; set; }
+
+    [BindProperty]
+    public int MaxNtcp2InboundConnections { get; set; }
+
+    [BindProperty]
+    public int MaxNtcp2OutboundConnections { get; set; }
+
+    [BindProperty]
+    public int TransitSharePercent { get; set; }
+
+    [BindProperty]
     public RouterContext.HttpProxyEncryptionType ProxyEncryption { get; set; }
 
     [BindProperty]
@@ -45,6 +57,10 @@ public class SettingsModel : PageModel
     public bool CurrentUseIPv6 { get; set; }
     public bool CurrentEnableSSU2 { get; set; }
     public bool CurrentFloodfillEnabled { get; set; }
+    public int CurrentMaxTransitTunnels { get; set; }
+    public int CurrentMaxNtcp2InboundConnections { get; set; }
+    public int CurrentMaxNtcp2OutboundConnections { get; set; }
+    public int CurrentTransitSharePercent { get; set; }
     public RouterContext.HttpProxyEncryptionType CurrentProxyEncryption { get; set; }
     public int CurrentHttpProxyPort { get; set; }
     public bool CurrentHttpProxyRunning { get; set; }
@@ -67,6 +83,10 @@ public class SettingsModel : PageModel
         UseIPv6 = _routerService.UseIPv6;
         EnableSSU2 = _routerService.EnableSSU2;
         FloodfillEnabled = _routerService.FloodfillEnabled;
+        MaxTransitTunnels = _routerService.MaxTransitTunnels;
+        MaxNtcp2InboundConnections = _routerService.MaxNtcp2InboundConnections;
+        MaxNtcp2OutboundConnections = _routerService.MaxNtcp2OutboundConnections;
+        TransitSharePercent = _routerService.TransitSharePercent;
         ProxyEncryption = _routerService.ProxyEncryption;
         HttpProxyPort = _routerService.HttpProxyPort;
     }
@@ -91,7 +111,7 @@ public class SettingsModel : PageModel
         }
 
         _routerService.HttpProxyPort = HttpProxyPort;
-        _routerService.ApplySettings(ipAddress, TcpPort, UdpPort, IsFirewalled, UseIPv6, EnableSSU2, FloodfillEnabled, ProxyEncryption);
+        _routerService.ApplySettings(ipAddress, TcpPort, UdpPort, IsFirewalled, UseIPv6, EnableSSU2, FloodfillEnabled, ProxyEncryption, MaxTransitTunnels, TransitSharePercent, MaxNtcp2InboundConnections, MaxNtcp2OutboundConnections);
 
         LoadCurrentSettings();
         SuccessMessage = "Settings applied successfully!";
@@ -109,6 +129,10 @@ public class SettingsModel : PageModel
         CurrentUseIPv6 = _routerService.UseIPv6;
         CurrentEnableSSU2 = _routerService.EnableSSU2;
         CurrentFloodfillEnabled = _routerService.FloodfillEnabled;
+        CurrentMaxTransitTunnels = _routerService.MaxTransitTunnels;
+        CurrentMaxNtcp2InboundConnections = _routerService.MaxNtcp2InboundConnections;
+        CurrentMaxNtcp2OutboundConnections = _routerService.MaxNtcp2OutboundConnections;
+        CurrentTransitSharePercent = _routerService.TransitSharePercent;
         CurrentProxyEncryption = _routerService.ProxyEncryption;
         CurrentHttpProxyPort = _routerService.HttpProxyPort;
         CurrentHttpProxyRunning = _routerService.IsHttpProxyRunning;

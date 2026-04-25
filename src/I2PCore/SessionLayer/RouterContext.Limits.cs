@@ -62,6 +62,11 @@ namespace I2PCore.SessionLayer
                 ? int.MaxValue
                 : (int)_bandwidthClass * TransitSharePercent / 100;
 
+        /// <summary>
+        /// Current number of running transit tunnels.
+        /// </summary>
+        public int CurrentTransitTunnelCount { get; set; }
+
         // Bandwidth limiters for inbound, outbound, and transit
         private Bandwidth _inboundBandwidth;
         private Bandwidth _outboundBandwidth;
@@ -168,26 +173,31 @@ namespace I2PCore.SessionLayer
         }
 
         // --- Connection Limits ---
+        private int _maxNtcp2InboundConnections = 2500;
+        public int MaxNtcp2InboundConnections 
+        { 
+            get => _maxNtcp2InboundConnections; 
+            set { _maxNtcp2InboundConnections = value; ClearCache(); } 
+        }
 
-        /// <summary>
-        /// Maximum number of concurrent NTCP2 inbound connections.
-        /// </summary>
-        public int MaxNtcp2InboundConnections { get; set; } = 128;
+        private int _maxNtcp2OutboundConnections = 2500;
+        public int MaxNtcp2OutboundConnections 
+        { 
+            get => _maxNtcp2OutboundConnections; 
+            set { _maxNtcp2OutboundConnections = value; ClearCache(); } 
+        }
 
-        /// <summary>
-        /// Maximum number of concurrent NTCP2 connections (total).
-        /// </summary>
-        public int MaxNtcp2Connections { get; set; } = 256;
+        public int MaxNtcp2Connections => MaxNtcp2InboundConnections + MaxNtcp2OutboundConnections;
 
         /// <summary>
         /// Maximum number of concurrent SSU2 sessions.
         /// </summary>
-        public int MaxSsu2Sessions { get; set; } = 1000;
+        public int MaxSsu2Sessions { get; set; } = 2500;
 
         /// <summary>
         /// Maximum number of transit tunnels this router will participate in.
         /// </summary>
-        public int MaxTransitTunnels { get; set; } = 5000;
+        public int MaxTransitTunnels { get; set; } = 10000;
 
         /// <summary>
         /// Parse a bandwidth class string (single letter) into the enum.
