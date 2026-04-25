@@ -49,7 +49,7 @@ namespace I2PCore.Crypto
         /// Perform X25519 Diffie-Hellman key exchange
         /// </summary>
         /// <param name="privateKey">Our private key (32 bytes)</param>
-        /// <param name="publicKey">Their public key (32 bytes)</param>
+        /// <param name="publicKey">Their public key (32 bytes). High bit (MSB of byte 31) is ignored per RFC 7748.</param>
         /// <returns>Shared secret (32 bytes)</returns>
         public static byte[] ComputeSharedSecret(byte[] privateKey, byte[] publicKey)
         {
@@ -59,8 +59,15 @@ namespace I2PCore.Crypto
             if (publicKey == null || publicKey.Length != KeySize)
                 throw new ArgumentException($"Public key must be {KeySize} bytes", nameof(publicKey));
 
+            // Mask the high bit as required by RFC 7748 and I2P NTCP2-hybrid signal.
+            // BouncyCastle might do this internally, but we do it explicitly to be sure
+            // it doesn't interfere with MixHash if the same buffer is used.
+            var maskedPubKey = new byte[32];
+            Array.Copy(publicKey, maskedPubKey, 32);
+            maskedPubKey[31] &= 0x7F;
+
             var privKeyParams = new X25519PrivateKeyParameters(privateKey, 0);
-            var pubKeyParams = new X25519PublicKeyParameters(publicKey, 0);
+            var pubKeyParams = new X25519PublicKeyParameters(maskedPubKey, 0);
             
             var agreement = new X25519Agreement();
             agreement.Init(privKeyParams);
@@ -73,7 +80,6 @@ namespace I2PCore.Crypto
 
         /// <summary>
         /// Validate that a public key is a valid X25519 point
-        /// Checks that the MSB is clear (required for X25519)
         /// </summary>
         public static bool IsValidPublicKey(byte[] publicKey)
         {
@@ -82,9 +88,12 @@ namespace I2PCore.Crypto
 
             try
             {
-                // Try to create the key parameters. BouncyCastle handles the high bit 
-                // correctly (ignores it for X25519) according to RFC 7748 Section 5.
-                _ = new X25519PublicKeyParameters(publicKey, 0);
+                var maskedPubKey = new byte[32];
+                Array.Copy(publicKey, maskedPubKey, 32);
+                maskedPubKey[31] &= 0x7F;
+
+                // Try to create the key parameters.
+                _ = new X25519PublicKeyParameters(maskedPubKey, 0);
                 return true;
             }
             catch

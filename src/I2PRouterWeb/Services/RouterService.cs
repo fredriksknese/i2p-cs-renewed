@@ -146,6 +146,17 @@ public class RouterService
         ctx.Start();
 
         LogActivity("HTTP Proxy", $"HTTP proxy started on 127.0.0.1:{HttpProxyPort}");
+
+        if (ctx.HTTPProxy?.ClientDestination?.Destination != null)
+        {
+            var dest = ctx.HTTPProxy.ClientDestination.Destination;
+            var b64 = FreenetBase64.Encode(new I2PByteBlock(dest.ToByteArray()));
+            var b32 = dest.IdentHash.Id32 + ".b32.i2p";
+
+            LogActivity("HTTP Proxy", $"Destination (b32): {b32}");
+            LogActivity("HTTP Proxy", $"Destination (b64): {b64}");
+        }
+
         Logging.LogInformation($"HTTP proxy started on 127.0.0.1:{HttpProxyPort}");
     }
 

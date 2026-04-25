@@ -101,7 +101,7 @@ namespace I2PCore
             public ConcurrentDictionary<I2PIdentHash, TickCounter> UnheardFrom = new();
             public HashSet<I2PIdentHash> FailedPeers = new();
 
-            public static TimeWindowDictionary<I2PIdentHash,object> AlreadyQueried = new(TickSpan.Minutes(3));
+            public static TimeWindowDictionary<I2PIdentHash,object> AlreadyQueried = new(TickSpan.Seconds(30));
 
             public IdentUpdateRequestInfo( 
                 I2PIdentHash id,
@@ -581,7 +581,6 @@ namespace I2PCore
                     if ( outboundTunnel == null || inboundReplyTunnel == null )
                     {
                         Logging.LogDebug( $"IdentResolver: LS lookup {ident.Id32Short} -> ff {oneffid.Id32Short} deferred - no tunnels" );
-                        lock ( info.ToTry ) info.ToTry.Add( oneffid );
                         return;
                     }
                 }
@@ -723,11 +722,11 @@ namespace I2PCore
                 eciesProcessor?.SessionManager?.RegisterOneTimeSession( ratchetTag, replyKey );
 
                 // Build the DLM with ECIES reply encryption.
-                // The DLM includes: Ecies flag + reply key (our X25519 pub) + ratchet tag
+                // The DLM includes: Ecies flag + Encryption flag + reply key (symmetric) + ratchet tag (8 bytes)
                 // Java: dlm.setReplySession(sess.key, sess.rtag)
                 var replyKeyInfo = new DatabaseLookupKeyInfo
                 {
-                    EncryptionFlag = false,
+                    EncryptionFlag = true,
                     EciesFlag = true,
                     ReplyKey = new I2PByteBlock( replyKey ),
                     Tags = new I2PByteBlock[] { new I2PByteBlock( ratchetTag.ToByteArray() ) }

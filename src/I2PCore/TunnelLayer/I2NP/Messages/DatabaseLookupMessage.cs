@@ -121,15 +121,25 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
         {
             var excludecount = excludelist == null ? 0 : excludelist.Count();
 
-            var keyandtagsize = keyinfo is null ? 0 : keyinfo.ReplyKey.Length + 1 + keyinfo.Tags.Sum( t => t.Length );
+            var keyandtagsize = 0;
+            if ( keyinfo != null )
+            {
+                keyandtagsize += 32; // ReplyKey
+                if ( keyinfo.EncryptionFlag )
+                {
+                    keyandtagsize += 1 + keyinfo.Tags.Sum( t => t.Length ); // TagCount + Tags
+                }
+            }
 
-            AllocateBuffer( 2 * 32 + 1 + 4 + 2 + 32 * excludecount + keyandtagsize );
+            var tunnelidsize = tunnelid != null ? 4 : 0;
+
+            AllocateBuffer( 2 * 32 + 1 + tunnelidsize + 2 + 32 * excludecount + keyandtagsize );
             var writer = new I2PBufferCursor( Payload );
 
             writer.WriteBlock( key.Hash );
             writer.WriteBlock( tunnelgw.Hash );
 
-            var forceflags = flags | LookupTypes.Tunnel;
+            var forceflags = flags;
             if ( keyinfo != null )
             {
                 forceflags &= ~LookupTypes.Encryption;
@@ -138,9 +148,21 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
                 forceflags |= keyinfo.EncryptionFlag ? LookupTypes.Encryption : 0;
                 forceflags |= keyinfo.EciesFlag ? LookupTypes.Ecies : 0;
             }
+
+            if ( tunnelid != null )
+            {
+                forceflags |= LookupTypes.Tunnel;
+            }
+            else
+            {
+                forceflags &= ~LookupTypes.Tunnel;
+            }
             writer.WriteByte( (byte)forceflags );
 
-            writer.WriteUInt32BigEndian( tunnelid );
+            if ( tunnelid != null )
+            {
+                writer.WriteUInt32BigEndian( tunnelid );
+            }
 
             if ( excludecount > 0 )
             {
@@ -158,10 +180,13 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
             if ( keyinfo is null ) return;
 
             writer.WriteBlock( keyinfo.ReplyKey );
-            writer.WriteByte( (byte)keyinfo.Tags.Length );
-            foreach( var tag in keyinfo.Tags )
+            if ( keyinfo.EncryptionFlag )
             {
-                writer.WriteBlock( tag );
+                writer.WriteByte( (byte)keyinfo.Tags.Length );
+                foreach ( var tag in keyinfo.Tags )
+                {
+                    writer.WriteBlock( tag );
+                }
             }
         }
 
@@ -174,7 +199,15 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
         {
             var excludecount = excludelist == null ? 0 : excludelist.Count();
 
-            var keyandtagsize = keyinfo is null ? 0 : keyinfo.ReplyKey.Length + 1 + keyinfo.Tags.Sum( t => t.Length );
+            var keyandtagsize = 0;
+            if ( keyinfo != null )
+            {
+                keyandtagsize += 32; // ReplyKey
+                if ( keyinfo.EncryptionFlag )
+                {
+                    keyandtagsize += 1 + keyinfo.Tags.Sum( t => t.Length ); // TagCount + Tags
+                }
+            }
 
             AllocateBuffer( 2 * 32 + 1 + 2 + 32 * excludecount + keyandtagsize );
             var writer = new I2PBufferCursor( Payload );
@@ -209,10 +242,13 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
             if ( keyinfo is null ) return;
 
             writer.WriteBlock( keyinfo.ReplyKey );
-            writer.WriteByte( (byte)keyinfo.Tags.Length );
-            foreach( var tag in keyinfo.Tags )
+            if ( keyinfo.EncryptionFlag )
             {
-                writer.WriteBlock( tag );
+                writer.WriteByte( (byte)keyinfo.Tags.Length );
+                foreach ( var tag in keyinfo.Tags )
+                {
+                    writer.WriteBlock( tag );
+                }
             }
         }
 
@@ -262,12 +298,15 @@ namespace I2PCore.TunnelLayer.I2NP.Messages
             {
                 CachedReplyKey = new I2PSessionKey( reader );
 
-                var tagcount = reader.ReadByte();
-                var tagsize = ( CachedLookupType & LookupTypes.Ecies ) != 0 ? 8 : 32;
-
-                for ( int i = 0; i < tagcount; ++i )
+                if ( ( CachedLookupType & LookupTypes.Encryption ) != 0 )
                 {
-                    CachedTags.Add( new I2PSessionTag( reader, tagsize ) );
+                    var tagcount = reader.ReadByte();
+                    var tagsize = ( CachedLookupType & LookupTypes.Ecies ) != 0 ? 8 : 32;
+
+                    for ( int i = 0; i < tagcount; ++i )
+                    {
+                        CachedTags.Add( new I2PSessionTag( reader, tagsize ) );
+                    }
                 }
             }
         }

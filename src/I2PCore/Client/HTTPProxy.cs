@@ -31,6 +31,7 @@ namespace I2PCore.Client
         private TcpListener _listener;
         private CancellationTokenSource _cts;
         private readonly ClientDestination _clientDestination;
+        public ClientDestination ClientDestination => _clientDestination;
         private readonly StreamingDestination _streamingDestination;
 
         /// <summary>
