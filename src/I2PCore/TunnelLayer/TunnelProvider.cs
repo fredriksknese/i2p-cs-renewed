@@ -833,13 +833,24 @@ namespace I2PCore.TunnelLayer
             }
         }
 
-        public Tunnel CreateTunnel( ITunnelOwner owner, TunnelConfig config )
+        public Tunnel CreateTunnel( ITunnelOwner owner, TunnelConfig config, TunnelPoolSelection? replyTunnelPoolOverride = null )
         {
             if ( config.Info.Hops.Count == 0 ) return null;
 
             if ( config.Direction == TunnelConfig.TunnelDirection.Outbound )
             {
-                var replytunnel = GetInboundTunnel( TunnelPoolSelection.AllowExploratory );
+                // For client outbound builds, prefer paired tunnels (client's own inbound
+                // tunnel as reply tunnel), matching Java I2P's BuildRequestor behavior.
+                // Build reply garlic arriving on client inbound tunnels is handled by
+                // ClientDestination's TryHandleBuildReplyGarlic fallback.
+                // For exploratory outbound builds, use exploratory reply tunnels.
+                // The caller (ClientTunnelProvider) may force RequireExploratory after
+                // repeated failures, matching Java's MAX_CONSECUTIVE_CLIENT_BUILD_FAILS.
+                var poolsel = replyTunnelPoolOverride
+                    ?? ( config.Pool == TunnelConfig.TunnelPool.Client
+                        ? TunnelPoolSelection.AllowExploratory
+                        : TunnelPoolSelection.RequireExploratory );
+                var replytunnel = GetInboundTunnel( poolsel );
                 Logging.LogDebug( $"TunnelProvider: Using reply tunnel: {replytunnel}, GatewayTunnelId={replytunnel.GatewayTunnelId}, ReceiveTunnelId={replytunnel.ReceiveTunnelId}" );
                 var tunnel = new OutboundTunnel( owner, config, replytunnel.Config.Info.Hops.Count );
 
@@ -2249,14 +2260,21 @@ namespace I2PCore.TunnelLayer
 
         internal void TunnelTestFailed( Tunnel tunnel )
         {
-            tunnel.Owner?.TunnelFailed( tunnel );
+            var failures = Interlocked.Increment( ref tunnel.TestFailures );
 
-            // If inbound, it might receieve something. Let it expire normally.
-            if ( tunnel is OutboundTunnel )
+            if ( failures <= Tunnel.MaxConsecutiveTestFailures )
             {
-                RemoveTunnel( tunnel );
-                tunnel.Shutdown();
+                Logging.LogDebug( $"TunnelProvider: Tunnel test failed for {tunnel} " +
+                    $"({failures}/{Tunnel.MaxConsecutiveTestFailures}), keeping alive." );
+                return;
             }
+
+            Logging.LogDebug( $"TunnelProvider: Tunnel {tunnel} exceeded max test failures " +
+                $"({failures}), removing." );
+
+            tunnel.Owner?.TunnelFailed( tunnel );
+            RemoveTunnel( tunnel );
+            tunnel.Shutdown();
         }
 
         public static T SelectTunnel<T>( IEnumerable<T> tunnels, double elitism = TunnelSelectionElitism ) where T : Tunnel

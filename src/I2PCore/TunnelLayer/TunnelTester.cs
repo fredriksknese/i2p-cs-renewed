@@ -16,7 +16,7 @@ namespace I2PCore.TunnelLayer
         public static readonly TickSpan MaxTestRunTime = TickSpan.Minutes( 5 );
         public static readonly TickSpan TimeBetweenTests = TickSpan.Minutes( 2 );
         public const int RunsPerTest = 5;
-        public static readonly TickSpan PassTestTimePerHop = TickSpan.Milliseconds( 3300 );
+        public static readonly TickSpan PassTestTimePerHop = TickSpan.Milliseconds( 5000 );
 
         public static TunnelTester Inst = new();
         protected static Thread Worker;
@@ -360,6 +360,7 @@ namespace I2PCore.TunnelLayer
                     $"Successes: {testresult.Pass}, Failures {testresult.Fail}." );
 
                 run.TunnelUnderTest.Metrics.PassedTunnelTest = true;
+                Interlocked.Exchange( ref run.TunnelUnderTest.TestFailures, 0 );
 
                 foreach ( var onehop in run.TunnelUnderTest.TunnelMembers )
                 {

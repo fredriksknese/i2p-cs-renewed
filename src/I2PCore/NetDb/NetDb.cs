@@ -55,8 +55,8 @@ namespace I2PCore
             }
         }
 
-        // Defaults to 50000x
-        public static double RouletteElitismIncrement = Math.Pow( 50000.0, 1.0 / RouletteIncludeTop );
+        // Defaults to 100x
+        public static double RouletteElitismIncrement = Math.Pow( 100.0, 1.0 / RouletteIncludeTop );
 
         private ConcurrentDictionary<I2PIdentHash, RouterEntry> RouterInfos = new();
 

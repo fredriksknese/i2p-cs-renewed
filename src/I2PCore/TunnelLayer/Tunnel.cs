@@ -117,6 +117,11 @@ namespace I2PCore.TunnelLayer
         public int MessageCount => _messageCount;
 
         internal int AggregateErrors = 0;
+
+        // Matches Java I2P TunnelCreatorConfig.MAX_CONSECUTIVE_TEST_FAILURES = 3
+        internal int TestFailures;
+        public const int MaxConsecutiveTestFailures = 3;
+
         internal ITunnelOwner Owner { get; private set; }
 
         protected Tunnel( ITunnelOwner owner, TunnelConfig config )

@@ -99,25 +99,23 @@ namespace I2PCore.Data
 
         /// <summary>
         /// Get the X25519 public key for ECIES communication (garlic, tunnel builds, etc).
-        /// Per Java I2P MessageWrapper.wrap() and BuildRequestor.java:
-        ///   key = to.getIdentity().getPublicKey();
-        /// Always uses the router's identity public key, NOT the NTCP2/SSU2
-        /// transport static key ('s' parameter). The NTCP2 's' key is a separate
-        /// key pair used only for transport-level sessions.
+        /// Per Proposal 152: 
+        /// For ECIES routers, this is the identity key.
+        /// Handles hybrid PQ keys by extracting the X25519 component.
         /// </summary>
         public byte[] GetECIESPublicKey()
         {
-            // Use the identity public key
             var pubkey = Identity.PublicKey.ToByteArray();
-            if ( pubkey.Length == 32 ) return pubkey;
-
-            // For hybrid PQ keys (ML-KEM + X25519), extract the X25519 component (last 32 bytes)
             var keyType = Identity.Certificate.PublicKeyType;
-            if ( keyType == I2PKeyType.KeyTypes.MLKEM512_X25519 ||
-                 keyType == I2PKeyType.KeyTypes.MLKEM768_X25519 ||
-                 keyType == I2PKeyType.KeyTypes.MLKEM1024_X25519 )
+
+            if (pubkey.Length == 32 && keyType == I2PKeyType.KeyTypes.X25519) 
+                return pubkey;
+
+            if (keyType == I2PKeyType.KeyTypes.MLKEM512_X25519 ||
+                keyType == I2PKeyType.KeyTypes.MLKEM768_X25519 ||
+                keyType == I2PKeyType.KeyTypes.MLKEM1024_X25519)
             {
-                return pubkey.Skip( pubkey.Length - 32 ).Take( 32 ).ToArray();
+                return pubkey.Skip(pubkey.Length - 32).Take(32).ToArray();
             }
 
             return null;

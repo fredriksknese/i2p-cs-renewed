@@ -20,6 +20,16 @@ namespace I2PCore.SessionLayer
                 var decr = MySessions.DecryptMessage( msg );
                 if ( decr == null )
                 {
+                    // Fallback: try as a tunnel build reply garlic.
+                    // When paired tunnels are used (Java I2P BuildRequestor),
+                    // build reply garlic arrives on client inbound tunnels but
+                    // the tag is registered with TunnelProvider, not this client's SKM.
+                    if ( TunnelProvider.Inst?.TryHandleBuildReplyGarlic( msg, null ) == true )
+                    {
+                        Logging.LogDebug( $"{this}: GarlicMessageReceived: Handled as build reply garlic." );
+                        return;
+                    }
+
                     Logging.LogWarning( $"{this}: GarlicMessageReceived: Failed to decrypt garlic." );
                     return;
                 }

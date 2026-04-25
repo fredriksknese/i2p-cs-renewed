@@ -16,11 +16,20 @@ namespace I2PCore.TunnelLayer
         // Java I2P builds exactly the number needed, no multiplier
         public static double NewTunnelCreationFactor = 2;
 
+        /// <summary>
+        /// After this many consecutive outbound tunnel build failures per client,
+        /// force exploratory reply tunnels to break out of a bad paired-tunnel cycle.
+        /// Matches Java I2P's MAX_CONSECUTIVE_CLIENT_BUILD_FAILS = 6.
+        /// </summary>
+        private const int MaxConsecutiveClientBuildFails = 6;
+
         private List<IClient> Clients = new();
 
         private ConcurrentDictionary<Tunnel, IClient> PendingTunnels = new();
 
         private ConcurrentDictionary<Tunnel, IClient> Destinations = new();
+
+        private readonly ConcurrentDictionary<IClient, int> ConsecutiveOutboundBuildFails = new();
 
         public int ClientTunnelCount { get => Destinations.Count; }
 
@@ -46,6 +55,7 @@ namespace I2PCore.TunnelLayer
             {
                 Clients.Remove( client );
             }
+            ConsecutiveOutboundBuildFails.TryRemove( client, out _ );
         }
 
         private OutboundTunnel CreateOutboundTunnel( IClient client, TunnelInfo prototype )
@@ -55,7 +65,13 @@ namespace I2PCore.TunnelLayer
                 TunnelConfig.TunnelPool.Client,
                 prototype ?? Tunnel.CreateOutboundTunnelChain( client.OutboundTunnelHopCount, false ) );
 
-            var tunnel = (OutboundTunnel)TunnelMgr.CreateTunnel( this, config );
+            // Force exploratory reply tunnels after too many consecutive failures,
+            // matching Java I2P's MAX_CONSECUTIVE_CLIENT_BUILD_FAILS fallback.
+            TunnelPoolSelection? replyOverride = ShouldForceExploratoryReply( client )
+                ? TunnelPoolSelection.RequireExploratory
+                : null;
+
+            var tunnel = (OutboundTunnel)TunnelMgr.CreateTunnel( this, config, replyOverride );
             if ( tunnel != null )
             {
                 TunnelMgr.AddTunnel( tunnel );
@@ -63,6 +79,11 @@ namespace I2PCore.TunnelLayer
                 PendingTunnels[tunnel] = client;
             }
             return tunnel;
+        }
+
+        private bool ShouldForceExploratoryReply( IClient client )
+        {
+            return ConsecutiveOutboundBuildFails.GetValueOrDefault( client, 0 ) >= MaxConsecutiveClientBuildFails;
         }
 
         private InboundTunnel CreateInboundTunnel( IClient client, TunnelInfo prototype )
@@ -208,6 +229,11 @@ namespace I2PCore.TunnelLayer
             }
             Destinations[tunnel] = client;
 
+            if ( tunnel is OutboundTunnel )
+            {
+                ConsecutiveOutboundBuildFails[client] = 0;
+            }
+
             try
             {
                 client.TunnelEstablished( tunnel );
@@ -226,6 +252,15 @@ namespace I2PCore.TunnelLayer
             {
                 Logging.LogDebug( $"ClientTunnelProvider: WARNING. Unable to find client TunnelBuildTimeout! {tunnel}" );
                 return;
+            }
+
+            if ( tunnel is OutboundTunnel )
+            {
+                var fails = ConsecutiveOutboundBuildFails.AddOrUpdate( client, 1, ( _, v ) => v + 1 );
+                if ( fails >= MaxConsecutiveClientBuildFails )
+                {
+                    Logging.LogWarning( $"ClientTunnelProvider: {fails} consecutive outbound build failures, forcing exploratory reply tunnels." );
+                }
             }
 
             try
