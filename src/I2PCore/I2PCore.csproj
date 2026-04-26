@@ -1,20 +1,20 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <DefineConstants>NOLOG_ALL_TUNNEL_TRANSFER;NOLOG_ALL_IDENT_LOOKUPS;NOLOG_MUCH_TRANSPORT;NOLOG_ALL_LEASE_MGMT,NOLOG_TUNNEL_SELECTION,NOLOG_ROUTER_SELECTION_HISTORY</DefineConstants>
-  </PropertyGroup>
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <DefineConstants>NOLOG_ALL_TUNNEL_TRANSFER;NOLOG_ALL_IDENT_LOOKUPS;NOLOG_MUCH_TRANSPORT;NOLOG_ALL_LEASE_MGMT,NOLOG_TUNNEL_SELECTION,NOLOG_ROUTER_SELECTION_HISTORY</DefineConstants>
+    </PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0-beta.98" />
-    <PackageReference Include="System.Configuration.ConfigurationManager" Version="10.0.2" />
-  </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0-beta.98"/>
+        <PackageReference Include="System.Configuration.ConfigurationManager" Version="10.0.2"/>
+    </ItemGroup>
 
-  <ItemGroup>
-    <None Include="certificates\reseed\*.crt">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <Link>certificates\reseed\%(Filename)%(Extension)</Link>
-    </None>
-  </ItemGroup>
+    <ItemGroup>
+        <None Include="certificates\reseed\*.crt">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Link>certificates\reseed\%(Filename)%(Extension)</Link>
+        </None>
+    </ItemGroup>
 
 </Project>

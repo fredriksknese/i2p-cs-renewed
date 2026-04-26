@@ -342,6 +342,18 @@ public class ClientContext
                 Logging.LogWarning($"ClientContext: Streaming send to {dest.IdentHash.Id32Short} failed: {result}");
         });
 
+        _sharedStreamingDestination.SetLookupCallback(dest =>
+        {
+            if (dest != null)
+            {
+                Logging.LogInformation($"ClientContext: Triggering LeaseSet lookup for {dest.IdentHash.Id32Short}");
+                _sharedProxyDestination.LookupDestination(dest.IdentHash, (hash, ls, tag) =>
+                {
+                    Logging.LogInformation($"ClientContext: Lookup finished for {hash.Id32Short}. Success: {ls != null}");
+                }, null);
+            }
+        });
+
         _sharedProxyDestination.DataReceived += (dest, data, sender) =>
         {
             _sharedStreamingDestination.HandleDataMessagePayload(data.ToByteArray(), sender);
@@ -371,7 +383,7 @@ public class ClientContext
 
         try
         {
-            SAMBridge = new SAMBridge(listenPort: port);
+            SAMBridge = new SAMBridge(listenPort: port, addressBook: AddressBook);
             SAMBridge.Start();
             Logging.LogInformation($"ClientContext: SAM bridge started on port {port}.");
         }

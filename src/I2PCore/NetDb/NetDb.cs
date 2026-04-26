@@ -166,6 +166,7 @@ public partial class NetDb
             var periodicSave = new PeriodicAction(TickSpan.Minutes(2));
             var periodicUpdateRoulette = new PeriodicAction(TickSpan.Minutes(1));
             var periodicFfUpdate = new PeriodicAction(TickSpan.Seconds(5));
+            var periodicImport = new PeriodicAction(TickSpan.Seconds(10));
 
             while (!Terminated)
                 try
@@ -173,6 +174,7 @@ public partial class NetDb
                     periodicSave.Do(() => Save(true));
                     periodicUpdateRoulette.Do(UpdateSelectionProbabilities);
                     periodicFfUpdate.Do(FloodfillUpdate.Run);
+                    periodicImport.Do(ImportNetDbFiles);
                     IdentHashLookup.Run();
                     Thread.Sleep(2000);
                 }
@@ -454,7 +456,8 @@ public partial class NetDb
 
     public ILeaseSet FindLeaseSet(I2PIdentHash dest)
     {
-        return LeaseSets[dest];
+        if (LeaseSets.TryGetValue(dest, out var ls)) return ls;
+        return null;
     }
 
     /// <summary>

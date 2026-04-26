@@ -35,8 +35,14 @@ public partial class ClientDestination : IClient
         }
         else
         {
+            var leaseSetType = 0;
+            if (Options.TryGetValue("i2cp.leasesettype", out var lstStr) && int.TryParse(lstStr, out var lst))
+                leaseSetType = lst;
+
             // Auto sign
-            if (PrivateKeys.Any(pk => pk.Certificate.PublicKeyType != I2PKeyType.KeyTypes.ElGamal2048))
+            if (leaseSetType == 3 || (leaseSetType == 0 &&
+                                      PrivateKeys.Any(pk =>
+                                          pk.Certificate.PublicKeyType != I2PKeyType.KeyTypes.ElGamal2048)))
                 SignedLeases = new I2PLeaseSet2(
                     Destination,
                     newleases.Select(l => new I2PLease2(l.TunnelGw, l.TunnelId, new I2PDateShort(l.Expire))),

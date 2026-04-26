@@ -5,6 +5,7 @@ using System.Text;
 using I2PCore.Crypto;
 using I2PCore.Crypto.Noise;
 using I2PCore.Data;
+using I2PCore.Utils;
 
 namespace I2PCore.SessionLayer.ECIES;
 
@@ -180,6 +181,10 @@ public class ECIESOutboundSession
         }
         else
         {
+            Logging.LogDebug($"ECIES-DIAG: CreateNS: localPub[0:4]={BitConverter.ToString(_localStaticPublicKey, 0, 4)} " +
+                $"remotePub[0:4]={BitConverter.ToString(remoteStaticKey, 0, 4)} " +
+                $"payloadLen={payload.Length}");
+
             // Create Noise IK initiator
             _noiseIK = NoiseIK.CreateInitiator(
                 _localStaticPrivateKey,
@@ -189,6 +194,42 @@ public class ECIESOutboundSession
             // Create new session message: -> e, es, s, ss, payload
             message = _noiseIK.CreateNewSessionMessage(payload);
             ck = _noiseIK.GetChainingKey();
+
+            Logging.LogDebug($"ECIES-DIAG: CreateNS: msgLen={message.Length} " +
+                $"msg[0:8]={BitConverter.ToString(message, 0, 8)} " +
+                $"ck[0:4]={BitConverter.ToString(ck, 0, 4)} " +
+                $"h[0:4]={BitConverter.ToString(_noiseIK.GetHandshakeHash(), 0, 4)}");
+
+            // Self-test: try decrypting our own message with the remote's keys
+            // This verifies Noise IK + Elligator2 round-trip end-to-end
+            try
+            {
+                var testResponder = NoiseIK.CreateResponder(
+                    _remotePublicKey.ToByteArray().Length == 32
+                        ? _remotePublicKey.ToByteArray()
+                        : _remotePublicKey.ToByteArray()[^32..],
+                    remoteStaticKey);
+                // We can't decrypt because we don't have the remote's PRIVATE key.
+                // But we CAN test with our OWN keys as a crypto sanity check.
+                var selfTestIK = NoiseIK.CreateInitiator(
+                    _localStaticPrivateKey,
+                    _localStaticPublicKey,
+                    _localStaticPublicKey); // encrypt TO ourselves
+                var selfTestPayload = new byte[] { 0xDE, 0xAD };
+                var selfTestMsg = selfTestIK.CreateNewSessionMessage(selfTestPayload);
+                var selfTestResp = NoiseIK.CreateResponder(
+                    _localStaticPrivateKey,
+                    _localStaticPublicKey);
+                var (decrypted, remoteSKey) = selfTestResp.ProcessNewSessionMessage(selfTestMsg);
+                if (decrypted != null && decrypted.Length == 2 && decrypted[0] == 0xDE && decrypted[1] == 0xAD)
+                    Logging.LogDebug("ECIES-DIAG: NoiseIK self-test PASSED");
+                else
+                    Logging.LogCritical($"ECIES-DIAG: NoiseIK self-test FAILED! decrypted={(decrypted != null ? BitConverter.ToString(decrypted) : "NULL")}");
+            }
+            catch (Exception ex)
+            {
+                Logging.LogCritical($"ECIES-DIAG: NoiseIK self-test EXCEPTION: {ex.Message}");
+            }
         }
 
         // Derive expected 8-byte tag for Message B

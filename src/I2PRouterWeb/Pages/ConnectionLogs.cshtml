@@ -23,67 +23,68 @@
                 <div class="table-responsive">
                     <table class="table table-hover table-striped mb-0">
                         <thead class="table-light">
-                            <tr>
-                                <th style="width: 180px;">Timestamp</th>
-                                <th style="width: 100px;">Transport</th>
-                                <th style="width: 100px;">Dir</th>
-                                <th style="width: 120px;">Router</th>
-                                <th>Message</th>
-                            </tr>
+                        <tr>
+                            <th style="width: 180px;">Timestamp</th>
+                            <th style="width: 100px;">Transport</th>
+                            <th style="width: 100px;">Dir</th>
+                            <th style="width: 120px;">Router</th>
+                            <th>Message</th>
+                        </tr>
                         </thead>
                         <tbody>
-                            @if (Model.Logs.Any())
-                            {
-                                foreach (var log in Model.Logs)
-                                {
-                                    <tr>
-                                        <td class="text-nowrap small text-muted">@log.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff")</td>
-                                        <td>
-                                            @if (log.Transport == "NTCP2")
-                                            {
-                                                <span class="badge bg-primary">NTCP2</span>
-                                            }
-                                            else if (log.Transport == "SSU2")
-                                            {
-                                                <span class="badge bg-info text-dark">SSU2</span>
-                                            }
-                                            else
-                                            {
-                                                <span class="badge bg-secondary">@log.Transport</span>
-                                            }
-                                        </td>
-                                        <td>
-                                            @if (log.Direction == "Inbound")
-                                            {
-                                                <span class="badge bg-info">Inbound</span>
-                                            }
-                                            else if (log.Direction == "Outbound")
-                                            {
-                                                <span class="badge bg-secondary">Outbound</span>
-                                            }
-                                        </td>
-                                        <td>
-                                            @if (!string.IsNullOrEmpty(log.RouterId))
-                                            {
-                                                <a href="/RouterDetail?id=@log.RouterId" class="text-decoration-none font-monospace small">[@log.RouterId]</a>
-                                            }
-                                            else
-                                            {
-                                                <span class="text-muted small">-</span>
-                                            }
-                                        </td>
-                                        <td class="small">@log.Message</td>
-                                    </tr>
-                                }
-                            }
-                            else
+                        @if (Model.Logs.Any())
+                        {
+                            foreach (var log in Model.Logs)
                             {
                                 <tr>
-                                    <td colspan="5" class="text-center py-4 text-muted">
-                                        No connection logs found.
+                                    <td class="text-nowrap small text-muted">@log.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff")</td>
+                                    <td>
+                                        @if (log.Transport == "NTCP2")
+                                        {
+                                            <span class="badge bg-primary">NTCP2</span>
+                                        }
+                                        else if (log.Transport == "SSU2")
+                                        {
+                                            <span class="badge bg-info text-dark">SSU2</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge bg-secondary">@log.Transport</span>
+                                        }
                                     </td>
+                                    <td>
+                                        @if (log.Direction == "Inbound")
+                                        {
+                                            <span class="badge bg-info">Inbound</span>
+                                        }
+                                        else if (log.Direction == "Outbound")
+                                        {
+                                            <span class="badge bg-secondary">Outbound</span>
+                                        }
+                                    </td>
+                                    <td>
+                                        @if (!string.IsNullOrEmpty(log.RouterId))
+                                        {
+                                            <a href="/RouterDetail?id=@log.RouterId"
+                                               class="text-decoration-none font-monospace small">[@log.RouterId]</a>
+                                        }
+                                        else
+                                        {
+                                            <span class="text-muted small">-</span>
+                                        }
+                                    </td>
+                                    <td class="small">@log.Message</td>
                                 </tr>
                             }
+                        }
+                        else
+                        {
+                            <tr>
+                                <td colspan="5" class="text-center py-4 text-muted">
+                                    No connection logs found.
+                                </td>
+                            </tr>
+                        }
                         </tbody>
                     </table>
                 </div>

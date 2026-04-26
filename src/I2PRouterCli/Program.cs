@@ -44,6 +44,8 @@ internal class Program
         var netId = 0; // 0 = use default (2)
         var disableReseed = false;
         var samPort = 0; // 0 = use default
+        var exploratoryLength = 2;
+        var exploratoryQuantity = 3;
 
         // Parse command line arguments
         for (var i = 0; i < args.Length; ++i)
@@ -206,6 +208,24 @@ internal class Program
 
                     break;
 
+                case "--exploratory-length":
+                    if (args.Length > i + 1)
+                    {
+                        exploratoryLength = int.Parse(args[++i]);
+                        Console.WriteLine($"Exploratory length set to {exploratoryLength}");
+                    }
+
+                    break;
+
+                case "--exploratory-quantity":
+                    if (args.Length > i + 1)
+                    {
+                        exploratoryQuantity = int.Parse(args[++i]);
+                        Console.WriteLine($"Exploratory quantity set to {exploratoryQuantity}");
+                    }
+
+                    break;
+
                 case "--help":
                 case "-h":
                     PrintHelp();
@@ -239,6 +259,10 @@ internal class Program
         RouterContext.UseIpV6 = useIPv6 && !disableIPv6;
         RouterContext.Inst.EnableSSU2 = enableSSU2;
         RouterContext.Inst.FloodfillEnabled = floodfill;
+
+        TunnelPoolSettings.DEFAULT_IB_EXPL_LENGTH = exploratoryLength;
+        TunnelPoolSettings.DEFAULT_OB_EXPL_LENGTH = exploratoryLength;
+        TunnelPoolSettings.DEFAULT_QUANTITY = exploratoryQuantity;
 
         // Auto-enable hidden mode when firewalled (matches Java I2P behavior)
         if (isFirewalled || hiddenMode)

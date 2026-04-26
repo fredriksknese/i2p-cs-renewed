@@ -72,6 +72,28 @@ public abstract class I2PKeyType : I2PType
                $"Key : {Key}";
     }
 
+    public static KeyTypes Parse(string name)
+    {
+        if (ushort.TryParse(name, out var id))
+        {
+            return (KeyTypes)id;
+        }
+
+        var normalized = name.Replace("_", "").Replace("-", "").ToUpperInvariant();
+        return normalized switch
+        {
+            "ELGAMAL2048" or "ELGAMAL" or "0" => KeyTypes.ElGamal2048,
+            "P256" or "1" => KeyTypes.P256,
+            "P384" or "2" => KeyTypes.P384,
+            "P521" or "3" => KeyTypes.P521,
+            "X25519" or "ECIESX25519" or "4" => KeyTypes.X25519,
+            "MLKEM512X25519" or "5" => KeyTypes.MLKEM512_X25519,
+            "MLKEM768X25519" or "6" => KeyTypes.MLKEM768_X25519,
+            "MLKEM1024X25519" or "7" => KeyTypes.MLKEM1024_X25519,
+            _ => KeyTypes.Invalid
+        };
+    }
+
     public static int PublicKeyLength(KeyTypes kt)
     {
         switch (kt)
@@ -89,16 +111,10 @@ public abstract class I2PKeyType : I2PType
                 return 132;
 
             case KeyTypes.X25519:
-                return 32;
-
             case KeyTypes.MLKEM512_X25519:
-                return 800 + 32;
-
             case KeyTypes.MLKEM768_X25519:
-                return 1184 + 32;
-
             case KeyTypes.MLKEM1024_X25519:
-                return 1568 + 32;
+                return 32;
 
             case KeyTypes.MLKEM512:
                 return 800;
@@ -141,16 +157,10 @@ public abstract class I2PKeyType : I2PType
                 return 66;
 
             case KeyTypes.X25519:
-                return 32;
-
             case KeyTypes.MLKEM512_X25519:
-                return 1632 + 32;
-
             case KeyTypes.MLKEM768_X25519:
-                return 2400 + 32;
-
             case KeyTypes.MLKEM1024_X25519:
-                return 3168 + 32;
+                return 32;
 
             case KeyTypes.MLKEM512:
                 return 1632;

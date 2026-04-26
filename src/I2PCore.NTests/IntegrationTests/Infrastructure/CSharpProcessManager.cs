@@ -39,6 +39,10 @@ public class CSharpProcessManager : IDisposable
     public int SamPort { get; }
     public int HttpProxyPort { get; }
     public bool Floodfill { get; set; }
+    public bool EnableSsu2 { get; set; } = true;
+    public string ExternalIp { get; set; } = "127.0.0.1";
+    public int ExploratoryLength { get; set; } = 2;
+    public int ExploratoryQuantity { get; set; } = 3;
 
     public void Dispose()
     {
@@ -107,15 +111,25 @@ public class CSharpProcessManager : IDisposable
         args.Append($"--data-dir \"{DataDir}\"");
         args.Append($" --netid {I2pdConfigGenerator.TestNetworkId}");
         args.Append(" --disable-reseed");
-        args.Append(" --external-ip 127.0.0.1");
+        args.Append($" --external-ip {ExternalIp}");
         args.Append($" --ntcp2-port {Ntcp2Port}");
-        args.Append($" --ssu2-port {Ssu2Port}");
-        args.Append(" --enable-ssu2");
+        if (EnableSsu2)
+        {
+            args.Append($" --ssu2-port {Ssu2Port}");
+            args.Append(" --enable-ssu2");
+        }
+        else
+        {
+            args.Append(" --disable-ssu2");
+        }
         args.Append(" --not-firewalled");
         args.Append($" --sam-port {SamPort}");
         args.Append($" --http-proxy-port {HttpProxyPort}");
         if (Floodfill)
             args.Append(" --floodfill");
+
+        args.Append($" --exploratory-length {ExploratoryLength}");
+        args.Append($" --exploratory-quantity {ExploratoryQuantity}");
 
         Logging.LogInformation($"Starting C# Router B: dotnet {binary} {args}");
 
@@ -208,6 +222,15 @@ public class CSharpProcessManager : IDisposable
     {
         var netDbDir = Path.Combine(DataDir, "NetDb");
         RouterInfoExchanger.ExportRouterInfo(ri, netDbDir);
+    }
+
+    public int GetKnownRouterCount()
+    {
+        var netDbDir = Path.Combine(DataDir, "NetDb");
+        if (!Directory.Exists(netDbDir)) return 0;
+
+        // I2P-CS stores in NetDb/rX/routerInfo-YYY.dat
+        return Directory.GetFiles(netDbDir, "routerInfo-*.dat", SearchOption.AllDirectories).Length;
     }
 
     /// <summary>

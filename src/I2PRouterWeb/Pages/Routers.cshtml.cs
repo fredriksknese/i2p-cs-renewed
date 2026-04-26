@@ -75,6 +75,7 @@ public class RoutersModel : PageModel
                     var isConnected = false;
                     var protocol = string.Empty;
                     var isPQ = false;
+                    var isOutgoing = false;
 
                     var activeTransport = transportProvider?.GetActiveTransport(hash);
                     if (activeTransport != null)
@@ -82,6 +83,7 @@ public class RoutersModel : PageModel
                         isConnected = true;
                         protocol = activeTransport.Protocol;
                         isPQ = activeTransport.IsPQ;
+                        isOutgoing = activeTransport.IsOutgoing;
                     }
 
                     // Gather all transport types from addresses
@@ -112,6 +114,7 @@ public class RoutersModel : PageModel
                         IsConnected = isConnected,
                         Protocol = protocol,
                         IsPQ = isPQ,
+                        IsOutgoing = isOutgoing,
                         PublishedDate = (DateTime)ri.PublishedDate,
                         Score = stats?.Score ?? 0,
                         SuccessfulConnects = stats?.SuccessfulConnects ?? 0,
@@ -148,6 +151,7 @@ public class RouterDisplayInfo
     public bool IsConnected { get; set; }
     public string Protocol { get; set; } = "";
     public bool IsPQ { get; set; }
+    public bool IsOutgoing { get; set; }
     public DateTime PublishedDate { get; set; }
     public float Score { get; set; }
     public long SuccessfulConnects { get; set; }

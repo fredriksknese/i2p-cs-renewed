@@ -31,7 +31,7 @@ internal class Session
 
     private readonly TimeWindowDictionary<uint, LeaseSetUpdateAck> NotAckedLsUpdates = new(WaitForLsUpdateAck);
 
-    private readonly TimeWindowDictionary<OutboundTunnel, ILease> OutboundRemoteLeasePairs = new(TickSpan.Minutes(15));
+    private readonly TimeWindowDictionary<OutboundTunnel, ILease> OutboundRemoteLeasePairs = new(TickSpan.Minutes(1));
     private readonly I2PIdentHash RemoteDestination;
 
     private readonly TimeSpan TimeCompareEpsilon = TimeSpan.FromSeconds(2);
@@ -358,11 +358,13 @@ internal class Session
         var myleases = new DatabaseStoreMessage(signedleases);
         var lsack = new DeliveryStatusMessage(I2NpMessage.GenerateMessageId());
 
+        // Use LOCAL delivery for LeaseSet, matching Java I2P behavior.
+        // The remote router stores the LeaseSet in its NetDB when it
+        // receives a DatabaseStoreMessage with LOCAL delivery.
         cloves.Add(
             new GarlicClove(
-                new GarlicCloveDeliveryDestination(
-                    myleases,
-                    RemoteDestination)));
+                new GarlicCloveDeliveryLocal(
+                    myleases)));
 
         cloves.Add(
             new GarlicClove(

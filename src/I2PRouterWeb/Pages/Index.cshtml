@@ -1,4 +1,5 @@
 ﻿@page
+@using I2PCore.Data
 @model IndexModel
 @{
     ViewData["Title"] = "Dashboard";
@@ -118,7 +119,8 @@
         <div class="card stat-card">
             <div class="card-body">
                 <h6 class="card-subtitle mb-2 text-muted">Transport Sessions</h6>
-                <p class="card-text fs-4">NTCP2: @Model.RouterStats.NTCP2SessionCount / SSU2: @Model.RouterStats.SSU2SessionCount</p>
+                <p class="card-text fs-4">NTCP2: @Model.RouterStats.NTCP2SessionCount /
+                    SSU2: @Model.RouterStats.SSU2SessionCount</p>
             </div>
         </div>
     </div>
@@ -196,12 +198,15 @@
             </div>
             <div class="card-body">
                 <p class="card-text text-muted mb-3 small">
-                    If automatic reseed fails, you can manually upload a <strong>.su3</strong> or <strong>.zip</strong> reseed file.
+                    If automatic reseed fails, you can manually upload a <strong>.su3</strong> or <strong>.zip</strong>
+                    reseed file.
                     These files contain RouterInfo for bootstrapping the network.
                 </p>
-                <form method="post" asp-page-handler="ManualReseed" enctype="multipart/form-data" class="row g-2 align-items-center">
+                <form method="post" asp-page-handler="ManualReseed" enctype="multipart/form-data"
+                      class="row g-2 align-items-center">
                     <div class="col-auto">
-                        <input type="file" name="reseedFile" class="form-control form-control-sm" accept=".su3,.zip" required>
+                        <input type="file" name="reseedFile" class="form-control form-control-sm" accept=".su3,.zip"
+                               required>
                     </div>
                     <div class="col-auto">
                         <button type="submit" class="btn btn-primary btn-sm">
@@ -253,3 +258,108 @@
         </div>
     </div>
 </div>
+
+@if (Model.RouterStats.FullRouterInfo != null)
+{
+    var ri = Model.RouterStats.FullRouterInfo;
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">Full Router Info</h5>
+                    <span class="badge bg-light text-primary">Published: @ri.PublishedDate</span>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <h6>Identity</h6>
+                            <table class="table table-sm table-bordered">
+                                <tr>
+                                    <th style="width: 30%">Full Hash</th>
+                                    <td class="text-break"><code>@ri.Identity.IdentHash.Id64</code></td>
+                                </tr>
+                                <tr>
+                                    <th>Certificate</th>
+                                    <td>@ri.Identity.Certificate</td>
+                                </tr>
+                                <tr>
+                                    <th>Public Key</th>
+                                    <td class="text-break"><code>@Convert.ToBase64String(ri.Identity.PublicKey.ToByteArray())</code></td>
+                                </tr>
+                                <tr>
+                                    <th>Signing Key</th>
+                                    <td class="text-break"><code>@Convert.ToBase64String(ri.Identity.SigningPublicKey.ToByteArray())</code></td>
+                                </tr>
+                            </table>
+
+                            <h6 class="mt-4">Router Options</h6>
+                            @if (ri.Options.Any())
+                            {
+                                <table class="table table-sm table-striped">
+                                    <thead>
+                                    <tr>
+                                        <th>Key</th>
+                                        <th>Value</th>
+                                    </tr>
+                                    </thead>
+                                    <tbody>
+                                    @foreach (var opt in ri.Options)
+                                    {
+                                        <tr>
+                                            <td><code>@opt.Key</code></td>
+                                            <td class="text-break">@opt.Value</td>
+                                        </tr>
+                                    }
+                                    </tbody>
+                                </table>
+                            }
+                            else
+                            {
+                                <p class="text-muted small">No options defined.</p>
+                            }
+                        </div>
+
+                        <div class="col-md-6">
+                            <h6>Addresses</h6>
+                            @if (ri.Addresses != null && ri.Addresses.Any())
+                            {
+                                foreach (var addr in ri.Addresses)
+                                {
+                                    <div class="card mb-3 shadow-sm">
+                                        <div class="card-header py-1 bg-light">
+                                            <strong>@addr.TransportStyle</strong>
+                                            <span class="badge bg-secondary float-end">Cost: @addr.Cost</span>
+                                        </div>
+                                        <div class="card-body py-2">
+                                            @if (addr.Options.Any())
+                                            {
+                                                <table class="table table-sm table-borderless mb-0">
+                                                    @foreach (var opt in addr.Options)
+                                                    {
+                                                        <tr>
+                                                            <th style="width: 30%" class="py-0 small">@opt.Key</th>
+                                                            <td class="py-0 small text-break">@opt.Value</td>
+                                                        </tr>
+                                                    }
+                                                </table>
+                                            }
+                                        </div>
+                                    </div>
+                                }
+                            }
+                            else
+                            {
+                                <p class="text-muted small">No addresses defined.</p>
+                            }
+
+                            <h6 class="mt-4">Signature</h6>
+                            <div class="p-2 bg-light border rounded">
+                                <code class="text-break small">@ri.Signature</code>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+}

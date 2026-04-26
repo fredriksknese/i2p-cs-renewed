@@ -209,6 +209,7 @@ public class I2PStream : IDisposable
     public event Action<I2PStream, StreamStatus> StatusChanged;
     public event Action<I2PStream, uint, int> PacketSent;
     public event Action<I2PStream, uint, int> PacketReceived;
+    public event Action<I2PStream, I2PDestination> LeaseSetLookupRequired;
 
     /// <summary>
     ///     Update the current remote lease used for sending.
@@ -230,8 +231,8 @@ public class I2PStream : IDisposable
     public bool NeedsLeaseRefresh()
     {
         if (_currentRemoteLease == null) return true;
-        // Refresh if within 30 seconds of expiry
-        return DateTime.UtcNow.AddSeconds(30) >= _remoteLeaseExpiry;
+        // Refresh if within 30 seconds of expiry or if we have too many resend attempts
+        return DateTime.UtcNow.AddSeconds(30) >= _remoteLeaseExpiry || _numResendAttempts > 2;
     }
 
     /// <summary>
@@ -1075,6 +1076,12 @@ public class I2PStream : IDisposable
                 Logging.LogDebug(
                     $"I2PStream {RecvStreamId:X8}: Timeout retransmit seq {oldest.SequenceNumber}. attempts {_numResendAttempts}");
                 _numResendAttempts++;
+
+                if (_numResendAttempts >= 3 && ShouldLookupLeaseSet())
+                {
+                    Logging.LogInformation($"I2PStream {RecvStreamId:X8}: Too many retransmissions, triggering LeaseSet lookup for {_remoteDestination?.IdentHash.Id32Short}");
+                    LeaseSetLookupRequired?.Invoke(this, _remoteDestination);
+                }
 
                 // Update ACK info before re-sending
                 oldest.ReceiveStreamId = SendStreamId;

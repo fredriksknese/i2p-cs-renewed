@@ -12,70 +12,23 @@ public class I2PPrivateKey : I2PKeyType
     {
         switch (Certificate.PublicKeyType)
         {
+            case KeyTypes.X25519:
             case KeyTypes.MLKEM512_X25519:
-            {
-                var (_, mlkemPriv) = MLKEM512.GenerateKeyPair();
-                var x25519Priv = BufUtils.RandomBytes(32);
-                x25519Priv[0] &= 248;
-                x25519Priv[31] &= 127;
-                x25519Priv[31] |= 64;
-
-                var combined = new byte[mlkemPriv.Length + x25519Priv.Length];
-                Array.Copy(mlkemPriv, 0, combined, 0, mlkemPriv.Length);
-                Array.Copy(x25519Priv, 0, combined, mlkemPriv.Length, x25519Priv.Length);
-                Key = new I2PByteBlock(combined);
-            }
-                break;
-
             case KeyTypes.MLKEM768_X25519:
-            {
-                var (_, mlkemPriv) = MLKEM768.GenerateKeyPair();
-                var x25519Priv = BufUtils.RandomBytes(32);
-                x25519Priv[0] &= 248;
-                x25519Priv[31] &= 127;
-                x25519Priv[31] |= 64;
-
-                var combined = new byte[mlkemPriv.Length + x25519Priv.Length];
-                Array.Copy(mlkemPriv, 0, combined, 0, mlkemPriv.Length);
-                Array.Copy(x25519Priv, 0, combined, mlkemPriv.Length, x25519Priv.Length);
-                Key = new I2PByteBlock(combined);
-            }
-                break;
-
             case KeyTypes.MLKEM1024_X25519:
-            {
-                var (_, mlkemPriv) = MLKEM1024.GenerateKeyPair();
-                var x25519Priv = BufUtils.RandomBytes(32);
-                x25519Priv[0] &= 248;
-                x25519Priv[31] &= 127;
-                x25519Priv[31] |= 64;
-
-                var combined = new byte[mlkemPriv.Length + x25519Priv.Length];
-                Array.Copy(mlkemPriv, 0, combined, 0, mlkemPriv.Length);
-                Array.Copy(x25519Priv, 0, combined, mlkemPriv.Length, x25519Priv.Length);
-                Key = new I2PByteBlock(combined);
-            }
+                // X25519 key clamping per RFC 7748
+                Key = new I2PByteBlock(BufUtils.RandomBytes(32));
+                Key[0] &= 248;
+                Key[Key.Length - 1] &= 127;
+                Key[Key.Length - 1] |= 64;
                 break;
 
             default:
                 Key = new I2PByteBlock(BufUtils.RandomBytes(KeySizeBytes));
 
-                switch (Certificate.PublicKeyType)
-                {
-                    case KeyTypes.X25519:
-                        // X25519 key clamping per RFC 7748
-                        Key[0] &= 248;
-                        Key[Key.Length - 1] &= 127;
-                        Key[Key.Length - 1] |= 64;
-                        break;
-
-                    default:
-                        // ElGamal / EC keys: ensure high bit set and odd
-                        Key[0] |= 0x80;
-                        Key[Key.Length - 1] |= 0x01;
-                        break;
-                }
-
+                // ElGamal / EC keys: ensure high bit set and odd
+                Key[0] |= 0x80;
+                Key[Key.Length - 1] |= 0x01;
                 break;
         }
     }

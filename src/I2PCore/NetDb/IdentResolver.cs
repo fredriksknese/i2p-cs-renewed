@@ -42,11 +42,11 @@ public class IdentResolver
     }
 
     public const int DatabaseLookupRetriesRi = 4;
-    public const int DatabaseLookupRetriesLs = 20;
+    public const int DatabaseLookupRetriesLs = 40;
     public const int DatabaseLookupSelectFloodfillCountRi = 3;
     public const int DatabaseLookupSelectFloodfillCountLs = 6;
-    public static TickSpan WaitForRouterInfo = TickSpan.Seconds(10);
-    public static TickSpan WaitForLeaseSet = TickSpan.Seconds(10);
+    public static TickSpan WaitForRouterInfo = TickSpan.Seconds(15);
+    public static TickSpan WaitForLeaseSet = TickSpan.Seconds(20);
 
     private readonly PeriodicAction CheckForTimouts = new(TickSpan.Seconds(3));
     private readonly PeriodicAction ExploreNewRouters = new(TickSpan.Seconds(15));
@@ -920,8 +920,8 @@ public class IdentResolver
         {
             if (info == null) continue;
 
-            // Overall timeout check (30 seconds for NetDbLookup page consistency)
-            if (info.Start.DeltaToNow > TickSpan.Seconds(30))
+            // Overall timeout check (120 seconds for NetDbLookup page consistency)
+            if (info.Start.DeltaToNow > TickSpan.Seconds(120))
             {
                 FailLookup(info, "overall timeout");
                 continue;

@@ -321,24 +321,54 @@ public class ECIESSessionKeyManager
     /// </summary>
     private ProcessedDestinationMessage ProcessNewSessionMessage(byte[] message)
     {
+        // Detect hybrid message by length
+        NoiseIKhfs.KEMVariant? variant = null;
+        if (message.Length >= 1680) variant = NoiseIKhfs.KEMVariant.MLKEM1024;
+        else if (message.Length >= 1296) variant = NoiseIKhfs.KEMVariant.MLKEM768;
+        else if (message.Length >= 912) variant = NoiseIKhfs.KEMVariant.MLKEM512;
+
         try
         {
-            var newSessionMsg = ECIESNewSessionMessage.Parse(message);
-            var (payload, remoteStaticKey) = newSessionMsg.Decrypt(_localStaticPrivateKey, _localStaticPublicKey);
-
-            // Create hash from remote static key
-            using var sha = SHA256.Create();
-            var hashBytes = sha.ComputeHash(remoteStaticKey);
-            var remoteHash = new I2PIdentHash(new I2PBufferCursor(hashBytes));
-
-            return new ProcessedDestinationMessage
+            if (variant.HasValue)
             {
-                Success = true,
-                Payload = payload,
-                RemoteDestination = remoteHash,
-                IsNewSession = true,
-                RequiresReply = true
-            };
+                var hybridMsg = ECIESHybridNewSessionMessage.Parse(message, variant.Value);
+                var (payload, remoteStaticKey, remoteKemPublicKey) = hybridMsg.Decrypt(
+                    _localStaticPrivateKey, _localStaticPublicKey, variant.Value);
+
+                using var sha = SHA256.Create();
+                var hashBytes = sha.ComputeHash(remoteStaticKey);
+                var remoteHash = new I2PIdentHash(new I2PBufferCursor(hashBytes));
+
+                return new ProcessedDestinationMessage
+                {
+                    Success = true,
+                    Payload = payload,
+                    RemoteDestination = remoteHash,
+                    IsNewSession = true,
+                    RequiresReply = true,
+                    IsHybrid = true,
+                    KEMVariant = variant.Value
+                };
+            }
+            else
+            {
+                var newSessionMsg = ECIESNewSessionMessage.Parse(message);
+                var (payload, remoteStaticKey) = newSessionMsg.Decrypt(_localStaticPrivateKey, _localStaticPublicKey);
+
+                // Create hash from remote static key
+                using var sha = SHA256.Create();
+                var hashBytes = sha.ComputeHash(remoteStaticKey);
+                var remoteHash = new I2PIdentHash(new I2PBufferCursor(hashBytes));
+
+                return new ProcessedDestinationMessage
+                {
+                    Success = true,
+                    Payload = payload,
+                    RemoteDestination = remoteHash,
+                    IsNewSession = true,
+                    RequiresReply = true
+                };
+            }
         }
         catch (Exception ex)
         {

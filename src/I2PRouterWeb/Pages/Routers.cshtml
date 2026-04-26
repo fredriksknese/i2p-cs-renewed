@@ -98,65 +98,60 @@
                 <div class="table-responsive">
                     <table class="table table-hover table-striped table-sm mb-0" style="font-size: 0.8rem;">
                         <thead class="table-dark">
-                            <tr>
-                                <th>Hash</th>
-                                <th>Host:Port</th>
-                                <th>Caps</th>
-                                <th>Ver</th>
-                                <th>FF</th>
-                                <th>Transports</th>
-                                <th>Connection</th>
-                                <th>Score</th>
-                                <th>Connects OK/Fail</th>
-                                <th>Tunnels OK/Reject/Timeout</th>
-                                <th>Addrs</th>
-                                <th>Published</th>
-                            </tr>
+                        <tr>
+                            <th>Hash</th>
+                            <th>Host:Port</th>
+                            <th>Caps</th>
+                            <th>Ver</th>
+                            <th>FF</th>
+                            <th>Transports</th>
+                            <th>Connection</th>
+                            <th>Score</th>
+                            <th>Connects OK/Fail</th>
+                            <th>Tunnels OK/Reject/Timeout</th>
+                            <th>Addrs</th>
+                            <th>Published</th>
+                        </tr>
                         </thead>
                         <tbody>
-                            @foreach (var r in Model.Routers)
-                            {
-                                <tr class="@(r.IsConnected ? "table-success" : "")">
-                                    <td class="router-hash">
-                                        <a href="/RouterDetail?hash=@r.Hash" class="text-decoration-none">@r.Hash</a>
-                                    </td>
-                                    <td class="text-nowrap">@r.Host:@r.Port</td>
-                                    <td><code>@r.Caps</code></td>
-                                    <td>@r.Version</td>
-                                    <td>@(r.IsFloodfill ? "Y" : "")</td>
-                                    <td>
-                                        @foreach (var t in r.Transports)
-                                        {
-                                            <span class="badge bg-secondary me-1">@t</span>
-                                        }
-                                    </td>
-                                    <td>
-                                        @if (r.IsConnected)
-                                        {
-                                            @if (r.IsPQ)
-                                            {
-                                                <span class="badge bg-success">@r.Protocol-PQ</span>
-                                            }
-                                            else
-                                            {
-                                                <span class="badge bg-success">@r.Protocol</span>
-                                            }
-                                        }
-                                    </td>
-                                    <td>@r.Score.ToString("F1")</td>
-                                    <td class="text-nowrap">
-                                        <span class="text-success">@r.SuccessfulConnects</span> /
-                                        <span class="text-danger">@r.FailedConnects</span>
-                                    </td>
-                                    <td class="text-nowrap">
-                                        <span class="text-success">@r.SuccessfulTunnelMember</span> /
-                                        <span class="text-warning">@r.DeclinedTunnelMember</span> /
-                                        <span class="text-danger">@r.TunnelBuildTimeout</span>
-                                    </td>
-                                    <td>@r.AddressCount</td>
-                                    <td class="text-nowrap text-muted">@r.PublishedDate.ToString("MM/dd HH:mm")</td>
-                                </tr>
-                            }
+                        @foreach (var r in Model.Routers)
+                        {
+                            <tr class="@(r.IsConnected ? "table-success" : "")">
+                                <td class="router-hash">
+                                    <a href="/RouterDetail?hash=@r.Hash" class="text-decoration-none">@r.Hash</a>
+                                </td>
+                                <td class="text-nowrap">@r.Host:@r.Port</td>
+                                <td><code>@r.Caps</code></td>
+                                <td>@r.Version</td>
+                                <td>@(r.IsFloodfill ? "Y" : "")</td>
+                                <td>
+                                    @foreach (var t in r.Transports)
+                                    {
+                                        <span class="badge bg-secondary me-1">@t</span>
+                                    }
+                                </td>
+                                <td>
+                                    @if (r.IsConnected)
+                                    {
+                                        <span class="badge bg-success">
+                                            @r.Protocol@(r.IsPQ ? "-PQ" : "") (@(r.IsOutgoing ? "OB" : "IB"))
+                                        </span>
+                                    }
+                                </td>
+                                <td>@r.Score.ToString("F1")</td>
+                                <td class="text-nowrap">
+                                    <span class="text-success">@r.SuccessfulConnects</span> /
+                                    <span class="text-danger">@r.FailedConnects</span>
+                                </td>
+                                <td class="text-nowrap">
+                                    <span class="text-success">@r.SuccessfulTunnelMember</span> /
+                                    <span class="text-warning">@r.DeclinedTunnelMember</span> /
+                                    <span class="text-danger">@r.TunnelBuildTimeout</span>
+                                </td>
+                                <td>@r.AddressCount</td>
+                                <td class="text-nowrap text-muted">@r.PublishedDate.ToString("MM/dd HH:mm")</td>
+                            </tr>
+                        }
                         </tbody>
                     </table>
                 </div>

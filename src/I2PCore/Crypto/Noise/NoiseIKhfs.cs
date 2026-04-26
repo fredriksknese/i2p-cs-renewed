@@ -74,7 +74,8 @@ public class NoiseIKhfs
         Array.Copy(h, chainingKey, 32);
         cipherNonce = 0;
 
-        // Standard Noise initialization: MixHash(null prologue)
+        // Standard Noise initialization: MixHash(empty prologue)
+        // Java I2P precomputes this in SymmetricState static initializer.
         MixHash(Array.Empty<byte>());
     }
 

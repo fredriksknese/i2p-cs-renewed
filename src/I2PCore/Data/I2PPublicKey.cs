@@ -24,55 +24,10 @@ public class I2PPublicKey : I2PKeyType
                 break;
 
             case KeyTypes.X25519:
-                Key = new I2PByteBlock(X25519.GetPublicKey(priv.ToByteArray()));
-                break;
-
             case KeyTypes.MLKEM512_X25519:
-            {
-                var privBytes = priv.ToByteArray();
-                var mlkemPriv = privBytes.Take(MLKEM512.SecretKeyBytes).ToArray();
-                var x25519Priv = privBytes.Skip(MLKEM512.SecretKeyBytes).Take(32).ToArray();
-
-                var mlkemPub = MLKEM512.GetPublicKey(mlkemPriv);
-                var x25519Pub = X25519.GetPublicKey(x25519Priv);
-
-                var combined = new byte[mlkemPub.Length + x25519Pub.Length];
-                Array.Copy(mlkemPub, 0, combined, 0, mlkemPub.Length);
-                Array.Copy(x25519Pub, 0, combined, mlkemPub.Length, x25519Pub.Length);
-                Key = new I2PByteBlock(combined);
-            }
-                break;
-
             case KeyTypes.MLKEM768_X25519:
-            {
-                var privBytes = priv.ToByteArray();
-                var mlkemPriv = privBytes.Take(MLKEM768.SecretKeyBytes).ToArray();
-                var x25519Priv = privBytes.Skip(MLKEM768.SecretKeyBytes).Take(32).ToArray();
-
-                var mlkemPub = MLKEM768.GetPublicKey(mlkemPriv);
-                var x25519Pub = X25519.GetPublicKey(x25519Priv);
-
-                var combined = new byte[mlkemPub.Length + x25519Pub.Length];
-                Array.Copy(mlkemPub, 0, combined, 0, mlkemPub.Length);
-                Array.Copy(x25519Pub, 0, combined, mlkemPub.Length, x25519Pub.Length);
-                Key = new I2PByteBlock(combined);
-            }
-                break;
-
             case KeyTypes.MLKEM1024_X25519:
-            {
-                var privBytes = priv.ToByteArray();
-                var mlkemPriv = privBytes.Take(MLKEM1024.SecretKeyBytes).ToArray();
-                var x25519Priv = privBytes.Skip(MLKEM1024.SecretKeyBytes).Take(32).ToArray();
-
-                var mlkemPub = MLKEM1024.GetPublicKey(mlkemPriv);
-                var x25519Pub = X25519.GetPublicKey(x25519Priv);
-
-                var combined = new byte[mlkemPub.Length + x25519Pub.Length];
-                Array.Copy(mlkemPub, 0, combined, 0, mlkemPub.Length);
-                Array.Copy(x25519Pub, 0, combined, mlkemPub.Length, x25519Pub.Length);
-                Key = new I2PByteBlock(combined);
-            }
+                Key = new I2PByteBlock(X25519.GetPublicKey(priv.ToByteArray()));
                 break;
 
             case KeyTypes.P256:

@@ -30,6 +30,7 @@ public class RouterDetailModel : PageModel
     public bool IsConnected { get; set; }
     public string Protocol { get; set; } = "";
     public bool IsPQ { get; set; }
+    public bool IsOutgoing { get; set; }
 
     // Addresses
     public List<AddressDetail> Addresses { get; set; } = new();
@@ -114,6 +115,7 @@ public class RouterDetailModel : PageModel
             IsConnected = true;
             Protocol = activeTransport.Protocol;
             IsPQ = activeTransport.IsPQ;
+            IsOutgoing = activeTransport.IsOutgoing;
         }
 
         // Addresses

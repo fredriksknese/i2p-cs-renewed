@@ -8,6 +8,12 @@ using I2PCore.TunnelLayer;
 using I2PCore.TunnelLayer.I2NP.Data;
 using I2PCore.TunnelLayer.I2NP.Messages;
 using I2PCore.Utils;
+using I2PCore.SessionLayer.ECIES;
+using I2PCore.Crypto.Noise;
+using System.Buffers;
+
+using GarlicClove = I2PCore.TunnelLayer.I2NP.Data.GarlicClove;
+using Block = I2PCore.SessionLayer.ECIES.Block;
 
 namespace I2PCore;
 
@@ -15,6 +21,9 @@ public class FloodfillUpdater
 {
     public static readonly TickSpan DatabaseStoreNonReplyTimeout = TickSpan.Seconds(20);
     private readonly PeriodicAction CheckForTimouts = new(TickSpan.Seconds(5));
+
+    private readonly TimeWindowDictionary<I2PIdentHash, ILeaseSet> PendingLeaseSetUpdates = new(TickSpan.Minutes(10));
+    private readonly PeriodicAction RetryPendingUpdates = new(TickSpan.Seconds(10));
 
     private readonly TimeWindowDictionary<uint, FfUpdateRequestInfo> OutstandingRequests = new(TickSpan.Seconds(80));
 
@@ -48,6 +57,24 @@ public class FloodfillUpdater
     {
         StartNewUpdateRouterInfo.Do(StartNewUpdatesRouterInfo);
         CheckForTimouts.Do(CheckTimeouts);
+        RetryPendingUpdates.Do(ProcessPendingUpdates);
+    }
+
+    private void ProcessPendingUpdates()
+    {
+        foreach (var ls in PendingLeaseSetUpdates.ToArray())
+        {
+            if (ls.Value.Expire < DateTime.UtcNow)
+            {
+                PendingLeaseSetUpdates.TryRemove(ls.Key, out _);
+                continue;
+            }
+
+            if (StartNewUpdatesLeaseSetInternal(ls.Value))
+            {
+                PendingLeaseSetUpdates.TryRemove(ls.Key, out _);
+            }
+        }
     }
 
     public void TrigUpdateRouterInfo(string reason)
@@ -65,7 +92,10 @@ public class FloodfillUpdater
 
     public void TrigUpdateLeaseSet(ILeaseSet leaseset)
     {
-        StartNewUpdatesLeaseSet(leaseset);
+        if (!StartNewUpdatesLeaseSetInternal(leaseset))
+        {
+            PendingLeaseSetUpdates[leaseset.Destination.IdentHash] = leaseset;
+        }
     }
 
     private void StartNewUpdatesRouterInfo()
@@ -120,7 +150,7 @@ public class FloodfillUpdater
             }
     }
 
-    private void StartNewUpdatesLeaseSet(ILeaseSet ls)
+    private bool StartNewUpdatesLeaseSetInternal(ILeaseSet ls)
     {
         // old lease sets are out of date
         while (OutstandingRequests.TryRemove(
@@ -151,6 +181,7 @@ public class FloodfillUpdater
 
         var destinations = list.Select(i => NetDb.Inst[i]);
 
+        var successes = 0;
         foreach (var ff in destinations)
             try
             {
@@ -162,14 +193,34 @@ public class FloodfillUpdater
                             $"update {ffident.Id32Short}, token {token,10}, " +
                             $"dist: {ffident ^ ls.Destination.IdentHash.RoutingKey}.");
 
-                OutstandingRequests[token] = new FfUpdateRequestInfo(ffident, token, ls, 0);
-
-                SendLeaseSetUpdateGarlic(ffident, ff.Identity.PublicKey, ls, token);
+                if (ff.Identity.Certificate.PublicKeyType == I2PKeyType.KeyTypes.X25519
+                    || ff.Identity.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM512_X25519
+                    || ff.Identity.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM768_X25519
+                    || ff.Identity.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM1024_X25519)
+                {
+                    Logging.LogInformation($"FloodfillUpdater: Publishing LS to ECIES FF {ffident.Id32Short}");
+                    if (SendLeaseSetUpdateEciesGarlic(ffident, ff.Identity.PublicKey.ToByteArray(), ls, token))
+                    {
+                        OutstandingRequests[token] = new FfUpdateRequestInfo(ffident, token, ls, 0);
+                        successes++;
+                    }
+                }
+                else
+                {
+                    Logging.LogInformation($"FloodfillUpdater: Publishing LS to ElGamal FF {ffident.Id32Short}");
+                    if (SendLeaseSetUpdateGarlic(ffident, ff.Identity.PublicKey, ls, token))
+                    {
+                        OutstandingRequests[token] = new FfUpdateRequestInfo(ffident, token, ls, 0);
+                        successes++;
+                    }
+                }
             }
             catch (Exception ex)
             {
                 Logging.Log(ex);
             }
+
+        return successes > 0;
     }
 
     private void SendUpdate(I2PIdentHash ff, uint token)
@@ -211,7 +262,7 @@ public class FloodfillUpdater
         TransportProvider.Send(ff, ds);
     }
 
-    private void SendLeaseSetUpdateGarlic(
+    private bool SendLeaseSetUpdateGarlic(
         I2PIdentHash ffdest,
         I2PPublicKey pubkey,
         ILeaseSet ls,
@@ -228,7 +279,7 @@ public class FloodfillUpdater
             Logging.LogDebug($"SendLeaseSetUpdateGarlic: " +
                              $"client: {client?.Destination.IdentHash.Id32Short ?? "none"}, " +
                              $"outtunnel: {outtunnel}, replytunnel: {replytunnel}");
-            return;
+            return false;
         }
 
         var ds = new DatabaseStoreMessage(ls, token, replytunnel.TunnelGw, replytunnel.TunnelId);
@@ -248,6 +299,63 @@ public class FloodfillUpdater
             new TunnelMessageRouter(
                 egmsg,
                 ffdest));
+        return true;
+    }
+
+    private bool SendLeaseSetUpdateEciesGarlic(
+        I2PIdentHash ffdest,
+        byte[] ffPubKey,
+        ILeaseSet ls,
+        uint token)
+    {
+        var client = Router.GetClientDestination(ls.Destination.IdentHash);
+        var outtunnel = client?.GetEstablishedOutboundTunnel()
+                        ?? TunnelProvider.Inst.GetEstablishedOutboundTunnel(TunnelPoolSelection.RequireExploratory);
+
+        var replytunnel = ls.Leases.Random();
+
+        if (outtunnel is null || replytunnel is null)
+        {
+            Logging.LogDebug($"SendLeaseSetUpdateEciesGarlic: " +
+                             $"client: {client?.Destination.IdentHash.Id32Short ?? "none"}, " +
+                             $"outtunnel: {outtunnel}, replytunnel: {replytunnel}");
+            return false;
+        }
+
+        var ds = new DatabaseStoreMessage(ls, token, replytunnel.TunnelGw, replytunnel.TunnelId);
+
+        // Build the garlic clove with local delivery instructions.
+        // ECIES clove format: DeliveryInstructions(1 byte: 0x00 = local) + type(1) + msgID(4) + expiration_secs(4) + payload
+        var cloveStream = new ArrayBufferWriter<byte>();
+        cloveStream.WriteByte(0); // Local delivery
+        cloveStream.WriteByte((byte)ds.MessageType);
+        cloveStream.WriteBlock(BufUtils.Flip32Bl(ds.MessageId));
+        var expirationSecs = (uint)(DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 20);
+        cloveStream.WriteBlock(BufUtils.Flip32Bl(expirationSecs));
+        cloveStream.WriteBlock(ds.Payload);
+
+        // Build ECIES blocks: DateTime + GarlicClove + Padding
+        var blocks = new List<Block>
+        {
+            new DateTimeBlock { Timestamp = (uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds() },
+            new GarlicCloveBlock { Data = cloveStream.WrittenSpan.ToArray() },
+            new PaddingBlock { Data = BufUtils.RandomBytes(16 + BufUtils.RandomInt(32)) }
+        };
+
+        var plaintext = ECIESBlockFormat.BuildBlocks(blocks);
+
+        // Encrypt using Noise N to the floodfill's X25519 public key
+        var noiseN = NoiseN.CreateInitiator(ffPubKey);
+        var encrypted = noiseN.CreateMessage(plaintext);
+        noiseN.Dispose();
+
+        var garlicMsg = new GarlicMessage(encrypted.ToArray());
+
+        outtunnel.Send(
+            new TunnelMessageRouter(
+                garlicMsg,
+                ffdest));
+        return true;
     }
 
     private void CheckTimeouts()

@@ -57,6 +57,8 @@ public partial class ClientDestination : IClient
     protected List<ILease> EstablishedLeasesField = new();
     public ILeaseSet SignedLeasesField;
 
+    public Dictionary<string, string> Options { get; } = new();
+
     // Sign leases yourself
     internal ClientDestination(
         I2PDestination dest,
@@ -83,8 +85,6 @@ public partial class ClientDestination : IClient
         bool publishdest) : this(destinfo.Destination, publishdest)
     {
         ThisDestinationInfo = destinfo;
-
-        MySessions.GenerateTemporaryKeys();
     }
 
     public int LowWatermarkForNewTags { get; set; } = 7;

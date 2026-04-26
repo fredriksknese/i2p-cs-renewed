@@ -45,7 +45,8 @@ public class NoiseKDF
         ChainingKey = new byte[HashLength];
         Array.Copy(Hash, ChainingKey, HashLength);
 
-        // Standard Noise initialization: MixHash(null prologue)
+        // NTCP2 and SSU2 follow standard Noise: MixHash(prologue) even when empty.
+        // This differs from ECIES/Ratchet (NoiseProtocol) which skips it.
         MixHash(Array.Empty<byte>());
 
         // Debug logging

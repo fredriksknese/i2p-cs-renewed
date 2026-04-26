@@ -29,9 +29,9 @@ public partial class NetDb
     {
         var result = new List<string>();
 
-        foreach (var item in Directory.GetDirectories(NetDbPath))
-        foreach (var file in Directory.GetFileSystemEntries(item, "routerInfo-*.dat"))
-            result.Add(file);
+        // Look in both top level and subdirectories
+        var files = Directory.GetFiles(NetDbPath, "routerInfo-*.dat", SearchOption.AllDirectories);
+        result.AddRange(files);
 
         return result;
     }

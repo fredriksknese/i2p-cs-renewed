@@ -7,7 +7,7 @@
 <div class="row mb-3">
     <div class="col-12">
         <h1 class="mb-4">Transit Tunnels</h1>
-        <p class="text-muted">Tunnels that this router is participating in for other I2P routers. 
+        <p class="text-muted">Tunnels that this router is participating in for other I2P routers.
             Limit: @Model.MaxTransitTunnels. <a href="/Settings">Change Settings</a></p>
     </div>
 </div>
@@ -59,58 +59,61 @@
                     <div class="table-responsive">
                         <table class="table table-hover table-striped">
                             <thead>
-                                <tr>
-                                    <th>Tunnel ID</th>
-                                    <th>From</th>
-                                    <th>To</th>
-                                    <th>Role</th>
-                                    <th>Messages</th>
-                                    <th>Data Sent</th>
-                                    <th>Data Recv</th>
-                                    <th>Bandwidth</th>
-                                    <th>Last Activity</th>
-                                </tr>
+                            <tr>
+                                <th>Tunnel ID</th>
+                                <th>From</th>
+                                <th>To</th>
+                                <th>Role</th>
+                                <th>Messages</th>
+                                <th>Data Sent</th>
+                                <th>Data Recv</th>
+                                <th>Bandwidth</th>
+                                <th>Last Activity</th>
+                            </tr>
                             </thead>
                             <tbody>
-                                @foreach (var tunnel in Model.TransitTunnels)
-                                {
-                                    <tr>
-                                        <td class="router-hash">@tunnel.TunnelId</td>
-                                        <td class="router-hash small">
-                                            @if (tunnel.FromRouterHash != null)
-                                            {
-                                                <a href="/RouterDetail?hash=@tunnel.FromRouter">@tunnel.FromRouter</a>
-                                            }
-                                            else
-                                            {
-                                                @tunnel.FromRouter
-                                            }
-                                        </td>
-                                        <td class="router-hash small">
-                                            @if (tunnel.ToRouterHash != null)
-                                            {
-                                                <a href="/RouterDetail?hash=@Uri.EscapeDataString(tunnel.ToRouter)">@tunnel.ToRouter</a>
-                                            }
-                                            else
-                                            {
-                                                @tunnel.ToRouter
-                                            }
-                                        </td>
-                                        <td>
-                                            <span class="badge bg-@(tunnel.IsInboundGateway ? "warning" : tunnel.IsOutboundEndpoint ? "success" : "info")">
+                            @foreach (var tunnel in Model.TransitTunnels)
+                            {
+                                <tr>
+                                    <td class="router-hash">@tunnel.TunnelId</td>
+                                    <td class="router-hash small">
+                                        @if (tunnel.FromRouterHash != null)
+                                        {
+                                            <a href="/RouterDetail?hash=@tunnel.FromRouter">@tunnel.FromRouter</a>
+                                        }
+                                        else
+                                        {
+                                            @tunnel.FromRouter
+                                        }
+                                    </td>
+                                    <td class="router-hash small">
+                                        @if (tunnel.ToRouterHash != null)
+                                        {
+                                            <a href="/RouterDetail?hash=@Uri.EscapeDataString(tunnel.ToRouter)">@tunnel.ToRouter</a>
+                                        }
+                                        else
+                                        {
+                                            @tunnel.ToRouter
+                                        }
+                                    </td>
+                                    <td>
+                                            <span
+                                                class="badge bg-@(tunnel.IsInboundGateway ? "warning" : tunnel.IsOutboundEndpoint ? "success" : "info")">
                                                 @(tunnel.IsInboundGateway ? "Inbound Gateway" : tunnel.IsOutboundEndpoint ? "Outbound Endpoint" : "Transit")
                                             </span>
-                                        </td>
-                                        <td>@tunnel.MessageCount</td>
-                                        <td class="small">@TunnelsModel.FormatBytes(tunnel.BytesSent)</td>
-                                        <td class="small">@TunnelsModel.FormatBytes(tunnel.BytesReceived)</td>
-                                        <td class="small">
-                                            <span title="Send">&#x2191; @tunnel.SendBitrateKBps.ToString("F1") KB/s</span><br/>
-                                            <span title="Receive">&#x2193; @tunnel.ReceiveBitrateKBps.ToString("F1") KB/s</span>
-                                        </td>
-                                        <td class="small text-muted">@tunnel.LastActivity.ToString("HH:mm:ss")</td>
-                                    </tr>
-                                }
+                                    </td>
+                                    <td>@tunnel.MessageCount</td>
+                                    <td class="small">@TunnelsModel.FormatBytes(tunnel.BytesSent)</td>
+                                    <td class="small">@TunnelsModel.FormatBytes(tunnel.BytesReceived)</td>
+                                    <td class="small">
+                                        <span
+                                            title="Send">&#x2191; @tunnel.SendBitrateKBps.ToString("F1") KB/s</span><br/>
+                                        <span
+                                            title="Receive">&#x2193; @tunnel.ReceiveBitrateKBps.ToString("F1") KB/s</span>
+                                    </td>
+                                    <td class="small text-muted">@tunnel.LastActivity.ToString("HH:mm:ss")</td>
+                                </tr>
+                            }
                             </tbody>
                         </table>
                     </div>
@@ -142,15 +145,18 @@ else
             </div>
             <div class="card-body">
                 <p class="mb-2">
-                    <strong>Transit Tunnels:</strong> Your router is used as an intermediate hop in someone else's tunnel.
+                    <strong>Transit Tunnels:</strong> Your router is used as an intermediate hop in someone else's
+                    tunnel.
                     Traffic passes through your router but you are neither the origin nor the destination.
                 </p>
                 <p class="mb-2">
-                    <strong>Inbound Gateway Tunnels:</strong> Your router is the first hop in an inbound tunnel for another router.
+                    <strong>Inbound Gateway Tunnels:</strong> Your router is the first hop in an inbound tunnel for
+                    another router.
                     You receive messages from any router and forward them into the tunnel.
                 </p>
                 <p class="mb-0">
-                    <strong>Outbound Endpoint Tunnels:</strong> Your router is the final hop in an outbound tunnel for another router.
+                    <strong>Outbound Endpoint Tunnels:</strong> Your router is the final hop in an outbound tunnel for
+                    another router.
                     You forward the decrypted messages to their final destination or the next inbound gateway.
                 </p>
             </div>

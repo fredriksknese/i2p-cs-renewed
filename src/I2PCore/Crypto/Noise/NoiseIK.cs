@@ -1,4 +1,5 @@
 using System;
+using I2PCore.Utils;
 
 namespace I2PCore.Crypto.Noise;
 
@@ -34,10 +35,8 @@ public class NoiseIK
         this.isInitiator = isInitiator;
         state = new NoiseHandshakeState();
         state.Initialize(ProtocolName);
-        // Java I2P's Noise implementation (Southern Storm) specifically skips 
-        // the initial MixHash if the prologue is null/empty.
-        // Our previous MixHashNullPrologue() was causing a divergence for ECIES.
-        // state.MixHashNullPrologue(); 
+        // Java I2P precomputes MixHash(empty prologue) in SymmetricState's
+        // static initializer. Our InitializeProtocol() already does this.
 
         if (localStaticPrivateKey == null || localStaticPrivateKey.Length != 32)
             throw new ArgumentException("Local static private key required and must be 32 bytes");
@@ -107,17 +106,35 @@ public class NoiseIK
         if (payload == null)
             payload = Array.Empty<byte>();
 
+        Logging.LogDebug($"NoiseIK-DIAG: pre-e h[0:8]={BitConverter.ToString(state.Hash, 0, 8)} " +
+            $"ck[0:8]={BitConverter.ToString(state.ChainingKey, 0, 8)}");
+
         // -> e (with Elligator2 encoding)
         var encodedEphemeralKey = state.GenerateEphemeralKeyElligator2();
+
+        Logging.LogDebug($"NoiseIK-DIAG: post-e h[0:8]={BitConverter.ToString(state.Hash, 0, 8)} " +
+            $"epk_decoded[0:4]={BitConverter.ToString(state.LocalEphemeralPublicKey, 0, 4)} " +
+            $"epk_encoded[0:4]={BitConverter.ToString(encodedEphemeralKey, 0, 4)}");
 
         // -> es (ephemeral-static DH with Bob's key)
         state.PerformES(true);
 
+        Logging.LogDebug($"NoiseIK-DIAG: post-es h[0:8]={BitConverter.ToString(state.Hash, 0, 8)} " +
+            $"ck[0:8]={BitConverter.ToString(state.ChainingKey, 0, 8)} " +
+            $"k[0:4]={BitConverter.ToString(state.EncryptionKey, 0, 4)}");
+
         // -> s (Alice's static key, encrypted)
         var encryptedStaticKey = state.SendStaticKey();
 
+        Logging.LogDebug($"NoiseIK-DIAG: post-s h[0:8]={BitConverter.ToString(state.Hash, 0, 8)} " +
+            $"encS[0:4]={BitConverter.ToString(encryptedStaticKey, 0, 4)} encS.len={encryptedStaticKey.Length}");
+
         // -> ss (static-static DH)
         state.PerformSS();
+
+        Logging.LogDebug($"NoiseIK-DIAG: post-ss h[0:8]={BitConverter.ToString(state.Hash, 0, 8)} " +
+            $"ck[0:8]={BitConverter.ToString(state.ChainingKey, 0, 8)} " +
+            $"k[0:4]={BitConverter.ToString(state.EncryptionKey, 0, 4)}");
 
         // -> payload
         var encryptedPayload = state.EncryptPayload(payload);

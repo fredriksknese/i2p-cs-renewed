@@ -30,6 +30,9 @@ public class StreamingDestination : IDisposable
     // Callback for sending data via garlic/tunnels
     private Action<I2PDestination, byte[]> _sendCallback;
 
+    // Callback for LeaseSet lookups
+    private Action<I2PDestination> _lookupCallback;
+
     public StreamingDestination(
         I2PDestination localDestination,
         I2PSigningPrivateKey signingPrivateKey,
@@ -59,6 +62,14 @@ public class StreamingDestination : IDisposable
     }
 
     /// <summary>
+    ///     Set the callback for triggering LeaseSet lookups.
+    /// </summary>
+    public void SetLookupCallback(Action<I2PDestination> lookupCallback)
+    {
+        _lookupCallback = lookupCallback;
+    }
+
+    /// <summary>
     ///     Create a new outgoing stream to a remote destination
     /// </summary>
     public I2PStream CreateStream(I2PDestination remoteDestination)
@@ -74,6 +85,7 @@ public class StreamingDestination : IDisposable
             data => _sendCallback(remote, data),
             _signingPrivateKey);
 
+        stream.LeaseSetLookupRequired += (s, d) => _lookupCallback?.Invoke(d);
         _streams[stream.RecvStreamId] = stream;
         stream.StreamClosed += OnStreamClosed;
 
@@ -145,6 +157,7 @@ public class StreamingDestination : IDisposable
                     },
                     _signingPrivateKey);
 
+                incomingStream.LeaseSetLookupRequired += (s, d) => _lookupCallback?.Invoke(d);
                 _streams[incomingStream.RecvStreamId] = incomingStream;
                 incomingStream.StreamClosed += OnStreamClosed;
 

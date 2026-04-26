@@ -241,6 +241,8 @@ public class FloodfillServer : IDisposable
     {
         if (store == null) return;
 
+        Logging.LogInformation($"FloodfillServer: HandleDatabaseStore from {from?.Id32Short ?? "unknown"}: {store.Key.Id32Short}");
+
         if (IsStoreRateLimited())
         {
             Logging.LogWarning(
@@ -250,12 +252,12 @@ public class FloodfillServer : IDisposable
 
         if (store.RouterInfo != null)
         {
-            Logging.LogDebug($"FloodfillServer: Storing RouterInfo for {store.Key.Id32Short}");
+            Logging.LogInformation($"FloodfillServer: Storing RouterInfo for {store.Key.Id32Short}");
             NetDb.Inst.AddRouterInfo(store.RouterInfo);
         }
         else if (store.LeaseSet != null)
         {
-            Logging.LogDebug($"FloodfillServer: Storing LeaseSet for {store.Key.Id32Short}");
+            Logging.LogInformation($"FloodfillServer: Storing LeaseSet for {store.Key.Id32Short} (Type {store.LeaseSet.MessageType})");
             NetDb.Inst.AddLeaseSet(store.LeaseSet);
         }
         else

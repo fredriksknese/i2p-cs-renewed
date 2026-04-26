@@ -102,12 +102,20 @@ public class SAMHelper : IDisposable
         string sessionId, string style = "STREAM",
         int inboundLength = 0, int outboundLength = 0,
         int inboundQuantity = 1, int outboundQuantity = 1,
-        int timeoutMs = 30000)
+        int timeoutMs = 30000,
+        string additionalOptions = "")
     {
-        await SendLineAsync(
-            $"SESSION CREATE STYLE={style} ID={sessionId} DESTINATION=TRANSIENT" +
-            $" inbound.length={inboundLength} outbound.length={outboundLength}" +
-            $" inbound.quantity={inboundQuantity} outbound.quantity={outboundQuantity}");
+        var cmd = $"SESSION CREATE STYLE={style} ID={sessionId} DESTINATION=TRANSIENT" +
+                  $" inbound.length={inboundLength} outbound.length={outboundLength}" +
+                  $" inbound.quantity={inboundQuantity} outbound.quantity={outboundQuantity}";
+
+        if (!string.IsNullOrEmpty(additionalOptions))
+        {
+            if (!additionalOptions.StartsWith(" ")) cmd += " ";
+            cmd += additionalOptions;
+        }
+
+        await SendLineAsync(cmd);
         var reply = await ReadLineAsync(timeoutMs);
 
         if (!reply.Contains("RESULT=OK"))
@@ -150,6 +158,12 @@ public class SAMHelper : IDisposable
     ///     Send raw bytes over the established stream.
     ///     Call only after STREAM CONNECT or STREAM ACCEPT succeeds.
     /// </summary>
+    public async Task<string> NamingLookupAsync(string name, int timeoutMs = 30000)
+    {
+        await SendLineAsync($"NAMING LOOKUP NAME={name}");
+        return await ReadLineAsync(timeoutMs);
+    }
+
     public async Task SendDataAsync(byte[] data, CancellationToken ct = default)
     {
         const int chunkSize = 16384; // 16KB chunks

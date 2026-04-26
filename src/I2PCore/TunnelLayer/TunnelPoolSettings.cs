@@ -4,9 +4,9 @@ namespace I2PCore.TunnelLayer;
 
 public class TunnelPoolSettings
 {
-    public const int DEFAULT_QUANTITY = 3;
-    public const int DEFAULT_OB_EXPL_LENGTH = 2;
-    public const int DEFAULT_IB_EXPL_LENGTH = 2;
+    public static int DEFAULT_QUANTITY = 3;
+    public static int DEFAULT_OB_EXPL_LENGTH = 2;
+    public static int DEFAULT_IB_EXPL_LENGTH = 2;
 
     public TunnelPoolSettings(bool isInbound)
     {

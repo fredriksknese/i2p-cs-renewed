@@ -38,21 +38,26 @@ public class SAMBridge : IDisposable
 
     // Active SAM sessions keyed by session ID
     private readonly ConcurrentDictionary<string, SAMSession> _sessions = new();
+    private readonly AddressBook _addressBook;
+    internal AddressBook AddressBook => _addressBook;
     private Thread _acceptThread;
     private int _clientIdCounter;
     private CancellationTokenSource _cts;
     private bool _disposed;
     private TcpListener _listener;
+    private UdpClient _udpListener;
 
     /// <summary>
     ///     Create a new SAM Bridge on the specified address and port.
     /// </summary>
     /// <param name="listenAddress">Address to listen on. Defaults to loopback.</param>
     /// <param name="listenPort">Port to listen on. Defaults to 7656.</param>
-    public SAMBridge(IPAddress listenAddress = null, int listenPort = DEFAULT_PORT)
+    /// <param name="addressBook">Address book for name resolution.</param>
+    public SAMBridge(IPAddress listenAddress = null, int listenPort = DEFAULT_PORT, AddressBook addressBook = null)
     {
         _listenAddress = listenAddress ?? IPAddress.Loopback;
         _listenPort = listenPort;
+        _addressBook = addressBook;
     }
 
     public bool IsRunning { get; private set; }
@@ -100,6 +105,19 @@ public class SAMBridge : IDisposable
         _cts = new CancellationTokenSource();
         _listener = new TcpListener(_listenAddress, _listenPort);
         _listener.Start();
+
+        try
+        {
+            var udpPort = _listenPort == DEFAULT_PORT ? 7655 : _listenPort;
+            _udpListener = new UdpClient(new IPEndPoint(_listenAddress, udpPort));
+            Task.Run(UdpLoop);
+            Logging.LogInformation($"SAMBridge: UDP listening on {_listenAddress}:{udpPort}");
+        }
+        catch (Exception ex)
+        {
+            Logging.LogWarning($"SAMBridge: Failed to start UDP listener: {ex.Message}");
+        }
+
         IsRunning = true;
 
         _acceptThread = new Thread(AcceptLoop)
@@ -129,6 +147,15 @@ public class SAMBridge : IDisposable
         catch (Exception ex)
         {
             Logging.LogDebug($"SAMBridge: Error stopping listener: {ex.Message}");
+        }
+
+        try
+        {
+            _udpListener?.Close();
+        }
+        catch (Exception ex)
+        {
+            Logging.LogDebug($"SAMBridge: Error stopping UDP listener: {ex.Message}");
         }
 
         // Shut down all sessions
@@ -215,7 +242,16 @@ public class SAMBridge : IDisposable
 
     internal bool TryGetSession(string id, out SAMSession session)
     {
-        return _sessions.TryGetValue(id, out session);
+        if (_sessions.TryGetValue(id, out session)) return true;
+
+        foreach (var mainSession in _sessions.Values)
+            if (mainSession.SubSessions.TryGetValue(id, out var sub))
+            {
+                session = mainSession;
+                return true;
+            }
+
+        return false;
     }
 
     internal bool TryRemoveSession(string id)
@@ -227,6 +263,74 @@ public class SAMBridge : IDisposable
         }
 
         return false;
+    }
+
+    private async Task UdpLoop()
+    {
+        while (!_cts.IsCancellationRequested)
+            try
+            {
+                var result = await _udpListener.ReceiveAsync();
+                _ = Task.Run(() => HandleUdpPacket(result));
+            }
+            catch (Exception ex) when (!_cts.IsCancellationRequested)
+            {
+                Logging.LogDebug($"SAMBridge: UDP receive error: {ex.Message}");
+                await Task.Delay(1000);
+            }
+    }
+
+    private async Task HandleUdpPacket(UdpReceiveResult result)
+    {
+        try
+        {
+            // Format: 3.X NICK DESTINATION [OPTS...] \n PAYLOAD
+            var data = result.Buffer;
+            var newlineIdx = Array.IndexOf(data, (byte)'\n');
+            if (newlineIdx < 0) return;
+
+            var header = Encoding.ASCII.GetString(data, 0, newlineIdx).Trim();
+            var parts = header.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 3) return;
+
+            var version = parts[0];
+            var nick = parts[1];
+            var destStr = parts[2];
+
+            if (!_sessions.TryGetValue(nick, out var session)) return;
+
+            var payload = new byte[data.Length - newlineIdx - 1];
+            Array.Copy(data, newlineIdx + 1, payload, 0, payload.Length);
+
+            var dest = new I2PDestination(new I2PBufferCursor(FreenetBase64.Decode(destStr)));
+            session.Datagram.SendRepliableDatagram(dest.IdentHash, payload);
+        }
+        catch (Exception ex)
+        {
+            Logging.LogDebug($"SAMBridge: UDP packet handle error: {ex.Message}");
+        }
+    }
+
+    internal async Task SendUdpDatagramAsync(IPEndPoint target, string nick, I2PDestination sender, byte[] payload,
+        ushort fromPort, ushort toPort)
+    {
+        try
+        {
+            // Format: SENDER [FROM_PORT=n TO_PORT=n] \n PAYLOAD
+            var senderB64 = sender != null ? FreenetBase64.Encode(new I2PByteBlock(sender.ToByteArray())) : "";
+            var header = $"{senderB64} FROM_PORT={fromPort} TO_PORT={toPort}\n";
+            var headerBytes = Encoding.ASCII.GetBytes(header);
+
+            var total = new byte[headerBytes.Length + payload.Length];
+            Array.Copy(headerBytes, 0, total, 0, headerBytes.Length);
+            Array.Copy(payload, 0, total, headerBytes.Length, payload.Length);
+
+            await _udpListener.SendAsync(total, total.Length, target);
+        }
+        catch (Exception ex)
+        {
+            Logging.LogDebug($"SAMBridge: UDP send error: {ex.Message}");
+        }
     }
 }
 
@@ -281,6 +385,7 @@ internal class SAMSession
     public I2PDestinationInfo DestinationInfo { get; }
     public StreamingDestination Streaming { get; }
     public DatagramDestination Datagram { get; }
+    public IPEndPoint DatagramEndpoint { get; set; }
 
     /// <summary>
     ///     Subsessions for MASTER style sessions, keyed by subsession ID.
@@ -352,7 +457,9 @@ internal class SAMClientHandler
     private readonly SAMBridge _bridge;
     private readonly CancellationToken _ct;
     private readonly Stream _stream;
+    private readonly SemaphoreSlim _streamLock = new(1, 1);
     private string _boundSessionId;
+    private bool _isSessionOwner;
 
     private bool _handshakeDone;
 
@@ -365,27 +472,40 @@ internal class SAMClientHandler
 
     public async Task RunAsync()
     {
-        while (!_ct.IsCancellationRequested)
+        try
         {
-            var line = await ReadLineAsync();
-            if (line == null)
-                break; // Client disconnected
-
-            line = line.Trim();
-            if (string.IsNullOrEmpty(line))
-                continue;
-
-            Logging.LogDebug($"SAMBridge: << {line}");
-
-            try
+            while (!_ct.IsCancellationRequested)
             {
-                if (!await DispatchCommandAsync(line))
-                    break; // Switched to transparent mode or otherwise finished
+                var line = await ReadLineAsync();
+                if (line == null)
+                    break; // Client disconnected
+
+                line = line.Trim();
+                if (string.IsNullOrEmpty(line))
+                    continue;
+
+                Logging.LogDebug($"SAMBridge: << {line}");
+
+                try
+                {
+                    if (!await DispatchCommandAsync(line))
+                        break; // Switched to transparent mode or otherwise finished
+                }
+                catch (Exception ex)
+                {
+                    Logging.LogWarning($"SAMBridge: Command error: {ex.Message}");
+                    await SendReplyAsync($"ERROR RESULT=I2P_ERROR MESSAGE=\"{EscapeValue(ex.Message)}\"");
+                }
             }
-            catch (Exception ex)
+        }
+        finally
+        {
+            var sid = _boundSessionId;
+            var owner = _isSessionOwner;
+            UnbindSession();
+            if (sid != null && owner)
             {
-                Logging.LogWarning($"SAMBridge: Command error: {ex.Message}");
-                await SendReplyAsync($"ERROR RESULT=I2P_ERROR MESSAGE=\"{EscapeValue(ex.Message)}\"");
+                _bridge.TryRemoveSession(sid);
             }
         }
     }
@@ -427,6 +547,16 @@ internal class SAMClientHandler
 
         switch (command)
         {
+            case "HELP":
+                await SendReplyAsync("SAM Bridge " + SAMBridge.SAM_VERSION);
+                await SendReplyAsync("Supported commands: HELLO, SESSION, STREAM, NAMING, DEST, DATAGRAM, RAW, AUTH, PING, HELP, QUIT, EXIT, STOP");
+                return true;
+
+            case "QUIT":
+            case "EXIT":
+            case "STOP":
+                return false;
+
             case "HELLO":
                 await HandleHelloAsync(subCommand, parameters);
                 return true;
@@ -505,22 +635,22 @@ internal class SAMClientHandler
             return;
         }
 
-        // For .b32.i2p addresses, derive from the base32 hash
-        if (name.EndsWith(".b32.i2p", StringComparison.OrdinalIgnoreCase))
+        // Resolve the destination
+        _bridge.TryGetSession(_boundSessionId ?? string.Empty, out var boundSession);
+        var remoteDest = await ResolveDestinationAsync(name, boundSession);
+
+        if (remoteDest != null)
         {
             try
             {
-                var hash = new I2PIdentHash(name);
-
-                // We need a session to do a lookup
-                if (_boundSessionId != null &&
-                    _bridge.TryGetSession(_boundSessionId, out var session))
+                // We need a session to do a NetDb lookup for LeaseSet to verify presence
+                if (boundSession != null)
                 {
                     var lookupDone = new ManualResetEventSlim(false);
                     ILeaseSet foundLs = null;
 
-                    session.Destination.LookupDestination(
-                        hash,
+                    boundSession.Destination.LookupDestination(
+                        remoteDest.IdentHash,
                         (id, ls, tag) =>
                         {
                             foundLs = ls;
@@ -542,8 +672,9 @@ internal class SAMClientHandler
                 }
                 else
                 {
-                    await SendReplyAsync(
-                        $"NAMING REPLY RESULT=I2P_ERROR NAME={name} MESSAGE=\"No session for lookup\"");
+                    // No session bound, just return the resolved destination
+                    var destB64 = FreenetBase64.Encode(new I2PByteBlock(remoteDest.ToByteArray()));
+                    await SendReplyAsync($"NAMING REPLY RESULT=OK NAME={name} VALUE={destB64}");
                 }
             }
             catch (Exception ex)
@@ -555,10 +686,8 @@ internal class SAMClientHandler
             return;
         }
 
-        // For regular .i2p hostnames, we would need an addressbook/hosts.txt
-        // For now, return KEY_NOT_FOUND for unresolvable names
         await SendReplyAsync(
-            $"NAMING REPLY RESULT=KEY_NOT_FOUND NAME={name} MESSAGE=\"Name resolution not available\"");
+            $"NAMING REPLY RESULT=KEY_NOT_FOUND NAME={name} MESSAGE=\"Name not found\"");
     }
 
     #endregion
@@ -676,11 +805,15 @@ internal class SAMClientHandler
 
         try
         {
-            var destBytes = FreenetBase64.Decode(destStr);
-            var dest = new I2PDestination(new I2PBufferCursor(destBytes));
-            var destHash = new I2PIdentHash(dest);
+            var remoteDest = await ResolveDestinationAsync(destStr, session);
+            if (remoteDest == null)
+            {
+                await SendReplyAsync(
+                    "DATAGRAM STATUS RESULT=I2P_ERROR MESSAGE=\"Destination resolution failed\"");
+                return;
+            }
 
-            session.Datagram.SendRepliableDatagram(destHash, payload, fromPort, toPort);
+            session.Datagram.SendRepliableDatagram(remoteDest.IdentHash, payload, fromPort, toPort);
         }
         catch (Exception ex)
         {
@@ -760,11 +893,15 @@ internal class SAMClientHandler
 
         try
         {
-            var destBytes = FreenetBase64.Decode(destStr);
-            var dest = new I2PDestination(new I2PBufferCursor(destBytes));
-            var destHash = new I2PIdentHash(dest);
+            var remoteDest = await ResolveDestinationAsync(destStr, session);
+            if (remoteDest == null)
+            {
+                await SendReplyAsync(
+                    "RAW STATUS RESULT=I2P_ERROR MESSAGE=\"Destination resolution failed\"");
+                return;
+            }
 
-            session.Datagram.SendRawDatagram(destHash, payload, fromPort, toPort);
+            session.Datagram.SendRawDatagram(remoteDest.IdentHash, payload, fromPort, toPort);
         }
         catch (Exception ex)
         {
@@ -850,6 +987,65 @@ internal class SAMClientHandler
     }
 
     #endregion
+
+    private void UnbindSession()
+    {
+        if (_boundSessionId != null)
+        {
+            if (_bridge.TryGetSession(_boundSessionId, out var session))
+            {
+                session.DatagramReceived -= OnDatagramReceived;
+            }
+
+            _boundSessionId = null;
+            _isSessionOwner = false;
+        }
+    }
+
+    private void OnDatagramReceived(I2PDestination sender, ushort fromPort, ushort toPort, byte[] payload)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                if (_boundSessionId != null && _bridge.TryGetSession(_boundSessionId, out var session))
+                {
+                    await _streamLock.WaitAsync(_ct);
+                    try
+                    {
+                        if (session.DatagramEndpoint != null)
+                        {
+                            await _bridge.SendUdpDatagramAsync(session.DatagramEndpoint, _boundSessionId, sender,
+                                payload, fromPort, toPort);
+                            return;
+                        }
+
+                        if (session.Style == SessionStyle.Datagram || session.Style == SessionStyle.Master)
+                        {
+                            var senderB64 = sender != null
+                                ? FreenetBase64.Encode(new I2PByteBlock(sender.ToByteArray()))
+                                : "";
+                            await SendReplyInternalAsync($"DATAGRAM RECEIVED DESTINATION={senderB64} SIZE={payload.Length}");
+                            await _stream.WriteAsync(payload, 0, payload.Length, _ct);
+                        }
+                        else if (session.Style == SessionStyle.Raw)
+                        {
+                            await SendReplyInternalAsync($"RAW RECEIVED SIZE={payload.Length}");
+                            await _stream.WriteAsync(payload, 0, payload.Length, _ct);
+                        }
+                    }
+                    finally
+                    {
+                        _streamLock.Release();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logging.LogDebug($"SAMBridge: Error sending datagram to client: {ex.Message}");
+            }
+        });
+    }
 
     #region HELLO
 
@@ -997,6 +1193,14 @@ internal class SAMClientHandler
 
         clientDest.Name = $"SAM-{sessionId}";
 
+        // Store I2CP options
+        foreach (var kvp in parameters)
+            if (kvp.Key.StartsWith("i2cp.", StringComparison.OrdinalIgnoreCase))
+                clientDest.Options[kvp.Key.ToLowerInvariant()] = kvp.Value;
+
+        // Generate temporary keys based on options (e.g. i2cp.leaseSetEncType)
+        clientDest.MySessions.GenerateTemporaryKeys();
+
         if (parameters.TryGetValue("INBOUND.LENGTH", out var inLengthStr) &&
             int.TryParse(inLengthStr, out var inLength)) clientDest.InboundTunnelHopCount = inLength;
 
@@ -1017,6 +1221,14 @@ internal class SAMClientHandler
         }
 
         _boundSessionId = sessionId;
+        _isSessionOwner = true;
+        session.DatagramReceived += OnDatagramReceived;
+
+        if (parameters.TryGetValue("PORT", out var portStr) && int.TryParse(portStr, out var port))
+        {
+            var host = parameters.GetValueOrDefault("HOST", "127.0.0.1");
+            session.DatagramEndpoint = new IPEndPoint(IPAddress.Parse(host), port);
+        }
 
         var destBase64 = destInfo.Destination.ToByteArray();
         var destB64Str = FreenetBase64.Encode(new I2PByteBlock(destBase64));
@@ -1040,8 +1252,16 @@ internal class SAMClientHandler
             var sigType = I2PSigningKey.SigningKeyTypes.EdDsaSha512Ed25519;
 
             if (parameters.TryGetValue("SIGNATURE_TYPE", out var sigTypeStr))
+            {
                 if (int.TryParse(sigTypeStr, out var sigTypeInt))
+                {
                     sigType = (I2PSigningKey.SigningKeyTypes)sigTypeInt;
+                }
+                else if (Enum.TryParse<I2PSigningKey.SigningKeyTypes>(sigTypeStr.Replace("_", ""), true, out var sigTypeEnum))
+                {
+                    sigType = sigTypeEnum;
+                }
+            }
 
             return new I2PDestinationInfo(sigType);
         }
@@ -1106,14 +1326,24 @@ internal class SAMClientHandler
             return;
         }
 
-        // Subsession ID defaults to the main session ID if not provided via a FROM_PORT or similar param
-        var subId = parameters.GetValueOrDefault("ID", sessionId);
+        // Subsession ID defaults to the main session ID if not provided
+        var subId = parameters.GetValueOrDefault("SUBID", sessionId);
 
         var subSession = new SAMSubSession(subId, subStyle, session);
         if (!session.SubSessions.TryAdd(subId, subSession))
         {
             await SendReplyAsync("SESSION STATUS RESULT=DUPLICATED_ID MESSAGE=\"Subsession ID already exists\"");
             return;
+        }
+
+        _boundSessionId = sessionId;
+        _isSessionOwner = false;
+        session.DatagramReceived += OnDatagramReceived;
+
+        if (parameters.TryGetValue("PORT", out var portStr) && int.TryParse(portStr, out var port))
+        {
+            var host = parameters.GetValueOrDefault("HOST", "127.0.0.1");
+            session.DatagramEndpoint = new IPEndPoint(IPAddress.Parse(host), port);
         }
 
         await SendReplyAsync("SESSION STATUS RESULT=OK");
@@ -1203,29 +1433,24 @@ internal class SAMClientHandler
             return;
         }
 
-        if (session.Style != SessionStyle.Stream)
+        if (session.Style != SessionStyle.Stream && session.Style != SessionStyle.Master)
         {
             await SendReplyAsync(
-                "STREAM STATUS RESULT=I2P_ERROR MESSAGE=\"Session is not STREAM style\"");
+                "STREAM STATUS RESULT=I2P_ERROR MESSAGE=\"Session is not STREAM or MASTER style\"");
             return;
         }
 
-        if (!parameters.TryGetValue("DESTINATION", out var destBase64))
+        if (!parameters.TryGetValue("DESTINATION", out var destStr))
         {
             await SendReplyAsync("STREAM STATUS RESULT=I2P_ERROR MESSAGE=\"DESTINATION not specified\"");
             return;
         }
 
-        I2PDestination remoteDest;
-        try
-        {
-            var destBytes = FreenetBase64.Decode(destBase64);
-            remoteDest = new I2PDestination(new I2PBufferCursor(destBytes));
-        }
-        catch (Exception ex)
+        var remoteDest = await ResolveDestinationAsync(destStr, session);
+        if (remoteDest == null)
         {
             await SendReplyAsync(
-                $"STREAM STATUS RESULT=INVALID_KEY MESSAGE=\"{EscapeValue(ex.Message)}\"");
+                "STREAM STATUS RESULT=INVALID_KEY MESSAGE=\"Destination resolution failed\"");
             return;
         }
 
@@ -1242,7 +1467,7 @@ internal class SAMClientHandler
             });
 
         // Wait for lookup with timeout
-        if (!lookupDone.Wait(TimeSpan.FromSeconds(30)))
+        if (!lookupDone.Wait(TimeSpan.FromSeconds(120)))
         {
             await SendReplyAsync(
                 "STREAM STATUS RESULT=CANT_REACH_PEER MESSAGE=\"Destination lookup timed out\"");
@@ -1291,10 +1516,10 @@ internal class SAMClientHandler
             return;
         }
 
-        if (session.Style != SessionStyle.Stream)
+        if (session.Style != SessionStyle.Stream && session.Style != SessionStyle.Master)
         {
             await SendReplyAsync(
-                "STREAM STATUS RESULT=I2P_ERROR MESSAGE=\"Session is not STREAM style\"");
+                "STREAM STATUS RESULT=I2P_ERROR MESSAGE=\"Session is not STREAM or MASTER style\"");
             return;
         }
 
@@ -1576,6 +1801,19 @@ internal class SAMClientHandler
 
     private async Task SendReplyAsync(string reply)
     {
+        await _streamLock.WaitAsync(_ct);
+        try
+        {
+            await SendReplyInternalAsync(reply);
+        }
+        finally
+        {
+            _streamLock.Release();
+        }
+    }
+
+    private async Task SendReplyInternalAsync(string reply)
+    {
         Logging.LogDebug($"SAMBridge: >> {reply}");
         var bytes = Encoding.ASCII.GetBytes(reply + "\n");
         await _stream.WriteAsync(bytes, 0, bytes.Length, _ct);
@@ -1648,6 +1886,74 @@ internal class SAMClientHandler
         }
 
         return parameters;
+    }
+
+    /// <summary>
+    ///     Resolve a name to an I2PDestination.
+    ///     Supports "ME", Base64 destinations, Base32 addresses, and hostnames via address book.
+    /// </summary>
+    private async Task<I2PDestination> ResolveDestinationAsync(string name, SAMSession boundSession = null)
+    {
+        if (string.IsNullOrEmpty(name)) return null;
+
+        if (name.Equals("ME", StringComparison.OrdinalIgnoreCase))
+        {
+            return boundSession?.Destination?.Destination;
+        }
+
+        // Handle B64 destinations
+        if (name.Length >= 512)
+        {
+            try
+            {
+                var bytes = FreenetBase64.Decode(name);
+                return new I2PDestination(new I2PBufferCursor(bytes));
+            }
+            catch
+            {
+                // Fall through to address book
+            }
+        }
+
+        // Handle B32 addresses
+        if (name.EndsWith(".b32.i2p", StringComparison.OrdinalIgnoreCase))
+        {
+            if (boundSession == null) return null;
+            try
+            {
+                var hash = new I2PIdentHash(name);
+                var lookupDone = new ManualResetEventSlim(false);
+                ILeaseSet foundLs = null;
+
+                boundSession.Destination.LookupDestination(
+                    hash,
+                    (id, ls, tag) =>
+                    {
+                        foundLs = ls;
+                        lookupDone.Set();
+                    });
+
+                if (lookupDone.Wait(TimeSpan.FromSeconds(30)) && foundLs != null)
+                {
+                    return foundLs.Destination;
+                }
+            }
+            catch
+            {
+                // Fall through to address book
+            }
+
+            return null;
+        }
+
+        // Handle regular hostnames
+        var resolved = _bridge.AddressBook?.Lookup(name);
+        if (resolved != null)
+        {
+            return resolved;
+        }
+
+        return null;
     }
 
     /// <summary>

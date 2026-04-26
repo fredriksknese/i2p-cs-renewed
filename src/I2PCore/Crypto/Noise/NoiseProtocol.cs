@@ -1,5 +1,6 @@
 using System;
 using System.Security.Cryptography;
+using I2PCore.Utils;
 
 namespace I2PCore.Crypto.Noise;
 
@@ -34,8 +35,9 @@ public abstract class NoiseProtocol
         Array.Copy(h, chainingKey, 32);
         nonce = 0;
 
-        // Standard Noise initialization: MixHash(null prologue)
-        // h = SHA256(h || empty)
+        // Standard Noise: MixHash(empty prologue).
+        // NoiseN (tunnels) and NoiseXK (NTCP2/SSU2) need this.
+        // NoiseIK (ECIES-Ratchet) must skip it — handled in NoiseIK constructor.
         MixHash(Array.Empty<byte>());
     }
 
@@ -197,6 +199,20 @@ public class NoiseHandshakeState : NoiseProtocol
         LocalEphemeralPublicKey = X25519.GetPublicKey(LocalEphemeralPrivateKey);
 
         var encoded = Elligator2.Encode(LocalEphemeralPublicKey);
+
+        // Self-test: verify Elligator2 round-trip
+        var decoded = Elligator2.Decode(encoded);
+        if (decoded == null || !decoded.AsSpan().SequenceEqual(LocalEphemeralPublicKey))
+        {
+            Logging.LogCritical($"ECIES-DIAG: Elligator2 ROUND-TRIP FAILED! " +
+                $"original[0:4]={BitConverter.ToString(LocalEphemeralPublicKey, 0, 4)} " +
+                $"decoded={( decoded != null ? BitConverter.ToString(decoded, 0, 4) : "NULL" )}");
+        }
+        else
+        {
+            Logging.LogDebug($"ECIES-DIAG: Elligator2 round-trip OK");
+        }
+
         MixHash(LocalEphemeralPublicKey); // MixHash the DECODED key, matching Java I2P
 
         return encoded;

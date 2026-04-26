@@ -250,14 +250,15 @@ public class RouterService
             PublicKey = Convert.ToBase64String(RouterContext.Inst.MyRouterIdentity.PublicKey.ToByteArray()),
             KeyType = RouterContext.Inst.MyRouterIdentity.PublicKey.Certificate.PublicKeyType.ToString(),
             IsRunning = IsRunning,
-            BandwidthClass = RouterContext.Inst.GetBandwidthCapChar().ToString()
+            BandwidthClass = RouterContext.Inst.GetBandwidthCapChar().ToString(),
+            FullRouterInfo = IsRunning ? RouterContext.Inst.MyRouterInfo : null
         };
 
         // NetDb and Transport stats
         try
         {
-            stats.KnownRouters = NetDb.Inst.RouterCount;
-            stats.KnownFloodfills = NetDb.Inst.FloodfillCount;
+            stats.KnownRouters = NetDb.Inst?.RouterCount ?? 0;
+            stats.KnownFloodfills = NetDb.Inst?.FloodfillCount ?? 0;
             stats.NTCP2SessionCount = TransportProvider.Inst?.Ntcp2SessionCount ?? 0;
             stats.SSU2SessionCount = TransportProvider.Inst?.Ssu2SessionCount ?? 0;
 
@@ -409,4 +410,6 @@ public class RouterStatistics
     public bool SOCKSProxyEnabled { get; set; }
     public bool HTTPProxyRunning { get; set; }
     public int HTTPProxyPort { get; set; }
+
+    public I2PRouterInfo? FullRouterInfo { get; set; }
 }

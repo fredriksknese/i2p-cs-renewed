@@ -376,7 +376,7 @@ public partial class RouterContext
                     PrivateSigningKey);
 
                 MyRouterInfoCache = result;
-                NetDb.Inst.FloodfillUpdate.TrigUpdateRouterInfo("MyRouterInfo changed");
+                NetDb.Inst?.FloodfillUpdate.TrigUpdateRouterInfo("MyRouterInfo changed");
 
                 Logging.Log($"RouterContext: New settings: {result}");
 

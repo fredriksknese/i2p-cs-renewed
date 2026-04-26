@@ -20,67 +20,72 @@
             <div class="table-responsive" style="max-height: 70vh; overflow-y: auto;">
                 <table class="table table-hover table-sm mb-0">
                     <thead class="table-light sticky-top">
-                        <tr>
-                            <th style="width: 180px;">Timestamp</th>
-                            <th style="width: 100px;">Method</th>
-                            <th style="width: 250px;">Target</th>
-                            <th style="width: 120px;">Status</th>
-                            <th>Details</th>
-                        </tr>
+                    <tr>
+                        <th style="width: 180px;">Timestamp</th>
+                        <th style="width: 100px;">Method</th>
+                        <th style="width: 250px;">Target</th>
+                        <th style="width: 120px;">Status</th>
+                        <th>Details</th>
+                    </tr>
                     </thead>
                     <tbody>
-                        @if (!Model.Logs.Any())
+                    @if (!Model.Logs.Any())
+                    {
+                        <tr>
+                            <td colspan="5" class="text-center py-4 text-muted">
+                                No proxy activity logged yet.
+                            </td>
+                        </tr>
+                    }
+                    else
+                    {
+                        @foreach (var log in Model.Logs)
                         {
-                            <tr>
-                                <td colspan="5" class="text-center py-4 text-muted">
-                                    No proxy activity logged yet.
+                            <tr data-bs-toggle="collapse" data-bs-target="#rawData-@log.Id" style="cursor: pointer;">
+                                <td><small class="text-muted">@log.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff")</small>
                                 </td>
+                                <td>
+                                        <span class="badge @(log.Method switch
+                                                           {
+                                                               "CONNECT" => "bg-dark",
+                                                               "GARLIC" => "bg-purple text-white",
+                                                               "OUTPROXY" => "bg-warning text-dark",
+                                                               _ => "bg-secondary"
+                                                           })"
+                                              @(log.Method == "GARLIC" ? "style=background-color:#6f42c1!important" : "")>@log.Method</span>
+                                </td>
+                                <td class="text-truncate" style="max-width: 250px;" title="@log.Target">
+                                    @log.Target
+                                </td>
+                                <td>
+                                        <span class="badge @(log.Status switch
+                                                           {
+                                                               "Received" => "bg-info",
+                                                               "Lookup" => "bg-primary",
+                                                               "Connecting" => "bg-warning text-dark",
+                                                               "Streaming" => "bg-info",
+                                                               "Completed" => "bg-success",
+                                                               "Error" => "bg-danger",
+                                                               "Encryption" => "bg-dark",
+                                                               "Decrypted" => "bg-success",
+                                                               "LeaseSet" => "bg-primary",
+                                                               _ => "bg-secondary"
+                                                           })">@log.Status</span>
+                                </td>
+                                <td>@log.Details</td>
                             </tr>
-                        }
-                        else
-                        {
-                            @foreach (var log in Model.Logs)
+                            @if (!string.IsNullOrEmpty(log.RawData))
                             {
-                                <tr data-bs-toggle="collapse" data-bs-target="#rawData-@log.Id" style="cursor: pointer;">
-                                    <td><small class="text-muted">@log.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff")</small></td>
-                                    <td>
-                                        <span class="badge @(log.Method switch {
-                                            "CONNECT" => "bg-dark",
-                                            "GARLIC" => "bg-purple text-white",
-                                            "OUTPROXY" => "bg-warning text-dark",
-                                            _ => "bg-secondary"
-                                        })" @(log.Method == "GARLIC" ? "style=background-color:#6f42c1!important" : "")>@log.Method</span>
+                                <tr class="collapse" id="rawData-@log.Id">
+                                    <td colspan="5" class="bg-light p-3">
+                                        <h6>Raw Response Data (First 10KB):</h6>
+                                        <pre class="bg-white border p-2"
+                                             style="max-height: 300px; overflow-y: auto; font-size: 0.85rem;"><code>@log.RawData</code></pre>
                                     </td>
-                                    <td class="text-truncate" style="max-width: 250px;" title="@log.Target">
-                                        @log.Target
-                                    </td>
-                                    <td>
-                                        <span class="badge @(log.Status switch {
-                                            "Received" => "bg-info",
-                                            "Lookup" => "bg-primary",
-                                            "Connecting" => "bg-warning text-dark",
-                                            "Streaming" => "bg-info",
-                                            "Completed" => "bg-success",
-                                            "Error" => "bg-danger",
-                                            "Encryption" => "bg-dark",
-                                            "Decrypted" => "bg-success",
-                                            "LeaseSet" => "bg-primary",
-                                            _ => "bg-secondary"
-                                        })">@log.Status</span>
-                                    </td>
-                                    <td>@log.Details</td>
                                 </tr>
-                                @if (!string.IsNullOrEmpty(log.RawData))
-                                {
-                                    <tr class="collapse" id="rawData-@log.Id">
-                                        <td colspan="5" class="bg-light p-3">
-                                            <h6>Raw Response Data (First 10KB):</h6>
-                                            <pre class="bg-white border p-2" style="max-height: 300px; overflow-y: auto; font-size: 0.85rem;"><code>@log.RawData</code></pre>
-                                        </td>
-                                    </tr>
-                                }
                             }
                         }
+                    }
                     </tbody>
                 </table>
             </div>

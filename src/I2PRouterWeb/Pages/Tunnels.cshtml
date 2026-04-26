@@ -66,39 +66,50 @@
             <div class="table-responsive">
                 <table class="table table-hover table-striped table-sm mb-0" style="font-size:0.8rem;">
                     <thead class="table-dark">
-                        <tr>
-                            <th>ID</th>
-                            <th>Pool</th>
-                            <th>Hops</th>
-                            <th>Chain</th>
-                            <th>Status</th>
-                            <th>Age</th>
-                            <th>Data Sent</th>
-                            <th>Data Recv</th>
-                            <th>Send Rate</th>
-                            <th>Recv Rate</th>
-                        </tr>
+                    <tr>
+                        <th>ID</th>
+                        <th>Pool</th>
+                        <th>Hops</th>
+                        <th>Chain</th>
+                        <th>Status</th>
+                        <th>Age</th>
+                        <th>Data Sent</th>
+                        <th>Data Recv</th>
+                        <th>Send Rate</th>
+                        <th>Recv Rate</th>
+                    </tr>
                     </thead>
                     <tbody>
-                        @foreach (var t in Model.OutboundTunnels.Concat(Model.PendingOutboundTunnels))
-                        {
-                            <tr>
-                                <td><code>@t.TunnelId</code></td>
-                                <td><span class="badge @(t.IsExploratory ? "bg-warning text-dark" : "bg-primary")">@t.Pool</span></td>
-                                <td>@t.HopCount</td>
-                                <td class="tunnel-chain">@Html.Raw(string.Join(" &rarr; ", t.Hops))</td>
-                                <td>
-                                    @if (t.IsActive) { <span class="badge bg-success">Active</span> }
-                                    else if (t.IsEstablished) { <span class="badge bg-info">Expiring</span> }
-                                    else { <span class="badge bg-secondary">Build</span> }
-                                </td>
-                                <td>@(t.AgeSeconds)s</td>
-                                <td>@TunnelsModel.FormatBytes(t.BytesSent)</td>
-                                <td>@TunnelsModel.FormatBytes(t.BytesReceived)</td>
-                                <td>@TunnelsModel.FormatRate(t.SendBitrate)</td>
-                                <td>@TunnelsModel.FormatRate(t.ReceiveBitrate)</td>
-                            </tr>
-                        }
+                    @foreach (var t in Model.OutboundTunnels.Concat(Model.PendingOutboundTunnels))
+                    {
+                        <tr>
+                            <td><code>@t.TunnelId</code></td>
+                            <td><span
+                                    class="badge @(t.IsExploratory ? "bg-warning text-dark" : "bg-primary")">@t.Pool</span>
+                            </td>
+                            <td>@t.HopCount</td>
+                            <td class="tunnel-chain">@Html.Raw(string.Join(" &rarr; ", t.Hops))</td>
+                            <td>
+                                @if (t.IsActive)
+                                {
+                                    <span class="badge bg-success">Active</span>
+                                }
+                                else if (t.IsEstablished)
+                                {
+                                    <span class="badge bg-info">Expiring</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-secondary">Build</span>
+                                }
+                            </td>
+                            <td>@(t.AgeSeconds)s</td>
+                            <td>@TunnelsModel.FormatBytes(t.BytesSent)</td>
+                            <td>@TunnelsModel.FormatBytes(t.BytesReceived)</td>
+                            <td>@TunnelsModel.FormatRate(t.SendBitrate)</td>
+                            <td>@TunnelsModel.FormatRate(t.ReceiveBitrate)</td>
+                        </tr>
+                    }
                     </tbody>
                 </table>
             </div>
@@ -112,46 +123,58 @@
     <div class="card-body p-0">
         @if (!Model.InboundTunnels.Any() && !Model.PendingInboundTunnels.Any())
         {
-            <p class="p-3 text-muted mb-0">No inbound tunnels. Inbound tunnels require established outbound tunnels to send build requests.</p>
+            <p class="p-3 text-muted mb-0">No inbound tunnels. Inbound tunnels require established outbound tunnels to
+                send build requests.</p>
         }
         else
         {
             <div class="table-responsive">
                 <table class="table table-hover table-striped table-sm mb-0" style="font-size:0.8rem;">
                     <thead class="table-dark">
-                        <tr>
-                            <th>ID</th>
-                            <th>Pool</th>
-                            <th>Hops</th>
-                            <th>Chain</th>
-                            <th>Status</th>
-                            <th>Age</th>
-                            <th>Data Sent</th>
-                            <th>Data Recv</th>
-                            <th>Send Rate</th>
-                            <th>Recv Rate</th>
-                        </tr>
+                    <tr>
+                        <th>ID</th>
+                        <th>Pool</th>
+                        <th>Hops</th>
+                        <th>Chain</th>
+                        <th>Status</th>
+                        <th>Age</th>
+                        <th>Data Sent</th>
+                        <th>Data Recv</th>
+                        <th>Send Rate</th>
+                        <th>Recv Rate</th>
+                    </tr>
                     </thead>
                     <tbody>
-                        @foreach (var t in Model.InboundTunnels.Concat(Model.PendingInboundTunnels))
-                        {
-                            <tr>
-                                <td><code>@t.TunnelId</code></td>
-                                <td><span class="badge @(t.IsExploratory ? "bg-warning text-dark" : "bg-success")">@t.Pool</span></td>
-                                <td>@t.HopCount</td>
-                                <td class="tunnel-chain">@Html.Raw(string.Join(" &rarr; ", t.Hops))</td>
-                                <td>
-                                    @if (t.IsActive) { <span class="badge bg-success">Active</span> }
-                                    else if (t.IsEstablished) { <span class="badge bg-info">Expiring</span> }
-                                    else { <span class="badge bg-secondary">Build</span> }
-                                </td>
-                                <td>@(t.AgeSeconds)s</td>
-                                <td>@TunnelsModel.FormatBytes(t.BytesSent)</td>
-                                <td>@TunnelsModel.FormatBytes(t.BytesReceived)</td>
-                                <td>@TunnelsModel.FormatRate(t.SendBitrate)</td>
-                                <td>@TunnelsModel.FormatRate(t.ReceiveBitrate)</td>
-                            </tr>
-                        }
+                    @foreach (var t in Model.InboundTunnels.Concat(Model.PendingInboundTunnels))
+                    {
+                        <tr>
+                            <td><code>@t.TunnelId</code></td>
+                            <td><span
+                                    class="badge @(t.IsExploratory ? "bg-warning text-dark" : "bg-success")">@t.Pool</span>
+                            </td>
+                            <td>@t.HopCount</td>
+                            <td class="tunnel-chain">@Html.Raw(string.Join(" &rarr; ", t.Hops))</td>
+                            <td>
+                                @if (t.IsActive)
+                                {
+                                    <span class="badge bg-success">Active</span>
+                                }
+                                else if (t.IsEstablished)
+                                {
+                                    <span class="badge bg-info">Expiring</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-secondary">Build</span>
+                                }
+                            </td>
+                            <td>@(t.AgeSeconds)s</td>
+                            <td>@TunnelsModel.FormatBytes(t.BytesSent)</td>
+                            <td>@TunnelsModel.FormatBytes(t.BytesReceived)</td>
+                            <td>@TunnelsModel.FormatRate(t.SendBitrate)</td>
+                            <td>@TunnelsModel.FormatRate(t.ReceiveBitrate)</td>
+                        </tr>
+                    }
                     </tbody>
                 </table>
             </div>
@@ -161,6 +184,8 @@
 
 @section Scripts {
     <script>
-        setTimeout(function() { location.reload(); }, 10000);
+        setTimeout(function () {
+            location.reload();
+        }, 10000);
     </script>
 }

@@ -2,10 +2,12 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using I2PCore.Crypto;
 using I2PCore.Crypto.MLKEM;
 using I2PCore.Data;
 using I2PCore.SessionLayer.ECIES;
 using I2PCore.TunnelLayer;
+using I2PCore.TunnelLayer.I2NP;
 using I2PCore.TunnelLayer.I2NP.Data;
 using I2PCore.TunnelLayer.I2NP.Messages;
 using I2PCore.Utils;
@@ -53,63 +55,79 @@ public class SessionManager
 
     public void GenerateTemporaryKeys()
     {
-        var eciesprivkey = new I2PPrivateKey(new I2PCertificate(I2PKeyType.KeyTypes.X25519));
-        var eciespubkey = new I2PPublicKey(eciesprivkey);
-
         PrivateKeys = new List<I2PPrivateKey>();
         PublicKeys = new List<I2PPublicKey>();
 
-        switch (RouterContext.Inst.ProxyEncryption)
+        var eciesprivkey = new I2PPrivateKey(new I2PCertificate(I2PKeyType.KeyTypes.X25519));
+        var eciespubkey = new I2PPublicKey(eciesprivkey);
+
+        if (Context.Options.TryGetValue("i2cp.leaseSetEncType", out var encTypesStr))
         {
-            case RouterContext.HttpProxyEncryptionType.Ecies:
-                PrivateKeys.Add(eciesprivkey);
-                PublicKeys.Add(eciespubkey);
-                break;
-
-            case RouterContext.HttpProxyEncryptionType.Mlkem:
+            var types = encTypesStr.Split(',', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var typeStr in types)
             {
-                var (mlkemPub, mlkemPriv) = MLKEM768.GenerateKeyPair();
-                var combinedPriv = new byte[mlkemPriv.Length + 32];
-                Array.Copy(mlkemPriv, 0, combinedPriv, 0, mlkemPriv.Length);
-                Array.Copy(eciesprivkey.ToByteArray(), 0, combinedPriv, mlkemPriv.Length, 32);
-                var combinedPub = new byte[mlkemPub.Length + 32];
-                Array.Copy(mlkemPub, 0, combinedPub, 0, mlkemPub.Length);
-                Array.Copy(eciespubkey.ToByteArray(), 0, combinedPub, mlkemPub.Length, 32);
-
-                var mlkem768privkey = new I2PPrivateKey(new I2PBufferCursor(combinedPriv),
-                    new I2PCertificate(I2PKeyType.KeyTypes.MLKEM768_X25519));
-                var mlkem768pubkey = new I2PPublicKey(new I2PBufferCursor(combinedPub),
-                    new I2PCertificate(I2PKeyType.KeyTypes.MLKEM768_X25519));
-                PrivateKeys.Add(mlkem768privkey);
-                PublicKeys.Add(mlkem768pubkey);
+                var kt = I2PKeyType.Parse(typeStr.Trim());
+                if (kt != I2PKeyType.KeyTypes.Invalid)
+                {
+                    AddKeyForType(kt, eciesprivkey, eciespubkey);
+                }
             }
-                break;
+        }
 
-            case RouterContext.HttpProxyEncryptionType.Hybrid:
+        if (!PublicKeys.Any())
+        {
+            switch (RouterContext.Inst.ProxyEncryption)
             {
-                PrivateKeys.Add(eciesprivkey);
-                PublicKeys.Add(eciespubkey);
+                case RouterContext.HttpProxyEncryptionType.Ecies:
+                    AddKeyForType(I2PKeyType.KeyTypes.X25519, eciesprivkey, eciespubkey);
+                    break;
 
-                var (mlkemPub, mlkemPriv) = MLKEM768.GenerateKeyPair();
-                var combinedPriv = new byte[mlkemPriv.Length + 32];
-                Array.Copy(mlkemPriv, 0, combinedPriv, 0, mlkemPriv.Length);
-                Array.Copy(eciesprivkey.ToByteArray(), 0, combinedPriv, mlkemPriv.Length, 32);
-                var combinedPub = new byte[mlkemPub.Length + 32];
-                Array.Copy(mlkemPub, 0, combinedPub, 0, mlkemPub.Length);
-                Array.Copy(eciespubkey.ToByteArray(), 0, combinedPub, mlkemPub.Length, 32);
+                case RouterContext.HttpProxyEncryptionType.Mlkem:
+                    AddKeyForType(I2PKeyType.KeyTypes.MLKEM768_X25519, eciesprivkey, eciespubkey);
+                    break;
 
-                var hmlkem768privkey = new I2PPrivateKey(new I2PBufferCursor(combinedPriv),
-                    new I2PCertificate(I2PKeyType.KeyTypes.MLKEM768_X25519));
-                var hmlkem768pubkey = new I2PPublicKey(new I2PBufferCursor(combinedPub),
-                    new I2PCertificate(I2PKeyType.KeyTypes.MLKEM768_X25519));
-                PrivateKeys.Add(hmlkem768privkey);
-                PublicKeys.Add(hmlkem768pubkey);
+                case RouterContext.HttpProxyEncryptionType.Hybrid:
+                    AddKeyForType(I2PKeyType.KeyTypes.X25519, eciesprivkey, eciespubkey);
+                    AddKeyForType(I2PKeyType.KeyTypes.MLKEM768_X25519, eciesprivkey, eciespubkey);
+                    break;
             }
-                break;
         }
 
         EciesManager =
             new ECIESSessionKeyManager(Context.Destination, eciesprivkey.ToByteArray(), eciespubkey.ToByteArray());
+    }
+
+    private void AddKeyForType(I2PKeyType.KeyTypes kt, I2PPrivateKey eciesprivkey, I2PPublicKey eciespubkey)
+    {
+        if (PublicKeys.Any(pk => pk.Certificate.PublicKeyType == kt)) return;
+
+        switch (kt)
+        {
+            case I2PKeyType.KeyTypes.X25519:
+                PrivateKeys.Add(eciesprivkey);
+                PublicKeys.Add(eciespubkey);
+                break;
+
+            case I2PKeyType.KeyTypes.MLKEM512_X25519:
+            case I2PKeyType.KeyTypes.MLKEM768_X25519:
+            case I2PKeyType.KeyTypes.MLKEM1024_X25519:
+            {
+                // In Proposal 169, the LS2 encryption key for hybrid types is just the X25519 key (32 bytes).
+                // The ML-KEM part is handled ephemeral-only in the Ratchet handshake.
+                // We use the same X25519 key as the base ECIES key to ensure ECIESSessionKeyManager can decrypt it.
+                var hybridPrivKey = new I2PPrivateKey(new I2PBufferCursor(eciesprivkey.ToByteArray()),
+                    new I2PCertificate(kt));
+                var hybridPubKey = new I2PPublicKey(new I2PBufferCursor(eciespubkey.ToByteArray()),
+                    new I2PCertificate(kt));
+                PrivateKeys.Add(hybridPrivKey);
+                PublicKeys.Add(hybridPubKey);
+            }
+            break;
+
+            case I2PKeyType.KeyTypes.ElGamal2048:
+                // Already in Destination.PublicKey
+                break;
+        }
     }
 
     public Garlic DecryptMessage(GarlicMessage message)
@@ -147,50 +165,62 @@ public class SessionManager
         return null;
     }
 
+    /// <summary>
+    ///     Parse ECIES garlic payload using Proposal 144 block format.
+    ///     The payload contains DateTimeBlock + GarlicCloveBlock(s) + PaddingBlock.
+    ///     Each GarlicCloveBlock has ECIES delivery instructions (bits 5-6) and
+    ///     an I2NP message in NTCP2/short format (type + msgId + expiration + body).
+    /// </summary>
     private Garlic TranslateEciesGarlic(byte[] payload)
     {
-        var eciesProcessor = new ECIESGarlicProcessor(EciesManager, Context.Destination);
-        var result = eciesProcessor.ProcessGarlicMessage(payload);
-        if (!result.Success) return null;
-
-        var cloves = new List<GarlicClove>();
-        foreach (var eciesClove in result.CloveResults)
+        try
         {
-            if (!eciesClove.Success) continue;
+            var blocks = ECIESBlockFormat.ParseBlocks(payload);
+            var cloves = new List<GarlicClove>();
 
-            var delivery = TranslateEciesDelivery(eciesClove);
-            if (delivery == null) continue;
-
-            var clove = new GarlicClove(delivery, new I2PDate((ulong)eciesClove.Expiration * 1000))
+            foreach (var block in blocks)
             {
-                CloveId = eciesClove.CloveId
-            };
-            cloves.Add(clove);
+                if (block is not GarlicCloveBlock garlicClove)
+                    continue;
+
+                try
+                {
+                    var cloveBuf = new I2PBufferCursor(garlicClove.Data);
+
+                    // Parse ECIES delivery instructions (flag byte, bits 5-6 = delivery type)
+                    var di = GarlicCloveDelivery.CreateGarlicCloveDelivery(cloveBuf);
+                    if (di == null) continue;
+
+                    // Parse I2NP message in NTCP2/short format: type(1) + msgId(4) + expiration(4) + body
+                    var msgType = (I2NpMessage.MessageTypes)cloveBuf.ReadByte();
+                    var msgId = cloveBuf.ReadUInt32BigEndian();
+                    var expirationSeconds = cloveBuf.ReadUInt32BigEndian();
+
+                    // I2NpUtil.GetMessage requires 16 bytes of headroom before payload
+                    var payloadWithHeadroom = new byte[cloveBuf.Remaining + I2NpMessage.I2NpMaxHeaderSize];
+                    cloveBuf.ReadBytes(payloadWithHeadroom, I2NpMessage.I2NpMaxHeaderSize, cloveBuf.Remaining);
+                    var msg = I2NpUtil.GetMessage(msgType,
+                        new I2PBufferCursor(payloadWithHeadroom, I2NpMessage.I2NpMaxHeaderSize), msgId);
+
+                    if (msg == null) continue;
+
+                    msg.Expiration = new I2PDate((ulong)expirationSeconds * 1000);
+                    di.Message = msg;
+
+                    cloves.Add(new GarlicClove(di, msg.Expiration) { CloveId = msgId });
+                }
+                catch (Exception ex)
+                {
+                    Logging.LogDebug($"{Context}: TranslateEciesGarlic: Error parsing clove: {ex.Message}");
+                }
+            }
+
+            return cloves.Count > 0 ? new Garlic(cloves) : null;
         }
-
-        return new Garlic(cloves);
-    }
-
-    private GarlicCloveDelivery TranslateEciesDelivery(CloveResult eciesClove)
-    {
-        var msg = I2NpMessage.ReadHeader16(new I2PBufferCursor(eciesClove.Payload)).Message;
-
-        switch (eciesClove.DeliveryType)
+        catch (Exception ex)
         {
-            case DeliveryType.Local:
-                return new GarlicCloveDeliveryLocal(msg);
-
-            case DeliveryType.Destination:
-                return new GarlicCloveDeliveryDestination(msg, eciesClove.ForwardDestination);
-
-            case DeliveryType.Router:
-                return new GarlicCloveDeliveryRouter(msg, eciesClove.ForwardRouter);
-
-            case DeliveryType.Tunnel:
-                return new GarlicCloveDeliveryTunnel(msg, eciesClove.ForwardRouter, eciesClove.ForwardTunnelId);
-
-            default:
-                return null;
+            Logging.LogWarning($"{Context}: TranslateEciesGarlic: Failed to parse ECIES blocks: {ex.Message}");
+            return null;
         }
     }
 
