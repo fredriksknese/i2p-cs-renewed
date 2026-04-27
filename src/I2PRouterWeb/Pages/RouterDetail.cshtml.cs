@@ -79,6 +79,9 @@ public class RouterDetailModel : PageModel
         if (netDb == null) return;
 
         var routers = netDb.FindRouterInfo((h, r) =>
+            h.Id64.Equals(hash, StringComparison.OrdinalIgnoreCase) ||
+            h.Id64Short.Equals(hash, StringComparison.OrdinalIgnoreCase) ||
+            h.Id32.Equals(hash, StringComparison.OrdinalIgnoreCase) ||
             h.Id32Short.Equals(hash, StringComparison.OrdinalIgnoreCase));
  
         var ri = routers.FirstOrDefault();

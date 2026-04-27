@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Threading;
 using I2PCore.Data;
 
@@ -34,9 +35,9 @@ public class TransportConnectionLogger
     {
     }
 
-    public void Log(string message, string routerId = null, string transport = null, string direction = null)
+    public void Log(string message, string routerId = null, string transport = null, string direction = null, IPEndPoint remoteEndPoint = null)
     {
-        _entries.Enqueue(new LogEntry(DateTime.UtcNow, message, routerId, transport, direction));
+        _entries.Enqueue(new LogEntry(DateTime.UtcNow, message, routerId, transport, direction, remoteEndPoint));
 
         // Keep the queue size in check
         while (_entries.Count > MaxEntries) _entries.TryDequeue(out _);
@@ -62,7 +63,7 @@ public class TransportConnectionLogger
     /// <summary>
     ///     Record a failed connection with a reason.
     /// </summary>
-    public void RecordFailure(string transport, string direction, string reason, string routerId = null, string routerFullId = null, I2PRouterInfo routerInfo = null)
+    public void RecordFailure(string transport, string direction, string reason, string routerId = null, string routerFullId = null, I2PRouterInfo routerInfo = null, IPEndPoint remoteEndPoint = null)
     {
         ConcurrentQueue<FailureEntry> queue;
         if (transport == "NTCP2")
@@ -95,8 +96,8 @@ public class TransportConnectionLogger
         {
             return;
         }
- 
-        queue.Enqueue(new FailureEntry(reason, routerId, routerFullId, routerInfo));
+
+        queue.Enqueue(new FailureEntry(reason, routerId, routerFullId, routerInfo, remoteEndPoint));
         while (queue.Count > MaxFailureReasons) queue.TryDequeue(out _);
     }
  
@@ -154,8 +155,10 @@ public class TransportConnectionLogger
             .Select(g => (
                 Reason: g.Key,
                 Count: g.Count(),
-                Routers: g.Where(f => !string.IsNullOrEmpty(f.RouterId))
-                    .Select(f => (ShortId: f.RouterId, FullId: f.RouterFullId))
+                Routers: g.Select(f => (
+                        ShortId: f.RouterId ?? f.RemoteEndPoint?.Address.ToString() ?? "Unknown",
+                        FullId: f.RouterFullId ?? f.RemoteEndPoint?.ToString() ?? ""
+                    ))
                     .Distinct()
                     .Take(50) // Limit routers per reason to avoid bloating the UI
             ))
@@ -176,7 +179,7 @@ public class TransportConnectionLogger
 
         return queue.ToArray()
             .Where(f => f.Reason == reason)
-            .Select(f => new DetailedFailureInfo(f.Reason, f.RouterId, f.RouterFullId, f.RouterInfo));
+            .Select(f => new DetailedFailureInfo(f.Reason, f.RouterId, f.RouterFullId, f.RouterInfo, f.RemoteEndPoint));
     }
 
     public IEnumerable<LogEntry> GetEntries()
@@ -186,13 +189,14 @@ public class TransportConnectionLogger
 
     public class LogEntry
     {
-        public LogEntry(DateTime timestamp, string message, string routerId, string transport, string direction)
+        public LogEntry(DateTime timestamp, string message, string routerId, string transport, string direction, IPEndPoint remoteEndPoint = null)
         {
             Timestamp = timestamp;
             Message = message;
             RouterId = routerId;
             Transport = transport;
             Direction = direction;
+            RemoteEndPoint = remoteEndPoint;
         }
 
         public DateTime Timestamp { get; }
@@ -200,6 +204,7 @@ public class TransportConnectionLogger
         public string RouterId { get; }
         public string Transport { get; }
         public string Direction { get; }
+        public IPEndPoint RemoteEndPoint { get; }
     }
 
     public class ConnectionStats
@@ -216,33 +221,37 @@ public class TransportConnectionLogger
 
     public class DetailedFailureInfo
     {
-        public DetailedFailureInfo(string reason, string routerId, string routerFullId, I2PRouterInfo routerInfo)
+        public DetailedFailureInfo(string reason, string routerId, string routerFullId, I2PRouterInfo routerInfo, IPEndPoint remoteEndPoint)
         {
             Reason = reason;
             RouterId = routerId;
             RouterFullId = routerFullId;
             RouterInfo = routerInfo;
+            RemoteEndPoint = remoteEndPoint;
         }
 
         public string Reason { get; }
         public string RouterId { get; }
         public string RouterFullId { get; }
         public I2PRouterInfo RouterInfo { get; }
+        public IPEndPoint RemoteEndPoint { get; }
     }
 
     private class FailureEntry
     {
-        public FailureEntry(string reason, string routerId, string routerFullId, I2PRouterInfo routerInfo)
+        public FailureEntry(string reason, string routerId, string routerFullId, I2PRouterInfo routerInfo, IPEndPoint remoteEndPoint)
         {
             Reason = reason ?? "Unknown";
             RouterId = routerId;
             RouterFullId = routerFullId;
             RouterInfo = routerInfo;
+            RemoteEndPoint = remoteEndPoint;
         }
  
         public string Reason { get; }
         public string RouterId { get; }
         public string RouterFullId { get; }
         public I2PRouterInfo RouterInfo { get; }
+        public IPEndPoint RemoteEndPoint { get; }
     }
 }

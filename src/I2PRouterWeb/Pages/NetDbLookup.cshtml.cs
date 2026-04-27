@@ -67,7 +67,7 @@ public class NetDbLookupModel : PageModel
             {
                 sw.Stop();
                 Result = BuildResult(cachedLs, sw.ElapsedMilliseconds, identHash, null);
-                _routerService.LogActivity("NetDbLookup", $"Cache hit for {identHash.Id32Short}");
+                _routerService.LogActivity("NetDbLookup", $"Cache hit for {identHash.Id64}");
                 return Page();
             }
 
@@ -113,13 +113,13 @@ public class NetDbLookupModel : PageModel
                 {
                     Result = BuildResult(ls, sw.ElapsedMilliseconds, identHash, info);
                     _routerService.LogActivity("NetDbLookup",
-                        $"Found LeaseSet for {identHash.Id32Short} in {sw.ElapsedMilliseconds}ms");
+                        $"Found LeaseSet for {identHash.Id64} in {sw.ElapsedMilliseconds}ms");
                 }
                 else
                 {
                     Result = BuildResult(null, sw.ElapsedMilliseconds, identHash, info);
                     ErrorMessage =
-                        $"LeaseSet lookup returned no valid result for {identHash.Id32Short} after {sw.ElapsedMilliseconds}ms.";
+                        $"LeaseSet lookup returned no valid result for {identHash.Id64} after {sw.ElapsedMilliseconds}ms.";
                 }
             }
             catch (OperationCanceledException)
@@ -138,11 +138,11 @@ public class NetDbLookupModel : PageModel
                     }
 
                 if (noTunnels)
-                    ErrorMessage = $"No exploratory tunnels available for LeaseSet lookup of {identHash.Id32Short}. " +
+                    ErrorMessage = $"No exploratory tunnels available for LeaseSet lookup of {identHash.Id64}. " +
                                    "The router needs active inbound and outbound tunnels to query floodfill routers. " +
                                    "Check the Tunnels page to verify tunnel status.";
                 else
-                    ErrorMessage = $"LeaseSet lookup timed out after 30 seconds for {identHash.Id32Short}. " +
+                    ErrorMessage = $"LeaseSet lookup timed out after 30 seconds for {identHash.Id64}. " +
                                    "The destination may be offline or unreachable.";
             }
         }
@@ -171,7 +171,7 @@ public class NetDbLookupModel : PageModel
             foreach (var lease in ls.Leases)
                 result.Leases.Add(new LeaseInfo
                 {
-                    GatewayHash = lease.TunnelGw?.Id32Short ?? "unknown",
+                    GatewayHash = lease.TunnelGw?.Id64Short ?? "unknown",
                     TunnelId = lease.TunnelId?.ToString() ?? "?",
                     EndDate = lease.Expire.ToString("yyyy-MM-dd HH:mm:ss UTC")
                 });
@@ -199,12 +199,12 @@ public class NetDbLookupModel : PageModel
                     StartMs = TickCounter.TimeDelta(attempt.Start, info.Start).ToMilliseconds,
                     OutboundTunnel = attempt.OutboundTunnelGateway != null
                         ?
-                        $"{attempt.OutboundTunnelGateway.Id32Short} (ID: {attempt.OutboundTunnelId})"
+                        $"{attempt.OutboundTunnelGateway.Id64Short} (ID: {attempt.OutboundTunnelId})"
                         : attempt.Details != null
                             ? "None"
                             : "Direct",
                     InboundTunnel = attempt.InboundTunnelGateway != null
-                        ? $"{attempt.InboundTunnelGateway.Id32Short} (ID: {attempt.InboundTunnelId})"
+                        ? $"{attempt.InboundTunnelGateway.Id64Short} (ID: {attempt.InboundTunnelId})"
                         : "None",
                     Details = attempt.Details
                 };
@@ -212,7 +212,7 @@ public class NetDbLookupModel : PageModel
                 foreach (var ff in attempt.FloodfillResponses)
                     attInfo.Floodfills.Add(new FloodfillStatusInfo
                     {
-                        Floodfill = ff.Key.Id32Short,
+                        Floodfill = ff.Key.Id64Short,
                         Response = ff.Value.Response.ToString(),
                         Details = ff.Value.Details
                     });

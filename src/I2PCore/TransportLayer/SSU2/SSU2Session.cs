@@ -231,16 +231,17 @@ public class SSU2Session : ITransport
 
         var logMsg = string.IsNullOrEmpty(reason) ? "Session terminated" : $"Session terminated: {reason}";
         Logging.LogDebug($"{DebugId}: {logMsg}");
-        TransportConnectionLogger.Inst.Log(logMsg, RemoteRouterInfo?.Identity?.IdentHash?.Id32Short, "SSU2",
-            IsOutgoing ? "Outbound" : "Inbound");
+        TransportConnectionLogger.Inst.Log(logMsg, RemoteRouterInfo?.Identity?.IdentHash?.Id64Short, "SSU2",
+            IsOutgoing ? "Outbound" : "Inbound", RemoteEndpoint);
 
         if (!wasEstablished)
             TransportConnectionLogger.Inst.RecordFailure("SSU2",
                 IsOutgoing ? "Outbound" : "Inbound",
                 reason ?? "Unknown",
-                RemoteRouterInfo?.Identity?.IdentHash?.Id32Short,
-                RemoteRouterInfo?.Identity?.IdentHash?.ToString(),
-                RemoteRouterInfo);
+                RemoteRouterInfo?.Identity?.IdentHash?.Id64Short,
+                RemoteRouterInfo?.Identity?.IdentHash?.Id64,
+                RemoteRouterInfo,
+                RemoteEndpoint);
 
         // Clear sensitive data
         NoiseState?.Clear();
@@ -1070,7 +1071,7 @@ public class SSU2Session : ITransport
 
         Logging.LogInformation($"{DebugId}: Session established with {RemoteRouterInfo?.Identity?.IdentHash}");
         TransportConnectionLogger.Inst.Log("Session established", RemoteRouterInfo?.Identity?.IdentHash?.Id32Short,
-            "SSU2", IsOutgoing ? "Outbound" : "Inbound");
+            "SSU2", IsOutgoing ? "Outbound" : "Inbound", RemoteEndpoint);
         TransportConnectionLogger.Inst.RecordSuccess("SSU2", IsOutgoing ? "Outbound" : "Inbound");
 
         // Fire ConnectionCreated event for incoming connection
@@ -1527,7 +1528,7 @@ public class SSU2Session : ITransport
         Logging.LogDebug($"{DebugId}: SessionConfirmed sent");
         Logging.LogInformation($"{DebugId}: Session established");
         TransportConnectionLogger.Inst.Log("Session established", RemoteRouterInfo?.Identity?.IdentHash?.Id32Short,
-            "SSU2", IsOutgoing ? "Outbound" : "Inbound");
+            "SSU2", IsOutgoing ? "Outbound" : "Inbound", RemoteEndpoint);
         TransportConnectionLogger.Inst.RecordSuccess("SSU2", "Outbound");
 
         // Notify connection established

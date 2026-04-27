@@ -25,11 +25,8 @@ public static class RouterInfoExchanger
         Directory.CreateDirectory(outputDir);
 
         // I2P standard filename: base64 of 32-byte hash with + → - and / → ~
-        // Must use standard Base64 then substitute (NOT BouncyCastle UrlBase64 which uses _ not ~)
         // i2pd KEEPS the '=' padding in filenames (e.g. routerInfo-XXX=.dat), so do NOT strip it.
-        var hashBytes = ri.Identity.IdentHash.Hash.ToByteArray();
-        var hashStr = Convert.ToBase64String(hashBytes);
-        var safeHash = hashStr.Replace('+', '-').Replace('/', '~');
+        var safeHash = ri.Identity.IdentHash.Id64;
 
         // i2pd expects files in subdirectories like r{first-char}/
         var subDir = Path.Combine(outputDir, $"r{safeHash[0]}");

@@ -57,7 +57,7 @@ public class RoutersModel : PageModel
                 // Apply search filter if provided
                 if (!string.IsNullOrEmpty(SearchQuery))
                     filteredRouters = filteredRouters.Where(r =>
-                        r.Identity.IdentHash.Id32Short.Contains(SearchQuery, StringComparison.OrdinalIgnoreCase) ||
+                        r.Identity.IdentHash.Id64.Contains(SearchQuery, StringComparison.OrdinalIgnoreCase) ||
                         r.Addresses.Any(a => a.Host?.ToString()?.Contains(SearchQuery) == true));
             }
             else
@@ -103,7 +103,7 @@ public class RoutersModel : PageModel
 
                     return new RouterDisplayInfo
                     {
-                        Hash = hash.Id32Short,
+                        Hash = hash.Id64,
                         FullHash = hash.ToString(),
                         Host = host,
                         Port = port,

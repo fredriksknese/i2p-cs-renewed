@@ -79,7 +79,7 @@ public class TunnelsModel : PageModel
         {
             if (tunnel.Config?.Info?.Hops != null)
                 foreach (var hop in tunnel.Config.Info.Hops)
-                    hops.Add(hop.Peer.IdentHash.Id32Short);
+                    hops.Add(hop.Peer.IdentHash.Id64Short);
         }
         catch
         {

@@ -50,7 +50,7 @@ public class ConnectionLogsModel : PageModel
     {
         var failures = _routerService.GetFailuresByReason(transport, direction, reason);
         var csv = new StringBuilder();
-        csv.AppendLine("Reason,ShortId,FullId,PublishedDate,Addresses,Options");
+        csv.AppendLine("Reason,RemoteEndPoint,ShortId,FullId,PublishedDate,Addresses,Options");
 
         foreach (var failure in failures)
         {
@@ -61,8 +61,9 @@ public class ConnectionLogsModel : PageModel
                 ? string.Join("; ", failure.RouterInfo.Options.Select(kv => $"{kv.Key}={kv.Value}"))
                 : "";
             var published = failure.RouterInfo?.PublishedDate.ToString() ?? "";
+            var endPoint = failure.RemoteEndPoint?.ToString() ?? "";
 
-            csv.AppendLine($"{EscapeCsv(failure.Reason)},{EscapeCsv(failure.RouterId)},{EscapeCsv(failure.RouterFullId)},{EscapeCsv(published)},{EscapeCsv(addresses)},{EscapeCsv(options)}");
+            csv.AppendLine($"{EscapeCsv(failure.Reason)},{EscapeCsv(endPoint)},{EscapeCsv(failure.RouterId)},{EscapeCsv(failure.RouterFullId)},{EscapeCsv(published)},{EscapeCsv(addresses)},{EscapeCsv(options)}");
         }
 
         var bytes = Encoding.UTF8.GetBytes(csv.ToString());

@@ -111,7 +111,7 @@ public class RouterService
         var ff = Router.FloodfillServer;
         if (ff == null) return Enumerable.Empty<(string, string, int)>();
         return ff.GetTopRouterInfoLookups(topN)
-            .Select(x => (RouterHash: x.Key.Id32Short, ShortId: x.Key.Id32Short, Count: x.Count));
+            .Select(x => (RouterHash: x.Key.Id64, ShortId: x.Key.Id64, Count: x.Count));
     }
 
     public void StartRouter()
@@ -282,10 +282,10 @@ public class RouterService
 
         var stats = new RouterStatistics
         {
-            RouterHash = RouterContext.Inst.MyRouterIdentity.IdentHash.Id32Short,
+            RouterHash = RouterContext.Inst.MyRouterIdentity.IdentHash.Id64,
             Version = I2PConstants.ProtocolVersion,
             Uptime = uptime,
-            PublicKey = Convert.ToBase64String(RouterContext.Inst.MyRouterIdentity.PublicKey.ToByteArray()),
+            PublicKey = FreenetBase64.Encode(new I2PByteBlock(RouterContext.Inst.MyRouterIdentity.PublicKey.ToByteArray())),
             KeyType = RouterContext.Inst.MyRouterIdentity.PublicKey.Certificate.PublicKeyType.ToString(),
             IsRunning = IsRunning,
             BandwidthClass = RouterContext.Inst.GetBandwidthCapChar().ToString(),
@@ -343,7 +343,7 @@ public class RouterService
             }
             else if (receiveFrom != null)
             {
-                fromLabel = receiveFrom.Id32Short;
+                fromLabel = receiveFrom.Id64Short;
                 fromHash = receiveFrom.Id64;
             }
             else
@@ -355,12 +355,12 @@ public class RouterService
             string? toHash = null;
             if (isOutboundEndpoint)
             {
-                toLabel = destHash?.Id32Short ?? "Outbound Endpoint";
+                toLabel = destHash?.Id64Short ?? "Outbound Endpoint";
                 toHash = destHash?.Id64;
             }
             else
             {
-                toLabel = destHash?.Id32Short ?? "Unknown";
+                toLabel = destHash?.Id64Short ?? "Unknown";
                 toHash = destHash?.Id64;
             }
 

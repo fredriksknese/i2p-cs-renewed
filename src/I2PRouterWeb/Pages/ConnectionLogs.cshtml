@@ -169,15 +169,22 @@
                                         <div class="ps-3 py-2">
                                             @if (routers.Any())
                                             {
-                                                <div class="small text-muted mb-2">Affected Routers (up to 50):</div>
+                                                <div class="small text-muted mb-2">Affected Routers / IPs (up to 50):</div>
                                                 @foreach (var router in routers)
                                                 {
                                                     <div class="mb-1 d-flex flex-wrap align-items-center">
-                                                        <span class="me-2 text-primary">🌐</span>
-                                                        <a href="/RouterDetail?hash=@Uri.EscapeDataString(router.ShortId)"
-                                                           class="text-decoration-none font-monospace small fw-bold me-2">
-                                                            @router.ShortId
-                                                        </a>
+                                                        <span class="me-2 text-primary">@(router.FullId.Contains(":") ? "📍" : "🌐")</span>
+                                                        @if (router.FullId.Contains(":"))
+                                                        {
+                                                            <span class="font-monospace small fw-bold me-2">@router.ShortId</span>
+                                                        }
+                                                        else
+                                                        {
+                                                            <a href="/RouterDetail?hash=@Uri.EscapeDataString(router.ShortId)"
+                                                               class="text-decoration-none font-monospace small fw-bold me-2">
+                                                                @router.ShortId
+                                                            </a>
+                                                        }
                                                         <span class="text-muted font-monospace" style="font-size: 0.7rem;">@router.FullId</span>
                                                     </div>
                                                 }
@@ -255,7 +262,13 @@
                                         @if (!string.IsNullOrEmpty(log.RouterId))
                                         {
                                             <a href="/RouterDetail?hash=@Uri.EscapeDataString(log.RouterId)"
-                                               class="text-decoration-none font-monospace small">[@log.RouterId]</a>
+                                               class="text-decoration-none font-monospace small">@log.RouterId</a>
+                                        }
+                                        else if (log.RemoteEndPoint != null)
+                                        {
+                                            <span class="text-muted font-monospace small" title="@log.RemoteEndPoint">
+                                                @log.RemoteEndPoint.Address
+                                            </span>
                                         }
                                         else
                                         {

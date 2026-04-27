@@ -45,14 +45,14 @@ public class NetDbLogService
         NetDb.DatabaseLookupResult result)
     {
         var isRouterInfoLookup = (lookup.LookupType & DatabaseLookupMessage.LookupTypes.RouterInfo) != 0;
-        var keyStr = isRouterInfoLookup ? lookup.Key.Id32Short : $"{lookup.Key.Id32}.b32.i2p";
+        var keyStr = isRouterInfoLookup ? lookup.Key.Id64 : $"{lookup.Key.Id32}.b32.i2p";
 
         var isTunnel = (lookup.LookupType & DatabaseLookupMessage.LookupTypes.Tunnel) != 0;
         string viaStr;
         if (isTunnel)
-            viaStr = $"Tunnel {lookup.TunnelId} at {lookup.From?.Id32Short ?? "Unknown"}";
+            viaStr = $"Tunnel {lookup.TunnelId} at {lookup.From?.Id64Short ?? "Unknown"}";
         else
-            viaStr = $"Direct to {lookup.From?.Id32Short ?? "Unknown"}";
+            viaStr = $"Direct to {lookup.From?.Id64Short ?? "Unknown"}";
 
         var resultStr = result switch
         {
@@ -64,12 +64,12 @@ public class NetDbLogService
 
         var message =
             $"Received {lookup.LookupType} lookup for {keyStr} ({lookup.Key.Id64}). Responding via {viaStr}. Result: {resultStr}";
-        AddLog(NetDbLogCategory.DatabaseLookupReceived, lookup.Key.Id32Short, message);
+        AddLog(NetDbLogCategory.DatabaseLookupReceived, lookup.Key.Id64, message);
     }
 
     private void OnDatabaseSearchReplyReceived(DatabaseSearchReplyMessage dsm)
     {
-        var hashes = dsm.Peers.Select(r => r.Id32Short).ToArray();
+        var hashes = dsm.Peers.Select(r => r.Id64Short).ToArray();
         var message = $"Discovered {hashes.Length} peer hashes via search reply: {string.Join(", ", hashes)}";
         AddLog(NetDbLogCategory.PeerHashesDiscovered, "Multiple", message);
     }
@@ -77,19 +77,19 @@ public class NetDbLogService
     private void OnRouterInfoUpdated(I2PRouterInfo info)
     {
         // Only log if we didn't have this router before, or if it was marked as deleted
-        AddLog(NetDbLogCategory.RouterInfoDiscovered, info.Identity.IdentHash.Id32Short,
-            $"Newly discovered RouterInfo: {info.Identity.IdentHash.Id32Short}");
+        AddLog(NetDbLogCategory.RouterInfoDiscovered, info.Identity.IdentHash.Id64,
+            $"Newly discovered RouterInfo: {info.Identity.IdentHash.Id64}");
     }
 
     private void OnRouterInfoRemoved(I2PIdentHash hash)
     {
-        AddLog(NetDbLogCategory.RouterInfoExpired, hash.Id32Short, $"RouterInfo expired and removed: {hash.Id32Short}");
+        AddLog(NetDbLogCategory.RouterInfoExpired, hash.Id64, $"RouterInfo expired and removed: {hash.Id64}");
     }
 
     private void OnLeaseSetUpdated(ILeaseSet ls)
     {
-        AddLog(NetDbLogCategory.LeaseSetAnnounced, ls.Destination.IdentHash.Id32Short,
-            $"LeaseSet announced for {ls.Destination.IdentHash.Id32Short}");
+        AddLog(NetDbLogCategory.LeaseSetAnnounced, ls.Destination.IdentHash.Id64,
+            $"LeaseSet announced for {ls.Destination.IdentHash.Id64}");
     }
 
     private void AddLog(NetDbLogCategory category, string identHash, string message)

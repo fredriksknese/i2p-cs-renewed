@@ -1,5 +1,6 @@
 ﻿@page
 @using I2PCore.Data
+@using I2PCore.Utils
 @model IndexModel
 @{
     ViewData["Title"] = "Dashboard";
@@ -284,11 +285,11 @@
                                 </tr>
                                 <tr>
                                     <th>Public Key</th>
-                                    <td class="text-break"><code>@Convert.ToBase64String(ri.Identity.PublicKey.ToByteArray())</code></td>
+                                    <td class="text-break"><code>@FreenetBase64.Encode(new I2PByteBlock(ri.Identity.PublicKey.ToByteArray()))</code></td>
                                 </tr>
                                 <tr>
                                     <th>Signing Key</th>
-                                    <td class="text-break"><code>@Convert.ToBase64String(ri.Identity.SigningPublicKey.ToByteArray())</code></td>
+                                    <td class="text-break"><code>@FreenetBase64.Encode(new I2PByteBlock(ri.Identity.SigningPublicKey.ToByteArray()))</code></td>
                                 </tr>
                             </table>
 

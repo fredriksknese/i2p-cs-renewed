@@ -304,16 +304,17 @@ public class NTCP2Session : ITransport
 
         var logMsg = string.IsNullOrEmpty(reason) ? "Session terminated" : $"Session terminated: {reason}";
         Logging.LogDebug($"{DebugId}: {logMsg}");
-        TransportConnectionLogger.Inst.Log(logMsg, RemoteRouterInfo?.Identity?.IdentHash?.Id32Short, "NTCP2",
-            IsOutgoing ? "Outbound" : "Inbound");
+        TransportConnectionLogger.Inst.Log(logMsg, RemoteRouterInfo?.Identity?.IdentHash?.Id64Short, "NTCP2",
+            IsOutgoing ? "Outbound" : "Inbound", TcpClient?.Client?.RemoteEndPoint as IPEndPoint);
 
         if (!wasEstablished)
             TransportConnectionLogger.Inst.RecordFailure("NTCP2",
                 IsOutgoing ? "Outbound" : "Inbound",
                 reason ?? "Unknown",
-                RemoteRouterInfo?.Identity?.IdentHash?.Id32Short,
-                RemoteRouterInfo?.Identity?.IdentHash?.ToString(),
-                RemoteRouterInfo);
+                RemoteRouterInfo?.Identity?.IdentHash?.Id64Short,
+                RemoteRouterInfo?.Identity?.IdentHash?.Id64,
+                RemoteRouterInfo,
+                TcpClient?.Client?.RemoteEndPoint as IPEndPoint);
 
         try
         {
@@ -392,7 +393,7 @@ public class NTCP2Session : ITransport
             catch (Exception ex)
             {
                 Logging.LogWarning($"{DebugId}: Receive loop error: {ex.Message}");
-                Terminate();
+                Terminate($"Receive loop error: {ex.Message}");
             }
         });
     }
@@ -815,7 +816,7 @@ public class NTCP2Session : ITransport
         {
             Logging.LogWarning($"{DebugId}: ProcessReceivedData failed: {ex}");
             ConnectionException?.Invoke(this, ex);
-            Terminate();
+            Terminate($"ProcessReceivedData failed: {ex.Message}");
         }
     }
 
@@ -838,9 +839,10 @@ public class NTCP2Session : ITransport
         // Replay protection (spec line 505)
         if (!NTCP2SecurityValidator.CheckAndAddEncryptedToReplayCache(obfuscatedKey))
         {
+            var msg = "SessionRequest replay detected";
             Logging.LogWarning(
-                $"{DebugId}: TERMINATION REASON [C#-BOB]: SessionRequest replay detected - same obfuscated key seen before (possible reconnect within 240s window)");
-            Terminate();
+                $"{DebugId}: TERMINATION REASON [C#-BOB]: {msg} - same obfuscated key seen before (possible reconnect within 240s window)");
+            Terminate(msg);
             return;
         }
 
@@ -911,9 +913,10 @@ public class NTCP2Session : ITransport
 
             if (HandshakeDecryptedOptions == null)
             {
+                var msg = "SessionRequest AEAD verification failed";
                 Logging.LogWarning(
-                    $"{DebugId}: TERMINATION REASON [C#-BOB]: SessionRequest AEAD verification failed - i2pd Alice used wrong Noise key (static key mismatch or wrong router hash/IV for AES deobfuscation)");
-                Terminate();
+                    $"{DebugId}: TERMINATION REASON [C#-BOB]: {msg} - i2pd Alice used wrong Noise key (static key mismatch or wrong router hash/IV for AES deobfuscation)");
+                Terminate(msg);
                 return;
             }
 
@@ -939,9 +942,10 @@ public class NTCP2Session : ITransport
         // Spec line 876: part 2 max frame length is 65487
         if (m3p2len > 65487)
         {
+            var msg = $"SessionRequest m3p2len={m3p2len} exceeds max";
             Logging.LogWarning(
-                $"{DebugId}: TERMINATION REASON [C#-BOB]: SessionRequest m3p2len={m3p2len} exceeds max 65487");
-            Terminate();
+                $"{DebugId}: TERMINATION REASON [C#-BOB]: {msg} 65487");
+            Terminate(msg);
             return;
         }
 
@@ -955,18 +959,20 @@ public class NTCP2Session : ITransport
         // Validate version (i2pd responder ignores networkId)
         if (RemoteVersion < 2)
         {
+            var msg = $"SessionRequest invalid version={RemoteVersion}";
             Logging.LogWarning(
-                $"{DebugId}: TERMINATION REASON [C#-BOB]: SessionRequest invalid version={RemoteVersion} (expected >=2)");
-            Terminate();
+                $"{DebugId}: TERMINATION REASON [C#-BOB]: {msg} (expected >=2)");
+            Terminate(msg);
             return;
         }
 
         // Validate padding length
         if (paddingLen > 880) // 880 is the new max for 0.9.69
         {
+            var msg = $"SessionRequest excessive padding={paddingLen}";
             Logging.LogWarning(
-                $"{DebugId}: TERMINATION REASON [C#-BOB]: SessionRequest excessive padding={paddingLen} (max 880)");
-            Terminate();
+                $"{DebugId}: TERMINATION REASON [C#-BOB]: {msg} (max 880)");
+            Terminate(msg);
             return;
         }
 
@@ -997,9 +1003,10 @@ public class NTCP2Session : ITransport
         var remaining = ReceiveBufferPos - totalProcessed;
         if (remaining > 0)
         {
+            var msg = $"Extra data after SessionRequest: {remaining} bytes";
             Logging.LogWarning(
-                $"{DebugId}: TERMINATION REASON [C#-BOB]: Extra data after SessionRequest: {remaining} bytes (totalProcessed={totalProcessed}, bufPos={ReceiveBufferPos}, payloadOffset={payloadOffset}, paddingLen={paddingLen})");
-            Terminate();
+                $"{DebugId}: TERMINATION REASON [C#-BOB]: {msg} (totalProcessed={totalProcessed}, bufPos={ReceiveBufferPos}, payloadOffset={payloadOffset}, paddingLen={paddingLen})");
+            Terminate(msg);
             return;
         }
 
@@ -1052,8 +1059,9 @@ public class NTCP2Session : ITransport
             // Replay protection (spec line 818)
             if (!NTCP2SecurityValidator.CheckAndAddEncryptedToReplayCache(obfuscatedKey))
             {
-                Logging.LogWarning($"{DebugId}: SessionCreated replay detected - terminating");
-                Terminate();
+                var msg = "SessionCreated replay detected";
+                Logging.LogWarning($"{DebugId}: {msg} - terminating");
+                Terminate(msg);
                 return;
             }
 
@@ -1113,15 +1121,17 @@ public class NTCP2Session : ITransport
             }
             catch (Exception ex)
             {
-                Logging.LogWarning($"{DebugId}: SessionCreated AEAD verification failed: {ex.Message}");
-                Terminate();
+                var msg = $"SessionCreated AEAD verification failed: {ex.Message}";
+                Logging.LogWarning($"{DebugId}: {msg}");
+                Terminate(msg);
                 return;
             }
 
             if (HandshakeDecryptedOptions == null || HandshakeDecryptedOptions.Length != 16)
             {
-                Logging.LogWarning($"{DebugId}: SessionCreated decryption failed - invalid options size");
-                Terminate();
+                var msg = "SessionCreated decryption failed - invalid options size";
+                Logging.LogWarning($"{DebugId}: {msg}");
+                Terminate(msg);
                 return;
             }
 
@@ -1314,15 +1324,17 @@ public class NTCP2Session : ITransport
 
             if (RemoteRouterInfo == null)
             {
-                Logging.LogWarning($"{DebugId}: SessionConfirmed part 2 did not contain a RouterInfo block");
-                Terminate();
+                var msg = "SessionConfirmed did not contain RouterInfo";
+                Logging.LogWarning($"{DebugId}: {msg}");
+                Terminate(msg);
                 return;
             }
         }
         catch (Exception ex)
         {
-            Logging.LogWarning($"{DebugId}: Failed to parse blocks in SessionConfirmed: {ex.Message}");
-            Terminate();
+            var msg = $"Failed to parse SessionConfirmed blocks: {ex.Message}";
+            Logging.LogWarning($"{DebugId}: {msg}");
+            Terminate(msg);
             return;
         }
 
@@ -1355,7 +1367,7 @@ public class NTCP2Session : ITransport
 
         Logging.LogInformation($"{DebugId}: Session established with {RemoteRouterInfo?.Identity?.IdentHash}");
         TransportConnectionLogger.Inst.Log("Session established", RemoteRouterInfo?.Identity?.IdentHash?.Id32Short,
-            "NTCP2", IsOutgoing ? "Outbound" : "Inbound");
+            "NTCP2", IsOutgoing ? "Outbound" : "Inbound", TcpClient?.Client?.RemoteEndPoint as IPEndPoint);
         TransportConnectionLogger.Inst.RecordSuccess("NTCP2", IsOutgoing ? "Outbound" : "Inbound");
 
         // Fire ConnectionCreated event for incoming connection

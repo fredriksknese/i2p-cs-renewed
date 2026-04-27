@@ -34,12 +34,12 @@ public class LeaseSetsModel : PageModel
                         var info = new LeaseSetDisplayInfo
                         {
                             DestinationBase64 = dest != null
-                                ? Convert.ToBase64String(dest.ToByteArray())
+                                ? FreenetBase64.Encode(new I2PByteBlock(dest.ToByteArray()))
                                 : "",
                             B32Address = identHash != null
                                 ? $"{identHash.Id32}.b32.i2p"
                                 : "",
-                            DestHashShort = identHash?.Id32Short ?? "Unknown",
+                            DestHashShort = identHash?.Id64 ?? "Unknown",
                             LeaseSetType = ls.MessageType.ToString(),
                             TypeClassName = ls.GetType().Name,
                             Expiration = ls.Expire
@@ -52,7 +52,7 @@ public class LeaseSetsModel : PageModel
                                 {
                                     KeyType = pk.Certificate?.PublicKeyType.ToString() ?? "Unknown",
                                     KeyLength = pk.Key.Length,
-                                    KeyBase64 = Convert.ToBase64String(pk.Key.ToByteArray())
+                                    KeyBase64 = FreenetBase64.Encode(new I2PByteBlock(pk.Key.ToByteArray()))
                                 });
 
                         // Leases
@@ -60,7 +60,7 @@ public class LeaseSetsModel : PageModel
                             foreach (var lease in ls.Leases)
                                 info.Leases.Add(new LeaseDisplayInfo
                                 {
-                                    TunnelGatewayHash = lease.TunnelGw?.Id32Short ?? "Unknown",
+                                    TunnelGatewayHash = lease.TunnelGw?.Id64Short ?? "Unknown",
                                     TunnelGatewayB32 = lease.TunnelGw != null
                                         ? $"{lease.TunnelGw.Id32}.b32.i2p"
                                         : "",

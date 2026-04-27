@@ -1,9 +1,7 @@
 ﻿using System;
 using System.Buffers;
-using System.Text;
 using I2PCore.Utils;
 using Org.BouncyCastle.Math;
-using Org.BouncyCastle.Utilities.Encoders;
 
 namespace I2PCore.Data;
 
@@ -39,9 +37,11 @@ public class I2PIdentHash : I2PType, IEquatable<I2PIdentHash>
 
     public string Id32Short { get; }
 
+    public string Id64Short => Id64.Substring(0, 4);
+
     public string Id32 => BufUtils.ToBase32String(Hash);
 
-    public string Id64 => Encoding.ASCII.GetString(UrlBase64.Encode(Hash.ToByteArray()));
+    public string Id64 => FreenetBase64.Encode(Hash);
 
     public I2PRoutingKey RoutingKey => GetRoutingKey(DateTime.UtcNow);
 
