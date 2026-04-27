@@ -19,6 +19,7 @@ public class RouterDetailModel : PageModel
     public bool Found { get; set; }
     public string Hash { get; set; } = "";
     public string FullIdentHash { get; set; } = "";
+    public string FullIdentHash64 { get; set; } = "";
     public DateTime PublishedDate { get; set; }
     public string Caps { get; set; } = "";
     public string Version { get; set; } = "";
@@ -95,6 +96,7 @@ public class RouterDetailModel : PageModel
         Found = true;
         var identHash = ri.Identity.IdentHash;
         FullIdentHash = identHash.ToString();
+        FullIdentHash64 = identHash.Id64;
         PublishedDate = (DateTime)ri.PublishedDate;
         SignatureType = ri.Identity.Certificate.SignatureType.ToString();
         CryptoType = ri.Identity.Certificate.PublicKeyType.ToString();
