@@ -19,6 +19,8 @@ public static class FreenetBase64
 
     public static int[] Codomain;
 
+    public static string Encode(byte[] data) => Encode(new I2PByteBlock(data));
+
     public static string Encode(I2PByteBlock data)
     {
         var result = new StringBuilder();
