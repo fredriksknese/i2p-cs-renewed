@@ -124,6 +124,7 @@ public class NTCP2Session : ITransport
     }
 
     public TcpClient TcpClient { get; private set; }
+    public int BytesInBuffer => ReceiveBufferPos;
     public NTCP2SessionState State { get; private set; }
 
     public I2PRouterInfo RemoteRouterInfo { get; private set; }
@@ -199,7 +200,7 @@ public class NTCP2Session : ITransport
                 TransportConnectionLogger.Inst.Log($"Connect failed: {ex.Message}",
                     RemoteRouterInfo?.Identity?.IdentHash?.Id32Short, "NTCP2", "Outbound");
                 ConnectionException?.Invoke(this, ex);
-                Terminate($"Connect failed: {ex.Message}");
+                Terminate($"Connect failed (State: {State}): {ex.Message}");
             }
         });
     }
@@ -251,7 +252,7 @@ public class NTCP2Session : ITransport
             if (now - LastActivityTime > 30)
             {
                 Logging.LogInformation($"{DebugId}: Handshake timeout (30 seconds) in state {State}");
-                Terminate("Handshake timeout (30s)");
+                Terminate($"Handshake timeout (30s, State: {State})");
             }
 
             return;
@@ -261,8 +262,7 @@ public class NTCP2Session : ITransport
         if (now - LastActivityTime > 300)
         {
             Logging.LogInformation($"{DebugId}: Inactivity timeout (5 minutes)");
-            Terminate("Inactivity timeout (5m)");
-            return;
+            Terminate($"Inactivity timeout (5m, State: {State})");
         }
 
         // Keep-alive (DateTime block)
@@ -356,13 +356,13 @@ public class NTCP2Session : ITransport
                                                  socketEx.SocketErrorCode == SocketError.TimedOut)
                     {
                         Logging.LogWarning($"{DebugId}: Read timeout, no response from remote - terminating");
-                        Terminate("Read timeout");
+                        Terminate($"Read timeout (State: {State})");
                         break;
                     }
                     catch (IOException ex)
                     {
                         Logging.LogWarning($"{DebugId}: Read I/O error: {ex.Message}");
-                        Terminate($"Read I/O error: {ex.Message}");
+                        Terminate($"Read I/O error (State: {State}): {ex.Message}");
                         break;
                     }
 
@@ -370,7 +370,7 @@ public class NTCP2Session : ITransport
                     {
                         // Connection closed
                         Logging.LogDebug($"{DebugId}: Connection closed by remote (0 bytes read)");
-                        Terminate("EOF");
+                        Terminate($"EOF (State: {State})");
                         break;
                     }
 
@@ -393,7 +393,7 @@ public class NTCP2Session : ITransport
             catch (Exception ex)
             {
                 Logging.LogWarning($"{DebugId}: Receive loop error: {ex.Message}");
-                Terminate($"Receive loop error: {ex.Message}");
+                Terminate($"Receive loop error (State: {State}): {ex.Message}");
             }
         });
     }
@@ -575,24 +575,14 @@ public class NTCP2Session : ITransport
         Logging.LogInformation(
             $"{DebugId}: DIAG-Alice SendSR bobHash[0:4]={BitConverter.ToString(bobRouterHash, 0, 4).Replace("-", "")} bobIV[0:4]={BitConverter.ToString(bobIV, 0, 4).Replace("-", "")} bobS[0:4]={BitConverter.ToString(remoteStaticKey, 0, 4).Replace("-", "")} IsPQ={IsPQ}");
 
-        // Generate ephemeral keys for Alice with MSB check loop (probing resistance)
-        byte[] ephKey;
-        byte[] obfuscatedKey;
-        var attempts = 0;
-        do
-        {
-            ephKey = NoiseState.GenerateAliceEphemeralKeys();
+        // Generate ephemeral keys for Alice
+        var ephKey = NoiseState.GenerateAliceEphemeralKeys();
 
-            // Signal PQ via MSB of X (spec line 363 in ntcp2-hybrid.md)
-            if (IsPQ) ephKey[31] |= 0x80;
-            else ephKey[31] &= 0x7f;
+        // Signal PQ via MSB of X (spec line 363 in ntcp2-hybrid.md)
+        if (IsPQ) ephKey[31] |= 0x80;
+        else ephKey[31] &= 0x7f;
 
-            obfuscatedKey = AESObfuscation.Encrypt(ephKey, bobRouterHash, bobIV);
-            attempts++;
-            // Probing resistance: MSB of *obfuscated* key must be 0
-        } while (!NTCP2ProbingResistance.CheckMSB(obfuscatedKey));
-
-        if (attempts > 1) Logging.LogDebug($"{DebugId}: Generated valid obfuscated key after {attempts} attempts");
+        var obfuscatedKey = AESObfuscation.Encrypt(ephKey, bobRouterHash, bobIV);
 
         // Create message 1 with these keys
         byte[] encryptedPQFrame = null;
@@ -784,31 +774,51 @@ public class NTCP2Session : ITransport
             Array.Copy(data, 0, ReceiveBuffer, ReceiveBufferPos, data.Length);
             ReceiveBufferPos += data.Length;
 
-            // Process based on current state
-            switch (State)
+            bool processed;
+            do
             {
-                case NTCP2SessionState.Initial:
-                    // Waiting for SessionRequest (obfuscated key + encrypted payload)
-                    if (ReceiveBufferPos >= 32 + 16) // Min size: 32 key + 16 MAC
-                        ProcessSessionRequest();
-                    break;
+                processed = false;
+                var oldState = State;
+                var oldPos = ReceiveBufferPos;
 
-                case NTCP2SessionState.SessionRequestSent:
-                    // Waiting for SessionCreated (obfuscated key + encrypted payload)
-                    if (ReceiveBufferPos >= 32 + 16) ProcessSessionCreated();
-                    break;
+                switch (State)
+                {
+                    case NTCP2SessionState.Initial:
+                        // Waiting for SessionRequest (obfuscated key + encrypted payload)
+                        if (ReceiveBufferPos >= 32 + 32) // Min size: 32 key + 32 payload (options+MAC)
+                        {
+                            ProcessSessionRequest();
+                        }
+                        break;
 
-                case NTCP2SessionState.SessionCreatedSent:
-                    // Waiting for SessionConfirmed (encrypted static key + encrypted payload)
-                    if (ReceiveBufferPos >= 48 + 16) // 48 encrypted key + payload
-                        ProcessSessionConfirmed();
-                    break;
+                    case NTCP2SessionState.SessionRequestSent:
+                        // Waiting for SessionCreated (obfuscated key + encrypted payload)
+                        if (ReceiveBufferPos >= 32 + 32)
+                        {
+                            ProcessSessionCreated();
+                        }
+                        break;
 
-                case NTCP2SessionState.Established:
-                    // Data phase - process frames
-                    ProcessDataFrames();
-                    break;
-            }
+                    case NTCP2SessionState.SessionCreatedSent:
+                        // Waiting for SessionConfirmed (encrypted static key + encrypted payload)
+                        if (ReceiveBufferPos >= 48 + 32) // 48 Part 1 + min 32 Part 2
+                        {
+                            ProcessSessionConfirmed();
+                        }
+                        break;
+
+                    case NTCP2SessionState.Established:
+                        // Data phase - process frames
+                        ProcessDataFrames();
+                        break;
+                }
+
+                // If state changed or data was consumed, try processing more from the buffer
+                if (State != oldState || ReceiveBufferPos < oldPos)
+                {
+                    processed = true;
+                }
+            } while (processed && !IsTerminated && ReceiveBufferPos > 0);
 
             BytesReceived += data.Length;
         }
@@ -816,7 +826,7 @@ public class NTCP2Session : ITransport
         {
             Logging.LogWarning($"{DebugId}: ProcessReceivedData failed: {ex}");
             ConnectionException?.Invoke(this, ex);
-            Terminate($"ProcessReceivedData failed: {ex.Message}");
+            Terminate($"ProcessReceivedData failed (State: {State}): {ex.Message}");
         }
     }
 
@@ -836,50 +846,101 @@ public class NTCP2Session : ITransport
         Logging.LogInformation(
             $"{DebugId}: DIAG-Bob ProcessSR ourHash[0:4]={BitConverter.ToString(ourRouterHash, 0, 4).Replace("-", "")} ourIV[0:4]={BitConverter.ToString(ourIV, 0, 4).Replace("-", "")} ourS[0:4]={BitConverter.ToString(Host.GetStaticPublicKey(), 0, 4).Replace("-", "")} rcvdBuf[0:4]={BitConverter.ToString(obfuscatedKey, 0, 4).Replace("-", "")}");
 
-        // Replay protection (spec line 505)
-        if (!NTCP2SecurityValidator.CheckAndAddEncryptedToReplayCache(obfuscatedKey))
-        {
-            var msg = "SessionRequest replay detected";
-            Logging.LogWarning(
-                $"{DebugId}: TERMINATION REASON [C#-BOB]: {msg} - same obfuscated key seen before (possible reconnect within 240s window)");
-            Terminate(msg);
-            return;
-        }
-
-        var ephemeralKey = AESObfuscation.Decrypt(obfuscatedKey, ourRouterHash, ourIV);
-
-        // Store AES state for Message 2 obfuscation
-        AESStateAfterMsg1 = new byte[16];
-        Array.Copy(obfuscatedKey, 16, AESStateAfterMsg1, 0, 16);
-
-        // PQ detection via MSB of X (spec lines 365-367 in ntcp2-hybrid.md)
-        var isPQ = (ephemeralKey[31] & 0x80) != 0;
-
-        // Only accept PQ if we support it and have a version published
-        var ourPQVersion = Host.GetPublishedPQVersion();
-        var acceptPQ = isPQ && ourPQVersion != 0;
-
-        var pqKeyLen = acceptPQ
-            ? ourPQVersion switch
-            {
-                3 => 800,
-                4 => 1184,
-                5 => 1568,
-                _ => 0
-            }
-            : 0;
-
-        // payloadOffset uses acceptPQ (not raw isPQ) to avoid reading wrong offset
-        // when a non-PQ router's key happens to have bit 7 set
-        var payloadOffset = 32 + (acceptPQ ? pqKeyLen + 16 : 0);
-        var minSize = payloadOffset + 32;
-
-        if (ReceiveBufferPos < minSize) return;
-
         if (!HandshakeDecrypted)
         {
+            // Replay protection (spec line 505)
+            if (!NTCP2SecurityValidator.CheckAndAddEncryptedToReplayCache(obfuscatedKey))
+            {
+                var msg = "SessionRequest replay detected";
+                Logging.LogWarning(
+                    $"{DebugId}: TERMINATION REASON [C#-BOB]: {msg} - same obfuscated key seen before (possible reconnect within 240s window)");
+                Terminate(msg);
+                return;
+            }
+
+            var ephemeralKey = AESObfuscation.Decrypt(obfuscatedKey, ourRouterHash, ourIV);
+
+            // Store AES state for Message 2 obfuscation
+            AESStateAfterMsg1 = new byte[16];
+            Array.Copy(obfuscatedKey, 16, AESStateAfterMsg1, 0, 16);
+
+            var isPQ = (ephemeralKey[31] & 0x80) != 0;
+
+            // Only accept PQ if we support it and have a version published
+            var ourPQVersion = Host.GetPublishedPQVersion();
+
+            if (isPQ && ourPQVersion == 0)
+            {
+                var msg = "SessionRequest PQ bit set but PQ not supported by this host";
+                Logging.LogWarning($"{DebugId}: TERMINATION REASON [C#-BOB]: {msg}");
+                Terminate(msg);
+                return;
+            }
+
+            var acceptPQ = isPQ;
+            var pqKeyLen = 0;
+            var payloadOffset = 32;
+            var minSize = 64;
+
+            if (acceptPQ)
+            {
+                // Detect PQ version from received buffer size
+                // Alice (initiator) chooses a version from Bob's published RI.
+                // We published ourPQVersion, but we should detect what she actually used.
+                // Min sizes (without padding): v3=880, v4=1264, v5=1648.
+                if (ReceiveBufferPos >= 1648) PQVersion = 5;
+                else if (ReceiveBufferPos >= 1264) PQVersion = 4;
+                else PQVersion = 3;
+
+                pqKeyLen = PQVersion switch
+                {
+                    3 => 800,
+                    4 => 1184,
+                    5 => 1568,
+                    _ => 0
+                };
+                payloadOffset = 32 + pqKeyLen + 16;
+                minSize = payloadOffset + 32;
+            }
+
+            if (ReceiveBufferPos < minSize)
+            {
+                // NEW: Opportunistic non-PQ trial (probing resistance for false PQ signals)
+                if (acceptPQ && ReceiveBufferPos >= 64 && ReceiveBufferPos < 500)
+                {
+                    // Check if this might be a non-PQ message trapped by false bit 7
+                    if (TryDecryptAsNonPQ(ephemeralKey))
+                    {
+                        Logging.LogInformation(
+                            $"{DebugId}: False PQ detection (bit 7 set) resolved via opportunistic decryption. Proceeding as non-PQ.");
+                        acceptPQ = false;
+                        PQVersion = 0;
+                        pqKeyLen = 0;
+                        payloadOffset = 32;
+                        minSize = 64;
+                        // Continue processing with non-PQ settings
+                    }
+                    else
+                    {
+                        Logging.LogInformation(
+                            $"{DebugId}: PQ detected in SessionRequest (bit 7 set), but only {ReceiveBufferPos} bytes in buffer. " +
+                            $"Waiting for {minSize} bytes (PQVersion={PQVersion}).");
+                        return;
+                    }
+                }
+                else
+                {
+                    Logging.LogDebug($"{DebugId}: Waiting for more SessionRequest data (have {ReceiveBufferPos}/{minSize} bytes)");
+                    return;
+                }
+            }
+
+            // CRITICAL: Clear PQ signal bit (MSB) before Noise processing (spec line 363)
+            // Java I2P and i2pd do NOT include the signal bit in Noise hashes.
+            ephemeralKey[31] &= 0x7f;
+
             IsPQ = acceptPQ;
-            if (IsPQ) PQVersion = ourPQVersion;
+            // PQVersion already set by dynamic detection above if IsPQ is true.
 
             var protocolName = IsPQ
                 ? PQVersion switch
@@ -927,9 +988,26 @@ public class NTCP2Session : ITransport
             HandshakeDecrypted = true;
         }
 
+        // Deobfuscation state was already handled if HandshakeDecrypted is true.
+        // We need to re-derive payloadOffset to check for totalMsgSize.
+        var pqKeyLenRecalc = IsPQ
+            ? PQVersion switch
+            {
+                3 => 800,
+                4 => 1184,
+                5 => 1568,
+                _ => 0
+            }
+            : 0;
+        var payloadOffsetRecalc = 32 + (IsPQ ? pqKeyLenRecalc + 16 : 0);
+
         // Now we know HandshakePaddingLen
-        var totalMsgSize = payloadOffset + 32 + HandshakePaddingLen;
-        if (ReceiveBufferPos < totalMsgSize) return;
+        var totalMsgSize = payloadOffsetRecalc + 32 + HandshakePaddingLen;
+        if (ReceiveBufferPos < totalMsgSize)
+        {
+            Logging.LogDebug($"{DebugId}: Waiting for SessionRequest padding (have {ReceiveBufferPos}/{totalMsgSize} bytes)");
+            return;
+        }
 
         // Parse options from already decrypted payload
         var reader = new I2PBufferCursor(HandshakeDecryptedOptions);
@@ -967,11 +1045,11 @@ public class NTCP2Session : ITransport
         }
 
         // Validate padding length
-        if (paddingLen > 880) // 880 is the new max for 0.9.69
+        if (paddingLen > ReceiveBuffer.Length - payloadOffsetRecalc - 128)
         {
             var msg = $"SessionRequest excessive padding={paddingLen}";
             Logging.LogWarning(
-                $"{DebugId}: TERMINATION REASON [C#-BOB]: {msg} (max 880)");
+                $"{DebugId}: TERMINATION REASON [C#-BOB]: {msg} (max {ReceiveBuffer.Length - payloadOffsetRecalc - 128})");
             Terminate(msg);
             return;
         }
@@ -986,7 +1064,7 @@ public class NTCP2Session : ITransport
         }
 
         // MixHash padding if present (spec lines 586-596)
-        var paddingOffset = payloadOffset + 32;
+        var paddingOffset = payloadOffsetRecalc + 32;
         if (ReceiveBufferPos < paddingOffset + paddingLen)
         {
             Logging.LogDebug(
@@ -998,20 +1076,18 @@ public class NTCP2Session : ITransport
         if (paddingLen > 0) Array.Copy(ReceiveBuffer, paddingOffset, padding, 0, paddingLen);
         NoiseState.MixHashPadding(padding);
 
-        // Validate no extra data after message 1
-        var totalProcessed = payloadOffset + 32 + paddingLen; // X + PQ + payload + padding
-        var remaining = ReceiveBufferPos - totalProcessed;
-        if (remaining > 0)
-        {
-            var msg = $"Extra data after SessionRequest: {remaining} bytes";
-            Logging.LogWarning(
-                $"{DebugId}: TERMINATION REASON [C#-BOB]: {msg} (totalProcessed={totalProcessed}, bufPos={ReceiveBufferPos}, payloadOffset={payloadOffset}, paddingLen={paddingLen})");
-            Terminate(msg);
-            return;
-        }
-
         // Clear processed data from buffer
-        ReceiveBufferPos = 0;
+        var totalProcessed = paddingOffset + paddingLen; // X + PQ + payload + padding
+        if (ReceiveBufferPos > totalProcessed)
+        {
+            var remaining = ReceiveBufferPos - totalProcessed;
+            Array.Copy(ReceiveBuffer, totalProcessed, ReceiveBuffer, 0, remaining);
+            ReceiveBufferPos = remaining;
+        }
+        else
+        {
+            ReceiveBufferPos = 0;
+        }
 
         State = NTCP2SessionState.SessionRequestReceived;
 
@@ -1023,6 +1099,36 @@ public class NTCP2Session : ITransport
 
         // Send SessionCreated
         SendSessionCreated();
+    }
+
+    /// <summary>
+    ///     Tests if the first 64 bytes of ReceiveBuffer contain a valid non-PQ NTCP2 SessionRequest.
+    ///     Used to recover from false-positive PQ signals (bit 7 set in decrypted ephemeral key).
+    /// </summary>
+    private bool TryDecryptAsNonPQ(byte[] ephemeralKey)
+    {
+        try
+        {
+            // Ephemeral key bit 7 must be cleared for Noise hash/DH
+            var noiseKey = (byte[])ephemeralKey.Clone();
+            noiseKey[31] &= 0x7f;
+
+            // Use a temporary Noise state for probing
+            var tempNoise = new NoiseXK(NoiseXK.PROTOCOL_NAME_NTCP2);
+            tempNoise.InitializeAsBob(Host.GetStaticPrivateKey(), Host.GetStaticPublicKey());
+
+            var payloadWithMac = new byte[32];
+            Array.Copy(ReceiveBuffer, 32, payloadWithMac, 0, 32);
+
+            // If AEAD verification fails, this returns null
+            var options = tempNoise.ProcessMessage1(noiseKey, payloadWithMac);
+            return options != null;
+        }
+        catch (Exception ex)
+        {
+            Logging.LogDebug($"{DebugId}: TryDecryptAsNonPQ failed: {ex.Message}");
+            return false;
+        }
     }
 
     private void ProcessSessionCreated()
@@ -1071,22 +1177,10 @@ public class NTCP2Session : ITransport
             // Deobfuscate ephemeral key Y with continued AES state (IV = last 16 bytes of X_obf)
             var ephemeralKey = AESObfuscation.Decrypt(obfuscatedKey, bobRouterHash, AESStateAfterMsg1);
 
-            // Check Bob's response: did he accept hybrid? (ntcp2-hybrid.md line 367)
-            var bobSupportsPQ = (ephemeralKey[31] & 0x80) != 0;
-            if (IsPQ && !bobSupportsPQ)
-            {
-                Logging.LogInformation(
-                    $"{DebugId}: Bob rejected/downgraded PQ hybrid session. Falling back to standard NTCP2.");
-                IsPQ = false;
-
-                // Re-initialize Noise with standard protocol
-                InitializeNoiseAsAlice();
-
-                // Recalculate everything with new Noise state
-            }
-            else if (bobSupportsPQ)
-            {
-            }
+            // CRITICAL: Java I2P (v0.9.69) DOES NOT set the PQ bit in Message 2 (responder).
+            // Initiator must NOT rely on the signal bit in Y to determine hybrid status.
+            // We already know we are in a hybrid session because we initiated it.
+            ephemeralKey[31] &= 0x7f;
 
             byte[] cipherKey;
             if (IsPQ)
@@ -1151,10 +1245,11 @@ public class NTCP2Session : ITransport
         var paddingLen = reader.ReadUInt16BigEndian(); // padLen (bytes 2-3)
 
         // Spec line 640: max padding is 848 bytes for SessionCreated
-        if (paddingLen > 848)
+        // We relax this to fit our buffer
+        if (paddingLen > ReceiveBuffer.Length - payloadOffset - 128)
         {
             Logging.LogWarning($"{DebugId}: SessionCreated padding length too large: {paddingLen}");
-            Terminate();
+            Terminate("SessionCreated padding too large");
             return;
         }
 
@@ -1166,7 +1261,7 @@ public class NTCP2Session : ITransport
         if (!NTCP2SecurityValidator.ValidateTimestamp(timestamp))
         {
             Logging.LogWarning($"{DebugId}: SessionCreated timestamp validation failed (Clock Skew)");
-            Terminate();
+            Terminate("SessionCreated clock skew");
             return;
         }
 
@@ -1237,6 +1332,14 @@ public class NTCP2Session : ITransport
         // Process Noise message 3
         var staticKey = NoiseState.ProcessMessage3Part1(encryptedStaticKey);
         var payload = NoiseState.ProcessMessage3Part2(encryptedPayload);
+
+        if (staticKey == null || payload == null)
+        {
+            var msg = "SessionConfirmed AEAD verification failed";
+            Logging.LogWarning($"{DebugId}: {msg}");
+            Terminate(msg);
+            return;
+        }
 
         // Get pre-Split CK/hash for SipHash key derivation (Bob side)
         PreSplitChainingKey = NoiseState.GetPreSplitChainingKey();
@@ -1497,7 +1600,7 @@ public class NTCP2Session : ITransport
                             {
                                 Logging.LogWarning($"{DebugId}: Clock skew detected ({skew}s). Terminating session.");
                                 SendTermination(NTCP2TerminationReason.ClockSkew);
-                                Terminate();
+                                Terminate("Clock skew detected");
                                 return;
                             }
 
@@ -1517,14 +1620,14 @@ public class NTCP2Session : ITransport
                             termBlock.Parse(new I2PBufferCursor(block.Data));
                             Logging.LogInformation(
                                 $"{DebugId}: Received termination block (reason={termBlock.Reason}, ValidPackets={termBlock.ValidPacketsReceived})");
-                            Terminate();
+                            Terminate($"Received termination block (reason={termBlock.Reason})");
                             return;
                         }
                         catch (Exception ex)
                         {
                             Logging.LogInformation(
                                 $"{DebugId}: Received termination block (parse failed: {ex.Message})");
-                            Terminate();
+                            Terminate("Received malformed termination block");
                             return;
                         }
 
@@ -1573,26 +1676,21 @@ public class NTCP2Session : ITransport
 
         var payload = BuildSessionCreatedPayload(paddingLen);
 
+        Logging.LogInformation(
+            $"{DebugId}: Sending SessionCreated (Bob -> Alice): IsPQ={IsPQ}, paddingLen={paddingLen}, timestamp={((DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 500) / 1000)}");
+
         // Get Bob's router hash
         var ourRouterHash = Host.GetRouterHash();
 
-        // Generate ephemeral keys for Bob with MSB check loop (probing resistance)
-        byte[] ephKey;
-        byte[] obfuscatedKey;
-        var attempts = 0;
-        do
-        {
-            ephKey = NoiseState.GenerateBobEphemeralKeys();
+        // Generate ephemeral keys for Bob
+        byte[] ephKey = NoiseState.GenerateBobEphemeralKeys();
 
-            // Signal PQ via MSB of Y (spec line 363 in ntcp2-hybrid.md)
-            if (IsPQ) ephKey[31] |= 0x80;
-            else ephKey[31] &= 0x7f;
+        // Signal PQ via MSB of Y (spec line 363 in ntcp2-hybrid.md)
+        // CRITICAL: Java I2P (v0.9.69) ONLY sets the PQ bit in Message 1 (Alice -> Bob).
+        // Bob (responder) MUST NOT set it in Message 2 (Bob -> Alice), otherwise Alice's Noise hash will diverge.
+        ephKey[31] &= 0x7f;
 
-            obfuscatedKey = AESObfuscation.Encrypt(ephKey, ourRouterHash, AESStateAfterMsg1);
-            attempts++;
-        } while (!NTCP2ProbingResistance.CheckMSB(obfuscatedKey));
-
-        if (attempts > 1) Logging.LogDebug($"{DebugId}: Generated valid obfuscated key after {attempts} attempts");
+        var obfuscatedKey = AESObfuscation.Encrypt(ephKey, ourRouterHash, AESStateAfterMsg1);
 
         byte[] encryptedPQFrame = null;
         byte[] encryptedPayload;
@@ -1784,10 +1882,14 @@ public class NTCP2Session : ITransport
         var payload = new byte[16];
         var writer = new I2PBufferCursor(payload);
 
+        // Per i2pd/Java I2P, timestamp is rounded to seconds with +500ms bias
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var timestamp = (uint)((nowMs + 500) / 1000);
+
         writer.WriteUInt16BigEndian(0); // Rsvd (0)
         writer.WriteUInt16BigEndian((ushort)paddingLen); // padLen
         writer.WriteUInt32BigEndian(0); // Reserved (0)
-        writer.WriteUInt32BigEndian((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds()); // tsB
+        writer.WriteUInt32BigEndian(timestamp); // tsB
         writer.WriteUInt32BigEndian(0); // Reserved (0)
 
         return payload;

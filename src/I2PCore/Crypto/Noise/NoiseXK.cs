@@ -141,6 +141,12 @@ public class NoiseXK
         return ephemeralPub;
     }
 
+    private void ClearPQBit(byte[] key)
+    {
+        if (key != null && key.Length == 32)
+            key[31] &= 0x7f;
+    }
+
     /// <summary>
     ///     Message 1 (Alice -> Bob): e, es
     ///     Uses the currently stored ephemeral keys (must call GenerateEphemeralKeys first)
@@ -149,6 +155,9 @@ public class NoiseXK
     {
         if (aliceEphemeralPublicKey == null || aliceEphemeralPrivateKey == null)
             throw new InvalidOperationException("Must call GenerateEphemeralKeys before CreateMessage1WithCurrentKeys");
+
+        // CRITICAL: Clear MSB before hashing (NTCP2-hybrid signal bit must not be hashed)
+        ClearPQBit(aliceEphemeralPublicKey);
 
         // MixHash(e)
         kdf.MixHash(aliceEphemeralPublicKey);
@@ -161,18 +170,7 @@ public class NoiseXK
         // Encrypt payload
         var nonce = ChaCha20Poly1305.CreateNonce(0);
         var associatedData = kdf.GetHash();
-
-        // Debug logging for AEAD encryption
-        Logging.LogDebug("NoiseXK Message1 AEAD Encryption:");
-        Logging.LogDebug($"  Key (k):    {BitConverter.ToString(key).Replace("-", "")}");
-        Logging.LogDebug($"  Nonce (n):  {BitConverter.ToString(nonce).Replace("-", "")}");
-        Logging.LogDebug($"  AD (h):     {BitConverter.ToString(associatedData).Replace("-", "")}");
-        Logging.LogDebug($"  Plaintext:  {BitConverter.ToString(payload).Replace("-", "")}");
-        Logging.LogDebug($"  CK (for verification): {BitConverter.ToString(kdf.GetChainingKey()).Replace("-", "")}");
-
         var encryptedPayload = ChaCha20Poly1305.Encrypt(key, nonce, payload, associatedData);
-
-        Logging.LogDebug($"  Ciphertext+MAC: {BitConverter.ToString(encryptedPayload).Replace("-", "")}");
 
         // MixHash(ciphertext)
         kdf.MixHash(encryptedPayload);
@@ -187,9 +185,10 @@ public class NoiseXK
     public (byte[] ephemeralKey, byte[] encryptedPayload) CreateMessage1(byte[] payload)
     {
         // Generate Alice's ephemeral key pair
-        var (ephemeralPriv, ephemeralPub) = X25519.GenerateKeyPair();
-        aliceEphemeralPrivateKey = ephemeralPriv;
-        aliceEphemeralPublicKey = ephemeralPub;
+        GenerateAliceEphemeralKeys();
+
+        // CRITICAL: Clear MSB before hashing (NTCP2-hybrid signal bit must not be hashed)
+        ClearPQBit(aliceEphemeralPublicKey);
 
         // MixHash(e)
         kdf.MixHash(aliceEphemeralPublicKey);
@@ -224,6 +223,9 @@ public class NoiseXK
         // MixHash(header) - SSU2 specific
         kdf.MixHash(header);
 
+        // CRITICAL: Clear MSB before hashing (NTCP2-hybrid signal bit must not be hashed)
+        ClearPQBit(aliceEphemeralPublicKey);
+
         // MixHash(e)
         kdf.MixHash(aliceEphemeralPublicKey);
 
@@ -252,9 +254,10 @@ public class NoiseXK
         kdf.MixHash(header);
 
         // Generate Alice's ephemeral key pair
-        var (ephemeralPriv, ephemeralPub) = X25519.GenerateKeyPair();
-        aliceEphemeralPrivateKey = ephemeralPriv;
-        aliceEphemeralPublicKey = ephemeralPub;
+        GenerateAliceEphemeralKeys();
+
+        // CRITICAL: Clear MSB before hashing (NTCP2-hybrid signal bit must not be hashed)
+        ClearPQBit(aliceEphemeralPublicKey);
 
         // MixHash(e)
         kdf.MixHash(aliceEphemeralPublicKey);
@@ -286,35 +289,20 @@ public class NoiseXK
 
         remoteEphemeralPublicKey = ephemeralKey;
 
-        // DIAG: log state before MixHash(e)
-        var hBeforeMixE = kdf.GetHash();
-        Logging.LogInformation(
-            $"NoiseXK PM1 DIAG: h_before_mixE={BitConverter.ToString(hBeforeMixE, 0, 8).Replace("-", "")} e[0:4]={BitConverter.ToString(ephemeralKey, 0, 4).Replace("-", "")} bobS[0:4]={BitConverter.ToString(bobStaticPublicKey, 0, 4).Replace("-", "")} encPld[0:4]={BitConverter.ToString(encryptedPayload, 0, 4).Replace("-", "")}");
+        // CRITICAL: Clear MSB before hashing (NTCP2-hybrid signal bit must not be hashed)
+        ClearPQBit(remoteEphemeralPublicKey);
 
         // MixHash(e)
         kdf.MixHash(remoteEphemeralPublicKey);
 
-        var hAfterMixE = kdf.GetHash();
-        Logging.LogInformation(
-            $"NoiseXK PM1 DIAG: h_after_mixE={BitConverter.ToString(hAfterMixE, 0, 8).Replace("-", "")} ck[0:4]={BitConverter.ToString(kdf.GetChainingKey(), 0, 4).Replace("-", "")}");
-
         // es: DH(s, re) - Bob's static with Alice's ephemeral
-        Logging.LogInformation(
-            $"NoiseXK PM1 DIAG: e_full={BitConverter.ToString(remoteEphemeralPublicKey).Replace("-", "")} bobS_full={BitConverter.ToString(bobStaticPublicKey).Replace("-", "")}");
         var sharedSecret = X25519.ComputeSharedSecret(bobStaticPrivateKey, remoteEphemeralPublicKey);
-        Logging.LogInformation(
-            $"NoiseXK PM1 DIAG: DH[0:4]={BitConverter.ToString(sharedSecret, 0, 4).Replace("-", "")}");
         var key = kdf.MixKey(sharedSecret);
         Array.Clear(sharedSecret, 0, sharedSecret.Length);
-
-        Logging.LogInformation(
-            $"NoiseXK PM1 DIAG: key[0:4]={BitConverter.ToString(key, 0, 4).Replace("-", "")} ck_after[0:4]={BitConverter.ToString(kdf.GetChainingKey(), 0, 4).Replace("-", "")}");
 
         // Decrypt payload
         var nonce = ChaCha20Poly1305.CreateNonce(0);
         var associatedData = kdf.GetHash();
-        Logging.LogInformation(
-            $"NoiseXK PM1 DIAG: AD[0:8]={BitConverter.ToString(associatedData, 0, 8).Replace("-", "")} nonce={BitConverter.ToString(nonce).Replace("-", "")}");
         var payload = ChaCha20Poly1305.Decrypt(key, nonce, encryptedPayload, associatedData);
 
         if (payload == null)
@@ -349,6 +337,9 @@ public class NoiseXK
 
         remoteEphemeralPublicKey = ephemeralKey;
 
+        // CRITICAL: Clear MSB before hashing (NTCP2-hybrid signal bit must not be hashed)
+        ClearPQBit(remoteEphemeralPublicKey);
+
         // MixHash(e)
         kdf.MixHash(remoteEphemeralPublicKey);
 
@@ -380,6 +371,9 @@ public class NoiseXK
         if (bobEphemeralPublicKey == null || bobEphemeralPrivateKey == null)
             throw new InvalidOperationException(
                 "Must call GenerateBobEphemeralKeys before CreateMessage2WithCurrentKeys");
+
+        // CRITICAL: Clear MSB before hashing (NTCP2-hybrid signal bit must not be hashed)
+        ClearPQBit(bobEphemeralPublicKey);
 
         // MixHash(e)
         kdf.MixHash(bobEphemeralPublicKey);
@@ -428,6 +422,9 @@ public class NoiseXK
         // MixHash(header) - SSU2 specific
         kdf.MixHash(header);
 
+        // CRITICAL: Clear MSB before hashing (NTCP2-hybrid signal bit must not be hashed)
+        ClearPQBit(bobEphemeralPublicKey);
+
         // MixHash(e)
         kdf.MixHash(bobEphemeralPublicKey);
 
@@ -463,9 +460,10 @@ public class NoiseXK
         kdf.MixHash(header);
 
         // Generate Bob's ephemeral key pair
-        var (ephemeralPriv, ephemeralPub) = X25519.GenerateKeyPair();
-        bobEphemeralPrivateKey = ephemeralPriv;
-        bobEphemeralPublicKey = ephemeralPub;
+        GenerateBobEphemeralKeys();
+
+        // CRITICAL: Clear MSB before hashing (NTCP2-hybrid signal bit must not be hashed)
+        ClearPQBit(bobEphemeralPublicKey);
 
         // MixHash(e)
         kdf.MixHash(bobEphemeralPublicKey);
@@ -503,6 +501,9 @@ public class NoiseXK
             throw new Exception("Invalid ephemeral key");
 
         remoteEphemeralPublicKey = ephemeralKey;
+
+        // CRITICAL: Clear MSB before hashing (NTCP2-hybrid signal bit must not be hashed)
+        ClearPQBit(remoteEphemeralPublicKey);
 
         // MixHash(e)
         kdf.MixHash(remoteEphemeralPublicKey);
@@ -547,6 +548,9 @@ public class NoiseXK
             throw new Exception("Invalid ephemeral key");
 
         remoteEphemeralPublicKey = ephemeralKey;
+
+        // CRITICAL: Clear MSB before hashing (NTCP2-hybrid signal bit must not be hashed)
+        ClearPQBit(remoteEphemeralPublicKey);
 
         // MixHash(e)
         kdf.MixHash(remoteEphemeralPublicKey);
@@ -754,6 +758,9 @@ public class NoiseXK
         if (aliceEphemeralPublicKey == null || aliceEphemeralPrivateKey == null)
             throw new InvalidOperationException("Must call GenerateEphemeralKeys first");
 
+        // CRITICAL: Clear MSB before hashing (NTCP2-hybrid signal bit must not be hashed)
+        ClearPQBit(aliceEphemeralPublicKey);
+
         // MixHash(e)
         kdf.MixHash(aliceEphemeralPublicKey);
 
@@ -776,7 +783,9 @@ public class NoiseXK
 
         remoteEphemeralPublicKey = ephemeralKey;
 
-        // MixHash(e)
+        // CRITICAL: Clear MSB before hashing (NTCP2-hybrid signal bit must not be hashed)
+        ClearPQBit(remoteEphemeralPublicKey);
+
         kdf.MixHash(remoteEphemeralPublicKey);
 
         // es: DH(s, re)
@@ -838,7 +847,8 @@ public class NoiseXK
         if (bobEphemeralPrivateKey == null || bobEphemeralPublicKey == null)
             throw new InvalidOperationException("Must call GenerateBobEphemeralKeys first");
 
-        if (isPQ) bobEphemeralPublicKey[31] |= 0x80;
+        // CRITICAL: Clear MSB before hashing (NTCP2-hybrid signal bit must not be hashed)
+        ClearPQBit(bobEphemeralPublicKey);
 
         kdf.MixHash(bobEphemeralPublicKey);
 
@@ -868,6 +878,9 @@ public class NoiseXK
             throw new Exception("Invalid ephemeral key");
 
         remoteEphemeralPublicKey = ephemeralKey;
+
+        // CRITICAL: Clear MSB before hashing (NTCP2-hybrid signal bit must not be hashed)
+        ClearPQBit(remoteEphemeralPublicKey);
 
         kdf.MixHash(remoteEphemeralPublicKey);
 

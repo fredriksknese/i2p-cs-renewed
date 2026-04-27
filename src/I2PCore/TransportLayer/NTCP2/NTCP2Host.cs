@@ -369,20 +369,22 @@ public class NTCP2Host : ITransportProtocol
                     else
                     {
                         // Connection closed
-                        session.Terminate();
+                        var totalReceived = session.BytesReceived;
+                        var extraInfo = session.BytesInBuffer > 0 ? $" ({session.BytesInBuffer} bytes in buffer, {totalReceived} total)" : $" ({totalReceived} total bytes received)";
+                        session.Terminate($"TCP connection closed by remote during handshake (State: {session.State}){extraInfo}");
                     }
                 }
                 catch (Exception ex)
                 {
                     Logging.LogDebug($"NTCP2Host: Receive error for {session.DebugId}: {ex.Message}");
-                    session.Terminate();
+                    session.Terminate($"Receive error during handshake (State: {session.State}): {ex.Message}");
                 }
             }, null);
         }
         catch (Exception ex)
         {
             Logging.LogWarning($"NTCP2Host: StartAsyncReceive error for {session.DebugId}: {ex}");
-            session.Terminate();
+            session.Terminate($"StartAsyncReceive error (State: {session.State}): {ex.Message}");
         }
     }
 
@@ -460,7 +462,7 @@ public class NTCP2Host : ITransportProtocol
         // Terminate all sessions
         lock (SessionsLock)
         {
-            foreach (var session in Sessions) session.Terminate();
+            foreach (var session in Sessions) session.Terminate("Transport host shutting down");
             Sessions.Clear();
         }
     }
@@ -501,13 +503,20 @@ public class NTCP2Host : ITransportProtocol
     /// </summary>
     internal byte[] GetRouterHash()
     {
+        // Try to get hash from MyRouterIdentity first (available earlier than MyRouterInfo)
+        var myIdentity = RouterContext.Inst?.MyRouterIdentity;
+        if (myIdentity?.IdentHash?.Hash != null) return myIdentity.IdentHash.Hash.ToByteArray();
+
+        // Fallback: Try MyRouterInfo
         var myRouterInfo = RouterContext.Inst?.MyRouterInfo;
         if (myRouterInfo?.Identity?.IdentHash?.Hash != null) return myRouterInfo.Identity.IdentHash.Hash.ToByteArray();
 
-        // Fallback: Use SHA-256 of static public key if RouterInfo not available
+        // Second fallback: Use SHA-256 of static public key if nothing else available
         using (var sha256 = SHA256.Create())
         {
-            return sha256.ComputeHash(StaticPublicKey);
+            var hash = sha256.ComputeHash(StaticPublicKey);
+            Logging.LogWarning($"NTCP2Host: Identity not available, using fallback router hash based on static key! [hash={BitConverter.ToString(hash, 0, 4).Replace("-", "")}]");
+            return hash;
         }
     }
 

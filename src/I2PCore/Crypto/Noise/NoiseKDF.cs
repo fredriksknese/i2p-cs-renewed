@@ -63,9 +63,10 @@ public class NoiseKDF
     {
         using (var sha256 = SHA256.Create())
         {
-            var input = new byte[Hash.Length + (data?.Length ?? 0)];
+            var dataLen = data?.Length ?? 0;
+            var input = new byte[Hash.Length + dataLen];
             Array.Copy(Hash, 0, input, 0, Hash.Length);
-            if (data != null && data.Length > 0) Array.Copy(data, 0, input, Hash.Length, data.Length);
+            if (dataLen > 0) Array.Copy(data, 0, input, Hash.Length, dataLen);
             Hash = sha256.ComputeHash(input);
         }
 

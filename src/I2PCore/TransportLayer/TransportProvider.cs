@@ -463,7 +463,7 @@ public class TransportProvider
             {
                 Logging.LogTransport(
                     $"TransportProvider: old transport {transport.DebugId} terminated.");
-                oldr.Transport.Terminate();
+                oldr.Transport.Terminate("Replaced by newer connection");
                 EstablishedTransports.TryRemove(routerid, out _);
             }
             else
@@ -662,7 +662,7 @@ public class TransportProvider
 
             if (instance.RemoteRouterIdentity != null)
                 NetDb.Inst?.Statistics?.DestinationInformationFaulty(instance.RemoteRouterIdentity.IdentHash);
-            instance.Terminate();
+            instance.Terminate($"Connection exception: {exinfo.Message}");
         }
         catch (Exception ex)
         {

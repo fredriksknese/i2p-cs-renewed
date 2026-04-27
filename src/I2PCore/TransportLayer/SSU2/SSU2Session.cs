@@ -161,7 +161,7 @@ public class SSU2Session : ITransport
         {
             Logging.LogWarning($"{DebugId}: Connect failed: {ex}");
             ConnectionException?.Invoke(this, ex);
-            Terminate($"Connect failed: {ex.Message}");
+            Terminate($"Connect failed (State: {State}): {ex.Message}");
         }
     }
 
@@ -216,7 +216,7 @@ public class SSU2Session : ITransport
         if (now - LastActivityTime > 300)
         {
             Logging.LogInformation($"{DebugId}: Inactivity timeout (5 minutes)");
-            Terminate();
+            Terminate($"Inactivity timeout (5 minutes, State: {State})");
         }
     }
 
@@ -431,75 +431,73 @@ public class SSU2Session : ITransport
 
     private void SendSessionRequest()
     {
-        byte[] packet = null;
-        var attempts = 0;
-
         // Get Bob's intro key for header encryption
         var bobIntroKey = GetRemoteStaticKey(); // Same as static key
         var kHeader1 = bobIntroKey;
         var kHeader2 = bobIntroKey;
 
-        while (packet == null)
+        // Re-initialize Noise
+        InitializeNoiseAsAlice();
+
+        // Build header (plaintext initially)
+        var header = new SSU2Header
+        {
+            IsLongHeader = true,
+            Type = SSU2Header.TYPE_SESSION_REQUEST,
+            Version = 2,
+            NetId = 2,
+            DestinationConnectionId = RemoteConnectionId,
+            SourceConnectionId = LocalConnectionId,
+            PacketNumber = BufUtils.RandomUint() // Random for handshake packets
+        };
+        var headerBytes = header.ToByteArray();
+
+        // Build payload
+        var payload = BuildRequestPayload();
+
+        // Generate ephemeral keys
+        byte[] ephKey;
+        byte[] obfuscatedKey;
+        var attempts = 0;
+
+        while (true)
         {
             attempts++;
+            ephKey = NoiseState.GenerateAliceEphemeralKeys();
 
-            // Re-initialize Noise each time
-            InitializeNoiseAsAlice();
-
-            // Build header (plaintext initially)
-            var header = new SSU2Header
-            {
-                IsLongHeader = true,
-                Type = SSU2Header.TYPE_SESSION_REQUEST,
-                Version = 2,
-                NetId = 2,
-                DestinationConnectionId = RemoteConnectionId,
-                SourceConnectionId = LocalConnectionId,
-                PacketNumber = BufUtils.RandomUint() // Random for handshake packets
-            };
-            var headerBytes = header.ToByteArray();
-
-            // Build payload
-            var payload = BuildRequestPayload();
-
-            // Generate ephemeral keys and check MSB
-            var ephKey = NoiseState.GenerateAliceEphemeralKeys();
+            // Signal PQ via MSB of X (spec line 363 in ntcp2-hybrid.md)
+            if (IsPQ) ephKey[31] |= 0x80;
+            else ephKey[31] &= 0x7f;
 
             // Obfuscate key
-            var obfuscatedKey = SSU2HeaderEncryption.ObfuscateEphemeralKey(ephKey, kHeader2);
+            obfuscatedKey = SSU2HeaderEncryption.ObfuscateEphemeralKey(ephKey, kHeader2);
 
-            // Fast MSB check: obfuscatedKey[0] & 0x80 must be 0
-            // Also ensure raw ephKey is valid X25519 (byte 31 high bit 0)
-            if ((obfuscatedKey[0] & 0x80) == 0 && (ephKey[31] & 0x80) == 0)
-            {
-                // Use Noise to create message 1 WITH HEADER (SSU2-specific)
-                var (_, encryptedPayload) = NoiseState.CreateMessage1WithHeaderAndCurrentKeys(headerBytes, payload);
+            if ((obfuscatedKey[0] & 0x80) == 0 && (IsPQ || (ephKey[31] & 0x80) == 0))
+                break;
 
-                // Build complete packet
-                packet = new byte[headerBytes.Length + obfuscatedKey.Length + encryptedPayload.Length];
-                Array.Copy(headerBytes, 0, packet, 0, headerBytes.Length);
-                Array.Copy(obfuscatedKey, 0, packet, headerBytes.Length, obfuscatedKey.Length);
-                Array.Copy(encryptedPayload, 0, packet, headerBytes.Length + obfuscatedKey.Length,
-                    encryptedPayload.Length);
-
-                // Encrypt header in place using IVs from packet end
-                SSU2HeaderEncryption.EncryptLongHeaderInPacket(packet, 0, kHeader1, kHeader2);
-            }
-            else if (attempts > 100)
-            {
-                throw new Exception("Failed to generate valid SSU2 ephemeral key after 100 attempts");
-            }
+            if (attempts > 100)
+                throw new Exception("Failed to generate valid SSU2 initiator ephemeral key after 100 attempts");
         }
+
+        // Use Noise to create message 1 WITH HEADER (SSU2-specific)
+        var (_, encryptedPayload) = NoiseState.CreateMessage1WithHeaderAndCurrentKeys(headerBytes, payload);
+
+        // Build complete packet
+        var packet = new byte[headerBytes.Length + obfuscatedKey.Length + encryptedPayload.Length];
+        Array.Copy(headerBytes, 0, packet, 0, headerBytes.Length);
+        Array.Copy(obfuscatedKey, 0, packet, headerBytes.Length, obfuscatedKey.Length);
+        Array.Copy(encryptedPayload, 0, packet, headerBytes.Length + obfuscatedKey.Length,
+            encryptedPayload.Length);
+
+        // Encrypt header in place using IVs from packet end
+        SSU2HeaderEncryption.EncryptLongHeaderInPacket(packet, 0, kHeader1, kHeader2);
 
         // Send via host
         Host.SendPacket(RemoteEndpoint, packet);
 
         BytesSent += packet.Length;
 
-        if (attempts > 1)
-            Logging.LogDebug($"{DebugId}: SessionRequest sent after {attempts} attempts ({packet.Length} bytes)");
-        else
-            Logging.LogDebug($"{DebugId}: SessionRequest sent ({packet.Length} bytes)");
+        Logging.LogDebug($"{DebugId}: SessionRequest sent ({packet.Length} bytes)");
     }
 
     private byte[] BuildRequestPayload()
@@ -1140,7 +1138,7 @@ public class SSU2Session : ITransport
                 case SSU2BlockType.Termination:
                 {
                     Logging.LogInformation($"{DebugId}: Received termination block");
-                    Terminate();
+                    Terminate("Received termination block");
                     return;
                 }
                 case SSU2BlockType.ACK:
@@ -1326,22 +1324,13 @@ public class SSU2Session : ITransport
             payloadStream.WriteUInt16BigEndian(0); // Padding length
             payloadStream.WriteUInt16BigEndian(0); // Reserved
 
-            // If PQ session, encapsulate KEM. 
-            // NOTE: We MUST re-encapsulate if we retry the whole message creation, 
-            // because CreateMessage2WithHeaderAndCurrentKeys will mix the KEM ciphertext later.
-            // Wait! No, SSU2 mixes KEM SHARED SECRET into Noise state.
-
-            // We must clone the NoiseState if we want to retry without corrupting the original state.
-            // But NoiseXK doesn't have a Clone() method.
-            // However, we only need to retry the Bob's ephemeral key generation.
-
-            // Bob's ephemeral key is generated and then Mixed.
-            // If we generate and check MSB BEFORE calling CreateMessage2, we are safe.
-
             var ephKey = NoiseState.GenerateBobEphemeralKeys();
+            if (IsPQ) ephKey[31] |= 0x80;
+            else ephKey[31] &= 0x7f;
+
             var obfuscatedKey = SSU2HeaderEncryption.ObfuscateEphemeralKey(ephKey, kHeader2);
 
-            if ((obfuscatedKey[0] & 0x80) == 0 && (ephKey[31] & 0x80) == 0)
+            if ((obfuscatedKey[0] & 0x80) == 0 && (IsPQ || (ephKey[31] & 0x80) == 0))
             {
                 // If PQ session, encapsulate KEM and include ciphertext
                 if (IsPQ && RemoteKemPublicKey != null)

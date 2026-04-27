@@ -808,7 +808,7 @@ public class SSU2Host : ITransportProtocol
         // Terminate all sessions
         lock (SessionsLock)
         {
-            foreach (var session in Sessions.Values) session.Terminate();
+            foreach (var session in Sessions.Values) session.Terminate("Transport host shutting down");
             Sessions.Clear();
         }
     }
