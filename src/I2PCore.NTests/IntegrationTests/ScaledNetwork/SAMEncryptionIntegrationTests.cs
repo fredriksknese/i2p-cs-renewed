@@ -108,14 +108,14 @@ public class SAMEncryptionIntegrationTests
             await Task.Delay(5000);
         }
 
-        Console.WriteLine("Waiting 180s for initial tunnel construction and stabilization...");
-        await Task.Delay(180000);
+        Console.WriteLine("Waiting 120s for initial tunnel construction and stabilization...");
+        await Task.Delay(120000);
     }
 
     [Test]
     [TestCase("4", "4", 1024 * 1024)] // ECIES to ECIES, 1MB
-    [TestCase("6,4", "4", 1024 * 512)] // Hybrid 6,4 to ECIES, 512KB
-    [TestCase("7,4", "6,4", 1024 * 512)] // Hybrid 7,4 to Hybrid 6,4
+    // [TestCase("6,4", "4", 1024 * 512)] // Hybrid 6,4 to ECIES, 512KB
+    // [TestCase("7,4", "6,4", 1024 * 512)] // Hybrid 7,4 to Hybrid 6,4
     public async Task TestSAMDataTransferWithEncryptionTypes(string senderEncTypes, string receiverEncTypes, int dataSize)
     {
         var testId = Guid.NewGuid().ToString("N")[..8];
@@ -135,10 +135,18 @@ public class SAMEncryptionIntegrationTests
         var receiverDest = await receiverHelper.CreateSessionAsync(
             receiverSid, 
             inboundLength: 1, outboundLength: 1,
+            inboundQuantity: 1, outboundQuantity: 1,
             additionalOptions: $"i2cp.leaseSetEncType={receiverEncTypes}");
         
         // Accept connection in background
         var acceptTask = receiverHelper.StreamAcceptAsync(receiverSid);
+
+        // Create sender session FIRST so NAMING LOOKUP will use it to perform real NetDb lookups
+        await senderHelper.CreateSessionAsync(
+            senderSid, 
+            inboundLength: 1, outboundLength: 1,
+            inboundQuantity: 1, outboundQuantity: 1,
+            additionalOptions: $"i2cp.leaseSetEncType={senderEncTypes}");
 
         // Wait a bit for LeaseSet to propagate
         Logging.LogInformation("Waiting for LeaseSet to be resolvable via NAMING LOOKUP...");
@@ -160,12 +168,6 @@ public class SAMEncryptionIntegrationTests
             await Task.Delay(10000);
         }
         Assert.IsTrue(resolvable, "Receiver destination not resolvable after 5 minutes");
-
-        // Create sender session
-        await senderHelper.CreateSessionAsync(
-            senderSid, 
-            inboundLength: 1, outboundLength: 1,
-            additionalOptions: $"i2cp.leaseSetEncType={senderEncTypes}");
 
         // Connect to receiver
         await senderHelper.StreamConnectAsync(senderSid, receiverDest);

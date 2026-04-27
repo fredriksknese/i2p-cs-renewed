@@ -72,11 +72,11 @@ public class NTCP2Host : ITransportProtocol
         if (router == null)
             return ProtocolCapabilities.None;
 
-        // Check if router has NTCP2 address
-        // Spec line 1348: can be published as "NTCP" or "NTCP2".
+        // Check if router has NTCP2 address with a reachable IP (respecting IPv4/IPv6 settings)
         var ntcp2Address = router.Addresses?.FirstOrDefault(a =>
             (a.TransportStyle == "NTCP2" || (a.TransportStyle == "NTCP" && a.Options.Contains("v")))
-            && a.Options.Contains("s"));
+            && a.Options.Contains("s")
+            && I2PRouterAddress.IsReachableAddress(a));
 
         if (ntcp2Address == null)
             return ProtocolCapabilities.None;

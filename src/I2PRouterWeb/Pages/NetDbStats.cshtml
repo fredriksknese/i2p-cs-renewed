@@ -1,0 +1,113 @@
+@page
+@model NetDbStatsModel
+@{
+    ViewData["Title"] = "NetDB Stats";
+}
+
+<div class="row mb-3">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center">
+            <h1>NetDB Stats</h1>
+            <a href="/NetDbStats" class="btn btn-outline-secondary btn-sm">
+                <i class="bi bi-arrow-clockwise"></i> Refresh
+            </a>
+        </div>
+        <p class="text-muted">Floodfill lookup request statistics. Counts all incoming DatabaseLookup requests, including those we cannot serve.</p>
+    </div>
+</div>
+
+@if (!Model.FloodfillEnabled)
+{
+    <div class="alert alert-warning">
+        Floodfill mode is not enabled. Enable it in <a href="/Settings">Settings</a> to see lookup statistics.
+    </div>
+}
+else
+{
+    <div class="row">
+        @* ── Most Requested LeaseSets ── *@
+        <div class="col-lg-6 mb-4">
+            <div class="card h-100">
+                <div class="card-header">
+                    <h5 class="mb-0">Most Requested LeaseSets <span class="badge bg-secondary">Top 100</span></h5>
+                </div>
+                <div class="card-body p-0">
+                    @if (Model.TopLeaseSetLookups.Any())
+                    {
+                        <div class="table-responsive">
+                            <table class="table table-hover table-sm mb-0">
+                                <thead class="table-dark">
+                                <tr>
+                                    <th style="width: 50px;">#</th>
+                                    <th>b32.i2p Address</th>
+                                    <th class="text-end" style="width: 100px;">Requests</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                @{ var lsRank = 0; }
+                                @foreach (var (b32, count) in Model.TopLeaseSetLookups)
+                                {
+                                    lsRank++;
+                                    <tr>
+                                        <td class="text-muted">@lsRank</td>
+                                        <td class="font-monospace small text-break">@b32</td>
+                                        <td class="text-end fw-bold">@count.ToString("N0")</td>
+                                    </tr>
+                                }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="text-center py-4 text-muted">No LeaseSet lookups recorded yet.</div>
+                    }
+                </div>
+            </div>
+        </div>
+
+        @* ── Most Requested RouterInfos ── *@
+        <div class="col-lg-6 mb-4">
+            <div class="card h-100">
+                <div class="card-header">
+                    <h5 class="mb-0">Most Requested RouterInfos <span class="badge bg-secondary">Top 100</span></h5>
+                </div>
+                <div class="card-body p-0">
+                    @if (Model.TopRouterInfoLookups.Any())
+                    {
+                        <div class="table-responsive">
+                            <table class="table table-hover table-sm mb-0">
+                                <thead class="table-dark">
+                                <tr>
+                                    <th style="width: 50px;">#</th>
+                                    <th>Router</th>
+                                    <th class="text-end" style="width: 100px;">Requests</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                @{ var riRank = 0; }
+                                @foreach (var (hash, shortId, count) in Model.TopRouterInfoLookups)
+                                {
+                                    riRank++;
+                                    <tr>
+                                        <td class="text-muted">@riRank</td>
+                                        <td>
+                                            <a href="/RouterDetail?hash=@hash"
+                                               class="text-decoration-none font-monospace small">@shortId</a>
+                                        </td>
+                                        <td class="text-end fw-bold">@count.ToString("N0")</td>
+                                    </tr>
+                                }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="text-center py-4 text-muted">No RouterInfo lookups recorded yet.</div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+}

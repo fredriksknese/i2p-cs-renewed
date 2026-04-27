@@ -54,8 +54,8 @@ public class CSharpProcessManager : IDisposable
 
         try
         {
-            if (Directory.Exists(DataDir))
-                Directory.Delete(DataDir, true);
+            // if (Directory.Exists(DataDir))
+            //    Directory.Delete(DataDir, true);
         }
         catch
         {

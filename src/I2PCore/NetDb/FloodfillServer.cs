@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using I2PCore.Data;
@@ -34,6 +35,32 @@ public class FloodfillServer : IDisposable
     private bool _enabled;
     private long _lastRateLimitCleanup;
     private bool _registered;
+
+    // Lookup request stats: IdentHash -> request count
+    private readonly ConcurrentDictionary<I2PIdentHash, int> _leaseSetLookupCounts = new();
+    private readonly ConcurrentDictionary<I2PIdentHash, int> _routerInfoLookupCounts = new();
+
+    /// <summary>
+    ///     Get the top N most requested LeaseSets.
+    /// </summary>
+    public IEnumerable<(I2PIdentHash Key, int Count)> GetTopLeaseSetLookups(int topN = 100)
+    {
+        return _leaseSetLookupCounts
+            .Select(kv => (Key: kv.Key, Count: kv.Value))
+            .OrderByDescending(x => x.Count)
+            .Take(topN);
+    }
+
+    /// <summary>
+    ///     Get the top N most requested RouterInfos.
+    /// </summary>
+    public IEnumerable<(I2PIdentHash Key, int Count)> GetTopRouterInfoLookups(int topN = 100)
+    {
+        return _routerInfoLookupCounts
+            .Select(kv => (Key: kv.Key, Count: kv.Value))
+            .OrderByDescending(x => x.Count)
+            .Take(topN);
+    }
 
     /// <summary>
     ///     Gets or sets whether floodfill server mode is active.
@@ -166,6 +193,12 @@ public class FloodfillServer : IDisposable
         var isLeaseSetLookup = (lookupType & DatabaseLookupMessage.LookupTypes.LeaseSet) != 0;
         var isExploration = (lookupType & DatabaseLookupMessage.LookupTypes.Exploration) ==
                             DatabaseLookupMessage.LookupTypes.Exploration;
+
+        // Track lookup stats (count every request regardless of whether we have the data)
+        if (isLeaseSetLookup && !isRouterInfoLookup && !isExploration)
+            _leaseSetLookupCounts.AddOrUpdate(key, 1, (_, c) => c + 1);
+        else if (isRouterInfoLookup || isExploration)
+            _routerInfoLookupCounts.AddOrUpdate(key, 1, (_, c) => c + 1);
 
         // Try RouterInfo first (unless specifically requesting LeaseSet only)
         if (!isLeaseSetLookup || isRouterInfoLookup || isExploration)

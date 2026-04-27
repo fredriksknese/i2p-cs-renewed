@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
+using System.Text.Json;
 using I2PCore;
 using I2PCore.Client;
 using I2PCore.Data;
@@ -14,6 +15,7 @@ namespace I2PRouterWeb.Services;
 public class RouterService
 {
     private const int MaxActivityLogEntries = 1000;
+    private const string SettingsFilename = "web_settings.json";
     private readonly ConcurrentQueue<ActivityLogEntry> _activityLog = new();
     private readonly NetDbLogService _netDbLogService;
     private DateTime? _startTime;
@@ -21,6 +23,7 @@ public class RouterService
     public RouterService(NetDbLogService netDbLogService)
     {
         _netDbLogService = netDbLogService;
+        LoadSettings();
     }
 
     public IPAddress? ExternalAddress { get; set; }
@@ -76,6 +79,39 @@ public class RouterService
     public IEnumerable<TransportConnectionLogger.LogEntry> GetTransportConnectionLogs()
     {
         return TransportConnectionLogger.Inst.GetEntries();
+    }
+
+    public TransportConnectionLogger.ConnectionStats GetConnectionStats()
+    {
+        return TransportConnectionLogger.Inst.GetConnectionStats();
+    }
+
+    public IEnumerable<(string Reason, int Count, IEnumerable<(string ShortId, string FullId)> Routers)>
+        GetTopFailureReasons(string transport, string direction, int topN = 10)
+    {
+        return TransportConnectionLogger.Inst.GetTopFailureReasons(transport, direction, topN);
+    }
+
+    public IEnumerable<TransportConnectionLogger.DetailedFailureInfo> GetFailuresByReason(
+        string transport, string direction, string reason)
+    {
+        return TransportConnectionLogger.Inst.GetDetailedFailuresByReason(transport, direction, reason);
+    }
+
+    public IEnumerable<(string B32Address, int Count)> GetTopLeaseSetLookups(int topN = 100)
+    {
+        var ff = Router.FloodfillServer;
+        if (ff == null) return Enumerable.Empty<(string, int)>();
+        return ff.GetTopLeaseSetLookups(topN)
+            .Select(x => (B32Address: x.Key.Id32 + ".b32.i2p", Count: x.Count));
+    }
+
+    public IEnumerable<(string RouterHash, string ShortId, int Count)> GetTopRouterInfoLookups(int topN = 100)
+    {
+        var ff = Router.FloodfillServer;
+        if (ff == null) return Enumerable.Empty<(string, string, int)>();
+        return ff.GetTopRouterInfoLookups(topN)
+            .Select(x => (RouterHash: x.Key.Id32Short, ShortId: x.Key.Id32Short, Count: x.Count));
     }
 
     public void StartRouter()
@@ -224,6 +260,8 @@ public class RouterService
 
         LogActivity("Settings",
             $"Applied new settings: Port {TcpPort}, Firewalled: {IsFirewalled}, SSU2: {EnableSSU2}, Floodfill: {FloodfillEnabled}, Encryption: {ProxyEncryption}, Max Transit Tunnels: {MaxTransitTunnels}, NTCP2 In/Out: {MaxNtcp2InboundConnections}/{MaxNtcp2OutboundConnections}");
+
+        SaveSettings();
     }
 
     public void LogActivity(string category, string message)
@@ -346,6 +384,75 @@ public class RouterService
         }
 
         return result;
+    }
+
+    private string SettingsFilePath => Path.Combine(Directory.GetCurrentDirectory(), SettingsFilename);
+
+    private void LoadSettings()
+    {
+        try
+        {
+            var path = SettingsFilePath;
+            if (!File.Exists(path)) return;
+
+            var json = File.ReadAllText(path);
+            var settings = JsonSerializer.Deserialize<WebRouterSettings>(json);
+            if (settings == null) return;
+
+            if (settings.ExternalAddress != null)
+                ExternalAddress = IPAddress.TryParse(settings.ExternalAddress, out var addr) ? addr : null;
+
+            TcpPort = settings.TcpPort;
+            UdpPort = settings.UdpPort;
+            IsFirewalled = settings.IsFirewalled;
+            UseIPv6 = settings.UseIPv6;
+            EnableSSU2 = settings.EnableSSU2;
+            FloodfillEnabled = settings.FloodfillEnabled;
+            MaxTransitTunnels = settings.MaxTransitTunnels;
+            MaxNtcp2InboundConnections = settings.MaxNtcp2InboundConnections;
+            MaxNtcp2OutboundConnections = settings.MaxNtcp2OutboundConnections;
+            TransitSharePercent = settings.TransitSharePercent;
+            ProxyEncryption = settings.ProxyEncryption;
+            HttpProxyPort = settings.HttpProxyPort;
+
+            LogActivity("Settings", "Loaded settings from disk.");
+        }
+        catch (Exception ex)
+        {
+            Logging.LogWarning($"Failed to load settings: {ex.Message}");
+        }
+    }
+
+    private void SaveSettings()
+    {
+        try
+        {
+            var settings = new WebRouterSettings
+            {
+                ExternalAddress = ExternalAddress?.ToString(),
+                TcpPort = TcpPort,
+                UdpPort = UdpPort,
+                IsFirewalled = IsFirewalled,
+                UseIPv6 = UseIPv6,
+                EnableSSU2 = EnableSSU2,
+                FloodfillEnabled = FloodfillEnabled,
+                MaxTransitTunnels = MaxTransitTunnels,
+                MaxNtcp2InboundConnections = MaxNtcp2InboundConnections,
+                MaxNtcp2OutboundConnections = MaxNtcp2OutboundConnections,
+                TransitSharePercent = TransitSharePercent,
+                ProxyEncryption = ProxyEncryption,
+                HttpProxyPort = HttpProxyPort
+            };
+
+            var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(SettingsFilePath, json);
+
+            LogActivity("Settings", "Saved settings to disk.");
+        }
+        catch (Exception ex)
+        {
+            Logging.LogWarning($"Failed to save settings: {ex.Message}");
+        }
     }
 }
 

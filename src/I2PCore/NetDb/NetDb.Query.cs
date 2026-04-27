@@ -98,11 +98,17 @@ public partial class NetDb
         if (result == null)
         {
             // Fallback for non-exploratory if roulette failed
+            // Apply the same address reachability filter as exploratory and roulette construction
             var subset = RouterInfos.Values
                 .Where(rp =>
                     !rp.Meta.Deleted &&
                     (exclude is null || !exclude.Contains(rp.Router.Identity.IdentHash)) &&
-                    rp.Router.Identity.IdentHash != me)
+                    rp.Router.Identity.IdentHash != me &&
+                    rp.Router.Addresses.Any(a =>
+                        (a.Options.Contains("host") || a.Options.Contains("h")) &&
+                        (a.TransportStyle == "SSU2" ||
+                         (a.TransportStyle == "NTCP2" && a.Options.Contains("s"))) &&
+                        I2PRouterAddress.IsReachableAddress(a)))
                 .ToArray();
             if (subset.Length > 0) result = subset.Random().Router.Identity.IdentHash;
         }

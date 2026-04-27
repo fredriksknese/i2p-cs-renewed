@@ -9,20 +9,209 @@
         <div class="d-flex justify-content-between align-items-center">
             <h1>Transport Connection Logs</h1>
             <a href="/ConnectionLogs" class="btn btn-outline-secondary btn-sm">
-                <i class="bi bi-arrow-clockwise"></i> Refresh
+                Refresh
             </a>
         </div>
-        <p class="text-muted">Verbose logging of NTCP2 and SSU2 connection attempts and sessions.</p>
+        <p class="text-muted">Connection statistics and verbose logging of NTCP2 and SSU2 connection attempts.</p>
     </div>
 </div>
 
+@* ── Connection Stats ── *@
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header"><h5 class="mb-0">Connection Statistics</h5></div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead class="table-dark">
+                        <tr>
+                            <th>Transport</th>
+                            <th>Direction</th>
+                            <th class="text-end">Successful</th>
+                            <th class="text-end">Failed</th>
+                            <th class="text-end">Total</th>
+                            <th class="text-end">Success Rate</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        @{
+                            var rows = new[]
+                            {
+                                ("NTCP2", "Inbound", Model.Stats.Ntcp2InboundSuccess, Model.Stats.Ntcp2InboundFailed),
+                                ("NTCP2", "Outbound", Model.Stats.Ntcp2OutboundSuccess, Model.Stats.Ntcp2OutboundFailed),
+                                ("SSU2", "Inbound", Model.Stats.Ssu2InboundSuccess, Model.Stats.Ssu2InboundFailed),
+                                ("SSU2", "Outbound", Model.Stats.Ssu2OutboundSuccess, Model.Stats.Ssu2OutboundFailed),
+                            };
+                        }
+                        @foreach (var (transport, direction, success, failed) in rows)
+                        {
+                            var total = success + failed;
+                            var rate = total > 0 ? (100.0 * success / total) : 0;
+                            <tr>
+                                <td>
+                                    @if (transport == "NTCP2")
+                                    {
+                                        <span class="badge bg-primary">NTCP2</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-info text-dark">SSU2</span>
+                                    }
+                                </td>
+                                <td>
+                                    @if (direction == "Inbound")
+                                    {
+                                        <span class="badge bg-info">Inbound</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-secondary">Outbound</span>
+                                    }
+                                </td>
+                                <td class="text-end text-success fw-bold">@success.ToString("N0")</td>
+                                <td class="text-end text-danger fw-bold">@failed.ToString("N0")</td>
+                                <td class="text-end">@total.ToString("N0")</td>
+                                <td class="text-end">
+                                    @if (total > 0)
+                                    {
+                                        var badgeClass = rate >= 80 ? "bg-success" : rate >= 50 ? "bg-warning text-dark" : "bg-danger";
+                                        <span class="badge @badgeClass">@rate.ToString("F1")%</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted">-</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* ── Top Failure Reasons ── *@
+<div class="row mb-4">
+    @{
+        var failureSections = new[]
+        {
+            ("NTCP2", "Inbound", Model.Ntcp2InboundFailures),
+            ("NTCP2", "Outbound", Model.Ntcp2OutboundFailures),
+            ("SSU2", "Inbound", Model.Ssu2InboundFailures),
+            ("SSU2", "Outbound", Model.Ssu2OutboundFailures),
+        };
+    }
+    @foreach (var (transport, direction, failures) in failureSections)
+    {
+        <div class="col-md-6 mb-3">
+            <div class="card h-100">
+                <div class="card-header">
+                    <h6 class="mb-0">
+                        Top 10
+                        @if (transport == "NTCP2")
+                        {
+                            <span class="badge bg-primary">NTCP2</span>
+                        }
+                        else
+                        {
+                            <span class="badge bg-info text-dark">SSU2</span>
+                        }
+                        @if (direction == "Inbound")
+                        {
+                            <span class="badge bg-info">Inbound</span>
+                        }
+                        else
+                        {
+                            <span class="badge bg-secondary">Outbound</span>
+                        }
+                        Failure Reasons
+                    </h6>
+                </div>
+                <div class="card-body p-0">
+                    @if (failures.Any())
+                    {
+                        <table class="table table-sm table-hover mb-0">
+                            <thead>
+                            <tr>
+                                <th>Reason</th>
+                                <th class="text-end" style="width: 60px;">Count</th>
+                                <th class="text-end" style="width: 50px;"></th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            @{ var idx = 0; }
+                            @foreach (var (reason, count, routers) in failures)
+                            {
+                                var collapseId = $"collapse-{transport}-{direction}-{idx++}";
+                                <tr>
+                                    <td class="small text-break" data-bs-toggle="collapse" data-bs-target="#@collapseId" style="cursor: pointer;">
+                                        <span class="me-1">▶</span>
+                                        @reason
+                                    </td>
+                                    <td class="text-end fw-bold" data-bs-toggle="collapse" data-bs-target="#@collapseId" style="cursor: pointer;">@count</td>
+                                    <td class="text-end">
+                                        <a asp-page-handler="ExportCsv"
+                                           asp-route-transport="@transport"
+                                           asp-route-direction="@direction"
+                                           asp-route-reason="@reason"
+                                           class="btn btn-sm btn-outline-primary py-0 fw-bold"
+                                           style="font-size: 0.7rem;"
+                                           title="Export to CSV">
+                                            CSV
+                                        </a>
+                                    </td>
+                                </tr>
+                                <tr class="collapse" id="@collapseId">
+                                    <td colspan="3" class="bg-body-tertiary border-start border-3 border-primary">
+                                        <div class="ps-3 py-2">
+                                            @if (routers.Any())
+                                            {
+                                                <div class="small text-muted mb-2">Affected Routers (up to 50):</div>
+                                                @foreach (var router in routers)
+                                                {
+                                                    <div class="mb-1 d-flex flex-wrap align-items-center">
+                                                        <span class="me-2 text-primary">🌐</span>
+                                                        <a href="/RouterDetail?hash=@Uri.EscapeDataString(router.ShortId)"
+                                                           class="text-decoration-none font-monospace small fw-bold me-2">
+                                                            @router.ShortId
+                                                        </a>
+                                                        <span class="text-muted font-monospace" style="font-size: 0.7rem;">@router.FullId</span>
+                                                    </div>
+                                                }
+                                            }
+                                            else
+                                            {
+                                                <div class="text-muted small">No router details available.</div>
+                                            }
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                            </tbody>
+                        </table>
+                    }
+                    else
+                    {
+                        <div class="text-center py-3 text-muted small">No failures recorded.</div>
+                    }
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@* ── Verbose Connection Logs ── *@
 <div class="row">
     <div class="col-12">
         <div class="card">
+            <div class="card-header"><h5 class="mb-0">Verbose Connection Logs</h5></div>
             <div class="card-body p-0">
                 <div class="table-responsive">
                     <table class="table table-hover table-striped mb-0">
-                        <thead class="table-light">
+                        <thead class="table-dark">
                         <tr>
                             <th style="width: 180px;">Timestamp</th>
                             <th style="width: 100px;">Transport</th>
@@ -65,7 +254,7 @@
                                     <td>
                                         @if (!string.IsNullOrEmpty(log.RouterId))
                                         {
-                                            <a href="/RouterDetail?id=@log.RouterId"
+                                            <a href="/RouterDetail?hash=@Uri.EscapeDataString(log.RouterId)"
                                                class="text-decoration-none font-monospace small">[@log.RouterId]</a>
                                         }
                                         else
@@ -92,4 +281,3 @@
         </div>
     </div>
 </div>
-

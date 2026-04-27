@@ -48,3 +48,4 @@ reference/*
 logs.txt
 hosts.txt
 test_output.txt
+src/I2PRouterWeb/web_settings.json

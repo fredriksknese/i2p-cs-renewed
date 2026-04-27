@@ -271,7 +271,6 @@ public class TransitTunnelProvider : ITunnelOwner
                 $"HandleGatewayTunnelRequest: Accepting Inbound Gateway tunnel {tunnel.ReceiveTunnelId} from {from?.Id32Short}");
             RunningGatewayTunnels[tunnel] = 1;
             TunnelMgr.AddTunnel(tunnel);
-            AcceptedTunnelBuildRequest(decrypt.Decrypted);
         }
 
         TransportProvider.Send(tunnel.Destination, replymsg);
@@ -323,7 +322,6 @@ public class TransitTunnelProvider : ITunnelOwner
                 $"HandleEndpointTunnelRequest: Accepting Outbound Endpoint tunnel {tunnel.ReceiveTunnelId} from {from?.Id32Short}");
             RunningEndpointTunnels[tunnel] = 1;
             TunnelMgr.AddTunnel(tunnel);
-            AcceptedTunnelBuildRequest(decrypt.Decrypted);
         }
 
         TransportProvider.Send(tunnel.Destination, buildreplymsg);
@@ -377,7 +375,6 @@ public class TransitTunnelProvider : ITunnelOwner
         {
             RunningTransitTunnels[tunnel] = 1;
             TunnelMgr.AddTunnel(tunnel);
-            AcceptedTunnelBuildRequest(decrypt.Decrypted);
         }
 
         TransportProvider.Send(tunnel.Destination, replymsg2);

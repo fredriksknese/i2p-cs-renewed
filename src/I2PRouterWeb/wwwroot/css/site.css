@@ -1,3 +1,11 @@
+:root {
+    --app-highlight: #0d6efd;
+}
+
+[data-bs-theme="dark"] {
+    --app-highlight: #3d8bfd;
+}
+
 html {
     font-size: 14px;
 }
@@ -9,7 +17,33 @@ html {
 }
 
 .btn:focus, .btn:active:focus, .btn-link.nav-link:focus, .form-control:focus, .form-check-input:focus {
-    box-shadow: 0 0 0 0.1rem white, 0 0 0 0.25rem #258cfb;
+    box-shadow: 0 0 0 0.1rem var(--bs-body-bg), 0 0 0 0.25rem var(--app-highlight);
+}
+
+.btn-primary {
+    --bs-btn-bg: var(--app-highlight);
+    --bs-btn-border-color: var(--app-highlight);
+    --bs-btn-hover-bg: var(--app-highlight);
+    --bs-btn-hover-border-color: var(--app-highlight);
+    --bs-btn-active-bg: var(--app-highlight);
+    --bs-btn-active-border-color: var(--app-highlight);
+}
+
+.btn-outline-primary {
+    --bs-btn-color: var(--app-highlight);
+    --bs-btn-border-color: var(--app-highlight);
+    --bs-btn-hover-bg: var(--app-highlight);
+    --bs-btn-hover-border-color: var(--app-highlight);
+    --bs-btn-active-bg: var(--app-highlight);
+    --bs-btn-active-border-color: var(--app-highlight);
+}
+
+.text-primary {
+    color: var(--app-highlight) !important;
+}
+
+.nav-pills .nav-link.active {
+    background-color: var(--app-highlight);
 }
 
 html {
@@ -18,7 +52,27 @@ html {
 }
 
 body {
-    margin-bottom: 60px;
+    min-height: 100vh;
+}
+
+.sidebar {
+    width: 240px;
+    min-width: 240px;
+    z-index: 1000;
+}
+
+.sidebar .nav-link {
+    border-radius: 0.25rem;
+    margin-bottom: 0.25rem;
+}
+
+.sidebar .nav-link:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.sidebar .navbar-brand {
+    font-size: 1.25rem;
+    padding-left: 0.5rem;
 }
 
 .form-floating > .form-control-plaintext::placeholder, .form-floating > .form-control::placeholder {

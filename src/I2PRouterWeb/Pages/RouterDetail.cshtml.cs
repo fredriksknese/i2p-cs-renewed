@@ -1,5 +1,6 @@
 using I2PCore;
 using I2PCore.TransportLayer;
+using I2PCore.TransportLayer.Log;
 using I2PCore.TunnelLayer;
 using I2PRouterWeb.Services;
 using Microsoft.AspNetCore.Mvc.RazorPages;
@@ -79,8 +80,13 @@ public class RouterDetailModel : PageModel
 
         var routers = netDb.FindRouterInfo((h, r) =>
             h.Id32Short.Equals(hash, StringComparison.OrdinalIgnoreCase));
-
+ 
         var ri = routers.FirstOrDefault();
+        if (ri == null)
+        {
+            ri = TransportConnectionLogger.Inst.GetRouterInfo(hash);
+        }
+
         if (ri == null) return;
 
         Found = true;

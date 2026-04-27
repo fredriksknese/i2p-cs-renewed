@@ -60,27 +60,12 @@ public class TransitTunnel : InboundTunnel
  new ItemFilterWindow<HashedItemGroup>( TickSpan.Seconds( 30 ), 2 );
 #endif
 
-    private bool HandleReceiveQueue()
-    {
-        var tdmsgs = new List<TunnelDataMessage>();
-
-        if (ReceiveQueue.IsEmpty) return true;
-
-        while (ReceiveQueue.TryDequeue(out var message))
-            if (message.MessageType == I2NpMessage.MessageTypes.TunnelData)
-                // Just drop the non-TunnelData
-                tdmsgs.Add((TunnelDataMessage)message);
-
-        if (tdmsgs.Any()) return HandleTunnelData(tdmsgs);
-
-        return true;
-    }
 
 #if LOG_ALL_TUNNEL_TRANSFER
         PeriodicLogger LogDataSent = new PeriodicLogger( 15 );
 #endif
 
-    private bool HandleTunnelData(IEnumerable<TunnelDataMessage> msgs)
+    protected override void HandleTunnelData(List<TunnelDataMessage> msgs)
     {
         EncryptTunnelMessages(msgs);
 
@@ -116,7 +101,7 @@ public class TransitTunnel : InboundTunnel
             }
 #endif
 
-        return true;
+        return;
     }
 
     private void EncryptTunnelMessages(IEnumerable<TunnelDataMessage> msgs)

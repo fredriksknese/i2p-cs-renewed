@@ -96,7 +96,7 @@ public class InboundTunnel : Tunnel
         return HandleReceiveQueue() && HandleSendQueue();
     }
 
-    private bool HandleReceiveQueue()
+    protected virtual bool HandleReceiveQueue()
     {
         List<TunnelDataMessage> tdmsgs = null;
 
@@ -120,7 +120,7 @@ public class InboundTunnel : Tunnel
         return true;
     }
 
-    private bool HandleTunnelMessage(I2NpMessage msg)
+    protected virtual bool HandleTunnelMessage(I2NpMessage msg)
     {
 #if LOG_ALL_TUNNEL_TRANSFER
             Logging.LogDebug( $"{this} HandleReceiveQueue: {msg.MessageType}" );
@@ -160,7 +160,7 @@ public class InboundTunnel : Tunnel
         return true;
     }
 
-    private void HandleTunnelData(List<TunnelDataMessage> msgs)
+    protected virtual void HandleTunnelData(List<TunnelDataMessage> msgs)
     {
         DecryptTunnelMessages(msgs);
 
@@ -175,7 +175,7 @@ public class InboundTunnel : Tunnel
         foreach (var one in newmsgs) one.Distribute(this);
     }
 
-    private void DecryptTunnelMessages(List<TunnelDataMessage> msgs)
+    protected void DecryptTunnelMessages(List<TunnelDataMessage> msgs)
     {
         var cipher = new CbcBlockCipher(new AesEngine());
         List<TunnelDataMessage> failed = null;

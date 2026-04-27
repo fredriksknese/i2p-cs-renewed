@@ -172,7 +172,8 @@ public abstract class Tunnel
         {
             var connectedList = connectedRouters
                 .Select(h => NetDb.Inst[h])
-                .Where(ri => ri?.Identity != null)
+                .Where(ri => ri?.Identity != null &&
+                             ri.Addresses.Any(a => I2PRouterAddress.IsReachableAddress(a)))
                 .ToArray();
 
             if (connectedList.Length > 0)
@@ -299,7 +300,8 @@ public abstract class Tunnel
             // Pick a connected router for the endpoint (last hop closest to us)
             var connectedList = connectedRouters
                 .Select(h => NetDb.Inst[h])
-                .Where(ri => ri?.Identity != null)
+                .Where(ri => ri?.Identity != null &&
+                             ri.Addresses.Any(a => I2PRouterAddress.IsReachableAddress(a)))
                 .ToArray();
 
             if (connectedList.Length > 0)

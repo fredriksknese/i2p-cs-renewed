@@ -298,6 +298,7 @@ public class NTCP2Session : ITransport
         if (IsTerminated)
             return;
 
+        var wasEstablished = State == NTCP2SessionState.Established;
         IsTerminated = true;
         State = NTCP2SessionState.Terminated;
 
@@ -305,6 +306,14 @@ public class NTCP2Session : ITransport
         Logging.LogDebug($"{DebugId}: {logMsg}");
         TransportConnectionLogger.Inst.Log(logMsg, RemoteRouterInfo?.Identity?.IdentHash?.Id32Short, "NTCP2",
             IsOutgoing ? "Outbound" : "Inbound");
+
+        if (!wasEstablished)
+            TransportConnectionLogger.Inst.RecordFailure("NTCP2",
+                IsOutgoing ? "Outbound" : "Inbound",
+                reason ?? "Unknown",
+                RemoteRouterInfo?.Identity?.IdentHash?.Id32Short,
+                RemoteRouterInfo?.Identity?.IdentHash?.ToString(),
+                RemoteRouterInfo);
 
         try
         {
@@ -1075,13 +1084,17 @@ public class NTCP2Session : ITransport
             if (IsPQ)
             {
                 cipherKey = NoiseState.PerformProcessMessage2EphemeralAndEE(ephemeralKey);
+                Logging.LogDebug($"{DebugId}: [PQ] Alice ProcessSC - cipherKey1 derived from ee");
 
                 var encryptedPQFrame = new byte[pqCTLen + 16];
                 Array.Copy(ReceiveBuffer, 32, encryptedPQFrame, 0, encryptedPQFrame.Length);
                 var kemCiphertext = NoiseState.DecryptHandshakeBlock(cipherKey, encryptedPQFrame);
+                Logging.LogDebug($"{DebugId}: [PQ] Alice ProcessSC - Decrypted kemCiphertext ({kemCiphertext.Length} bytes)");
 
                 var sharedSecret = DecapsulateMLKEM(kemCiphertext, LocalKemSecretKey, PQVersion);
                 cipherKey = NoiseState.MixKeyPQ(sharedSecret);
+                NoiseState.StoreMessage2CipherKey(cipherKey);
+                Logging.LogDebug($"{DebugId}: [PQ] Alice ProcessSC - cipherKey2 derived from ML-KEM");
             }
             else
             {
@@ -1343,6 +1356,7 @@ public class NTCP2Session : ITransport
         Logging.LogInformation($"{DebugId}: Session established with {RemoteRouterInfo?.Identity?.IdentHash}");
         TransportConnectionLogger.Inst.Log("Session established", RemoteRouterInfo?.Identity?.IdentHash?.Id32Short,
             "NTCP2", IsOutgoing ? "Outbound" : "Inbound");
+        TransportConnectionLogger.Inst.RecordSuccess("NTCP2", IsOutgoing ? "Outbound" : "Inbound");
 
         // Fire ConnectionCreated event for incoming connection
         if (!IsOutgoing && RemoteRouterInfo?.Identity?.IdentHash != null)
@@ -1575,12 +1589,16 @@ public class NTCP2Session : ITransport
         {
             // Hybrid Handshake Message 2: <- e, ee, ekem1, p
             var cipherKey = NoiseState.PerformMessage2EphemeralAndEE(IsPQ);
+            Logging.LogDebug($"{DebugId}: [PQ] Bob SendSC - cipherKey1 derived from ee");
 
             var (ciphertext, sharedSecret) = EncapsulateMLKEM(RemoteKemPublicKey, PQVersion);
             encryptedPQFrame = NoiseState.EncryptHandshakeBlock(cipherKey, ciphertext);
+            Logging.LogDebug($"{DebugId}: [PQ] Bob SendSC - Encrypted ML-KEM ciphertext ({ciphertext.Length} bytes)");
 
             // MixKey(kem_shared_key) - This also resets nonce for options
             var newCipherKey = NoiseState.MixKeyPQ(sharedSecret);
+            NoiseState.StoreMessage2CipherKey(newCipherKey);
+            Logging.LogDebug($"{DebugId}: [PQ] Bob SendSC - newCipherKey derived from ML-KEM");
 
             // Payload (options) uses n=0 (reset by MixKeyPQ)
             encryptedPayload = NoiseState.EncryptHandshakeBlock(newCipherKey, payload);
@@ -1619,7 +1637,7 @@ public class NTCP2Session : ITransport
 
         State = NTCP2SessionState.SessionCreatedSent;
 
-        Logging.LogDebug($"{DebugId}: SessionCreated sent ({totalMsg2.Length} bytes)");
+        Logging.LogInformation($"{DebugId}: SessionCreated sent ({totalMsg2.Length} bytes) to {TcpClient.Client.RemoteEndPoint}");
     }
 
     private void SendSessionConfirmed()
@@ -1657,6 +1675,7 @@ public class NTCP2Session : ITransport
 
         Logging.LogDebug($"{DebugId}: SessionConfirmed sent");
         Logging.LogInformation($"{DebugId}: Session established");
+        TransportConnectionLogger.Inst.RecordSuccess("NTCP2", "Outbound");
 
         // Send RouterInfo as first data frame for peer database update
         SendRouterInfo();

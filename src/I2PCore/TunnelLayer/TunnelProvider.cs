@@ -1211,28 +1211,34 @@ public class TunnelProvider
                         Logging.LogInformation(
                             $"TunnelProvider: TunnelGateway inner message: {innerMsg.MessageType} via tunnel {tunnel}");
 
+                        tunnel.MessageReceived(
+                            innerMsg.Message,
+                            msg.HeaderAndPayload.Length);
+
                         // Dispatch inner message based on type:
                         // TunnelData goes to the tunnel for fragment reassembly.
                         // All other I2NP messages (Garlic, ShortTunnelBuildReply,
                         // DatabaseStore, etc.) must be dispatched to the main handler.
                         if (innerMsg.MessageType == I2NpMessage.MessageTypes.TunnelData)
                         {
-                            tunnel.MessageReceived(
-                                innerMsg.Message,
-                                msg.HeaderAndPayload.Length);
                         }
                         else if (innerMsg.MessageType == I2NpMessage.MessageTypes.Garlic)
                         {
                             // Try as tunnel build reply garlic first
                             var garlicMsg = (GarlicMessage)innerMsg.Message;
                             if (!TryHandleBuildReplyGarlic(garlicMsg, tunnel as InboundTunnel))
-                                // Not a build reply — dispatch to general handler
-                                HandleIncomingMessage(innerMsg, tunnel as InboundTunnel);
+                            {
+                                // Not a build reply — dispatch to general handler if it's not a GatewayTunnel.
+                                // GatewayTunnels will handle it in their own loop.
+                                if (tunnel is not GatewayTunnel)
+                                    HandleIncomingMessage(innerMsg, tunnel as InboundTunnel);
+                            }
                         }
                         else
                         {
                             // ShortTunnelBuildReply, DatabaseStore, etc.
-                            HandleIncomingMessage(innerMsg, tunnel as InboundTunnel);
+                            if (tunnel is not GatewayTunnel)
+                                HandleIncomingMessage(innerMsg, tunnel as InboundTunnel);
                         }
                     }
                 }

@@ -3,6 +3,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using I2PCore.SessionLayer;
 using I2PCore.Utils;
 
 namespace I2PCore.Data;
@@ -85,6 +86,23 @@ public class I2PRouterAddress : I2PType
         if (IPAddress.TryParse(host, out var address)) return address.AddressFamily;
 
         return AddressFamily.Unknown;
+    }
+
+    /// <summary>
+    ///     Returns true if this address has a host we can actually connect to,
+    ///     given our current IPv4/IPv6 settings.
+    /// </summary>
+    public static bool IsReachableAddress(I2PRouterAddress addr)
+    {
+        var host = addr.Options.TryGet("host")?.ToString()
+                   ?? addr.Options.TryGet("h")?.ToString();
+        if (host == null) return false;
+
+        var family = IpTestHostName(host);
+        if (family == AddressFamily.InterNetwork) return RouterContext.UseIpV4;
+        if (family == AddressFamily.InterNetworkV6) return RouterContext.UseIpV6;
+
+        return false; // Unknown/unresolvable host
     }
 
     public override string ToString()

@@ -14,7 +14,7 @@
 
 <div class="row g-3 mb-4">
     <div class="col-md-3">
-        <div class="card">
+        <div class="card stat-card">
             <div class="card-body">
                 <h6 class="card-subtitle mb-2 text-muted">Total</h6>
                 <h3 class="mb-0">@Model.TotalTransitTunnels</h3>
@@ -22,7 +22,7 @@
         </div>
     </div>
     <div class="col-md-3">
-        <div class="card">
+        <div class="card stat-card">
             <div class="card-body">
                 <h6 class="card-subtitle mb-2 text-muted">Inbound Gateway</h6>
                 <h3 class="mb-0 text-warning">@Model.InboundGatewayCount</h3>
@@ -30,7 +30,7 @@
         </div>
     </div>
     <div class="col-md-3">
-        <div class="card">
+        <div class="card stat-card">
             <div class="card-body">
                 <h6 class="card-subtitle mb-2 text-muted">Transit</h6>
                 <h3 class="mb-0 text-info">@Model.TransitCount</h3>
@@ -38,7 +38,7 @@
         </div>
     </div>
     <div class="col-md-3">
-        <div class="card">
+        <div class="card stat-card">
             <div class="card-body">
                 <h6 class="card-subtitle mb-2 text-muted">Outbound Endpoint</h6>
                 <h3 class="mb-0 text-success">@Model.OutboundEndpointCount</h3>
@@ -57,9 +57,9 @@
                 </div>
                 <div class="card-body">
                     <div class="table-responsive">
-                        <table class="table table-hover table-striped">
+                        <table class="table table-hover table-striped table-sm mb-0">
                             <thead>
-                            <tr>
+                            <tr class="table-active">
                                 <th>Tunnel ID</th>
                                 <th>From</th>
                                 <th>To</th>

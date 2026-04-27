@@ -1,5 +1,5 @@
 ﻿<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-bs-theme="dark">
 <head>
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
@@ -14,7 +14,7 @@
         }
 
         .stat-card {
-            border-left: 4px solid #0d6efd;
+            border-left: 4px solid var(--app-highlight);
         }
 
         .activity-log {
@@ -39,70 +39,70 @@
     </style>
 </head>
 <body>
-<header>
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
-        <div class="container-fluid">
-            <a class="navbar-brand" asp-page="/Index">I2P Router Console</a>
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
-                <span class="navbar-toggler-icon"></span>
-            </button>
-            <div class="collapse navbar-collapse" id="navbarNav">
-                <ul class="navbar-nav">
-                    <li class="nav-item">
-                        <a class="nav-link" asp-page="/Index">Dashboard</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" asp-page="/Tunnels">Tunnels</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" asp-page="/Transit">Transit</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" asp-page="/Routers">Routers</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" asp-page="/Transports">Transports</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" asp-page="/LeaseSets">Lease Sets</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" asp-page="/NetDbLookup">NetDB Lookup</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" asp-page="/NetDbLog">NetDb Log</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" asp-page="/TunnelBuildLogs">Build Logs</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" asp-page="/ConnectionLogs">Conn Logs</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" asp-page="/HttpProxyLogs">Proxy Logs</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" asp-page="/Activity">Activity</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" asp-page="/Settings">Settings</a>
-                    </li>
-                </ul>
-            </div>
-        </div>
+<div class="d-flex">
+    <nav class="sidebar bg-black text-white p-3 vh-100 sticky-top overflow-auto">
+        <a class="navbar-brand text-white d-block mb-3" asp-page="/Index">I2P Router Console</a>
+        <hr class="text-white-50" />
+        <ul class="nav nav-pills flex-column mb-auto">
+            <li class="nav-item">
+                <a class="nav-link text-white" asp-page="/Index">Dashboard</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link text-white" asp-page="/Tunnels">Tunnels</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link text-white" asp-page="/Transit">Transit</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link text-white" asp-page="/Routers">Routers</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link text-white" asp-page="/Transports">Transports</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link text-white" asp-page="/LeaseSets">Lease Sets</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link text-white" asp-page="/NetDbLookup">NetDB Lookup</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link text-white" asp-page="/NetDbLog">NetDb Log</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link text-white" asp-page="/NetDbStats">NetDB Stats</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link text-white" asp-page="/TunnelBuildLogs">Build Logs</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link text-white" asp-page="/ConnectionLogs">Conn Logs</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link text-white" asp-page="/HttpProxyLogs">Proxy Logs</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link text-white" asp-page="/Activity">Activity</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link text-white" asp-page="/Settings">Settings</a>
+            </li>
+        </ul>
     </nav>
-</header>
-<div class="container-fluid mt-4">
-    <main role="main" class="pb-3">
-        @RenderBody()
-    </main>
-</div>
 
-<footer class="border-top footer text-muted mt-5">
-    <div class="container-fluid">
-        &copy; 2026 - I2P Router Web Console
+    <div class="flex-grow-1 d-flex flex-column min-vh-100">
+        <div class="container-fluid mt-4">
+            <main role="main" class="pb-3">
+                @RenderBody()
+            </main>
+        </div>
+
+        <footer class="border-top footer text-muted mt-auto py-3">
+            <div class="container-fluid">
+                &copy; 2026 - I2P Router Web Console
+            </div>
+        </footer>
     </div>
-</footer>
+</div>
 
 <script src="~/lib/jquery/dist/jquery.min.js"></script>
 <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>

@@ -273,7 +273,7 @@ else
                     <td class="text-danger">@((Model.InfoFaultyPenalty * -1).ToString("F2"))</td>
                     <td>Penalty for reported incorrect router info</td>
                 </tr>
-                <tr class="table-light">
+                <tr class="table-active">
                     <td class="fw-bold">Total Score</td>
                     <td class="fw-bold @(Model.Score >= 0 ? "text-success" : "text-danger")">@Model.Score.ToString("F2")</td>
                     <td>Final selection weight</td>

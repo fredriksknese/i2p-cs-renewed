@@ -68,7 +68,7 @@
                 <!-- Full Destination -->
                 <div class="mb-2">
                     <strong class="small text-muted">Destination (Base64):</strong>
-                    <div class="bg-light border rounded p-2 mt-1" style="max-height: 80px; overflow-y: auto;">
+                    <div class="bg-body-secondary border rounded p-2 mt-1" style="max-height: 80px; overflow-y: auto;">
                         <code class="small"
                               style="word-break: break-all; font-size: 0.7rem;">@ls.DestinationBase64</code>
                     </div>
@@ -89,9 +89,9 @@
                             @foreach (var pk in ls.PublicKeys)
                             {
                                 <div class="mb-1">
-                                    <span class="badge bg-outline-secondary border text-dark small">@pk.KeyType</span>
+                                    <span class="badge border border-secondary text-body-emphasis small">@pk.KeyType</span>
                                     <span class="text-muted small">(@pk.KeyLength bytes)</span>
-                                    <div class="bg-light border rounded p-1 mt-1"
+                                    <div class="bg-body-secondary border rounded p-1 mt-1"
                                          style="max-height: 50px; overflow-y: auto;">
                                         <code style="word-break: break-all; font-size: 0.65rem;">@pk.KeyBase64</code>
                                     </div>
@@ -107,9 +107,9 @@
                     <div>
                         <strong class="small text-muted">Leases (@ls.Leases.Count):</strong>
                         <div class="table-responsive mt-1">
-                            <table class="table table-sm table-bordered mb-0" style="font-size: 0.8rem;">
-                                <thead class="table-light">
-                                <tr>
+                            <table class="table table-sm table-bordered mb-0" style="font-size: 0.85rem;">
+                                <thead>
+                                <tr class="table-active">
                                     <th>Tunnel Gateway</th>
                                     <th>Gateway B32</th>
                                     <th>Tunnel ID</th>

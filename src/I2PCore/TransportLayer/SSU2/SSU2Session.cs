@@ -225,6 +225,7 @@ public class SSU2Session : ITransport
         if (IsTerminated)
             return;
 
+        var wasEstablished = State == SessionState.Established;
         IsTerminated = true;
         State = SessionState.Terminated;
 
@@ -232,6 +233,14 @@ public class SSU2Session : ITransport
         Logging.LogDebug($"{DebugId}: {logMsg}");
         TransportConnectionLogger.Inst.Log(logMsg, RemoteRouterInfo?.Identity?.IdentHash?.Id32Short, "SSU2",
             IsOutgoing ? "Outbound" : "Inbound");
+
+        if (!wasEstablished)
+            TransportConnectionLogger.Inst.RecordFailure("SSU2",
+                IsOutgoing ? "Outbound" : "Inbound",
+                reason ?? "Unknown",
+                RemoteRouterInfo?.Identity?.IdentHash?.Id32Short,
+                RemoteRouterInfo?.Identity?.IdentHash?.ToString(),
+                RemoteRouterInfo);
 
         // Clear sensitive data
         NoiseState?.Clear();
@@ -1062,6 +1071,7 @@ public class SSU2Session : ITransport
         Logging.LogInformation($"{DebugId}: Session established with {RemoteRouterInfo?.Identity?.IdentHash}");
         TransportConnectionLogger.Inst.Log("Session established", RemoteRouterInfo?.Identity?.IdentHash?.Id32Short,
             "SSU2", IsOutgoing ? "Outbound" : "Inbound");
+        TransportConnectionLogger.Inst.RecordSuccess("SSU2", IsOutgoing ? "Outbound" : "Inbound");
 
         // Fire ConnectionCreated event for incoming connection
         if (!IsOutgoing && RemoteRouterInfo?.Identity?.IdentHash != null)
@@ -1518,6 +1528,7 @@ public class SSU2Session : ITransport
         Logging.LogInformation($"{DebugId}: Session established");
         TransportConnectionLogger.Inst.Log("Session established", RemoteRouterInfo?.Identity?.IdentHash?.Id32Short,
             "SSU2", IsOutgoing ? "Outbound" : "Inbound");
+        TransportConnectionLogger.Inst.RecordSuccess("SSU2", "Outbound");
 
         // Notify connection established
         ConnectionEstablished?.Invoke(this, RemoteRouterInfo?.Identity?.IdentHash);

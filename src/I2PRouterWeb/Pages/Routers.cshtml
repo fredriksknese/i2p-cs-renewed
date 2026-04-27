@@ -12,7 +12,7 @@
 
 <div class="row g-3 mb-4">
     <div class="col-md-2">
-        <div class="card stat-card">
+        <div class="card stat-card border-primary">
             <div class="card-body py-2">
                 <h6 class="card-subtitle mb-1 text-muted small">Total Routers</h6>
                 <h3 class="mb-0">@Model.TotalRouters</h3>
@@ -20,7 +20,7 @@
         </div>
     </div>
     <div class="col-md-2">
-        <div class="card stat-card">
+        <div class="card stat-card border-success">
             <div class="card-body py-2">
                 <h6 class="card-subtitle mb-1 text-muted small">Connected</h6>
                 <h3 class="mb-0 text-success">@Model.ConnectedCount</h3>
@@ -28,7 +28,7 @@
         </div>
     </div>
     <div class="col-md-2">
-        <div class="card stat-card">
+        <div class="card stat-card border-info">
             <div class="card-body py-2">
                 <h6 class="card-subtitle mb-1 text-muted small">Floodfills</h6>
                 <h3 class="mb-0 text-info">@Model.FloodfillCount</h3>
@@ -36,7 +36,7 @@
         </div>
     </div>
     <div class="col-md-2">
-        <div class="card stat-card">
+        <div class="card stat-card border-primary">
             <div class="card-body py-2">
                 <h6 class="card-subtitle mb-1 text-muted small">NTCP2</h6>
                 <h3 class="mb-0 text-primary">@Model.Ntcp2Count</h3>
@@ -44,7 +44,7 @@
         </div>
     </div>
     <div class="col-md-2">
-        <div class="card stat-card">
+        <div class="card stat-card border-primary">
             <div class="card-body py-2">
                 <h6 class="card-subtitle mb-1 text-muted small">SSU2</h6>
                 <h3 class="mb-0 text-primary">@Model.Ssu2Count</h3>
@@ -52,7 +52,7 @@
         </div>
     </div>
     <div class="col-md-2">
-        <div class="card stat-card">
+        <div class="card stat-card border-secondary">
             <div class="card-body py-2">
                 <h6 class="card-subtitle mb-1 text-muted small">Updated</h6>
                 <p class="mb-0 small">@DateTime.Now.ToString("HH:mm:ss")</p>
@@ -69,7 +69,7 @@
                        value="@Model.SearchQuery" placeholder="Search by hash or IP...">
             </div>
             <div class="col-md-2">
-                <button type="submit" class="btn btn-primary btn-sm w-100">Search</button>
+                <button type="submit" class="btn btn-outline-primary btn-sm w-100">Search</button>
             </div>
             <div class="col-md-2">
                 <a href="/Routers" class="btn btn-outline-secondary btn-sm w-100">Clear</a>
@@ -96,9 +96,9 @@
             </div>
             <div class="card-body p-0">
                 <div class="table-responsive">
-                    <table class="table table-hover table-striped table-sm mb-0" style="font-size: 0.8rem;">
-                        <thead class="table-dark">
-                        <tr>
+                    <table class="table table-hover table-striped table-sm mb-0" style="font-size: 0.85rem;">
+                        <thead>
+                        <tr class="table-active">
                             <th>Hash</th>
                             <th>Host:Port</th>
                             <th>Caps</th>
@@ -113,10 +113,10 @@
                             <th>Published</th>
                         </tr>
                         </thead>
-                        <tbody>
+                        <tbody class="table-group-divider">
                         @foreach (var r in Model.Routers)
                         {
-                            <tr class="@(r.IsConnected ? "table-success" : "")">
+                            <tr>
                                 <td class="router-hash">
                                     <a href="/RouterDetail?hash=@r.Hash" class="text-decoration-none">@r.Hash</a>
                                 </td>

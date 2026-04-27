@@ -101,9 +101,10 @@ public class SSU2Host : ITransportProtocol
         if (router == null)
             return ProtocolCapabilities.None;
 
-        // Check if router has SSU2 address
+        // Check if router has SSU2 address with a reachable IP (respecting IPv4/IPv6 settings)
         var ssu2Address = router.Addresses?.FirstOrDefault(a =>
-            a.TransportStyle == "SSU2" && a.Options.Contains("s"));
+            a.TransportStyle == "SSU2" && a.Options.Contains("s")
+            && I2PRouterAddress.IsReachableAddress(a));
 
         if (ssu2Address == null)
             return ProtocolCapabilities.None;

@@ -19,7 +19,7 @@
                         </button>
                     </form>
                     <form method="post" asp-page-handler="Stop" class="d-inline">
-                        <button type="submit" class="btn btn-danger">
+                        <button type="submit" class="btn btn-outline-danger">
                             <i class="bi bi-stop-circle"></i> Stop Router
                         </button>
                     </form>
@@ -35,7 +35,7 @@
                     else
                     {
                         <form method="post" asp-page-handler="StartProxy" class="d-inline ms-3">
-                            <button type="submit" class="btn btn-info">
+                            <button type="submit" class="btn btn-outline-info">
                                 Start HTTP Proxy
                             </button>
                         </form>
@@ -45,7 +45,7 @@
                 {
                     <span class="badge bg-secondary fs-6 me-2">Stopped</span>
                     <form method="post" asp-page-handler="Start" class="d-inline">
-                        <button type="submit" class="btn btn-success">
+                        <button type="submit" class="btn btn-outline-success">
                             <i class="bi bi-play-circle"></i> Start Router
                         </button>
                     </form>
@@ -193,7 +193,7 @@
 <div class="row mb-4">
     <div class="col-12">
         <div class="card">
-            <div class="card-header bg-light border-bottom">
+            <div class="card-header bg-body-secondary border-bottom">
                 <h5 class="mb-0">Manual Reseed</h5>
             </div>
             <div class="card-body">
@@ -209,7 +209,7 @@
                                required>
                     </div>
                     <div class="col-auto">
-                        <button type="submit" class="btn btn-primary btn-sm">
+                        <button type="submit" class="btn btn-outline-primary btn-sm">
                             <i class="bi bi-upload me-1"></i> Upload and Import
                         </button>
                     </div>
@@ -230,7 +230,7 @@
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h5 class="mb-0">Recent Activity</h5>
-                <a href="/Activity" class="btn btn-sm btn-primary">View All</a>
+                <a href="/Activity" class="btn btn-sm btn-outline-primary">View All</a>
             </div>
             <div class="card-body">
                 @if (Model.RecentActivity.Any())
@@ -265,9 +265,9 @@
     <div class="row mt-4">
         <div class="col-12">
             <div class="card">
-                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                <div class="card-header bg-body-tertiary border-bottom d-flex justify-content-between align-items-center">
                     <h5 class="mb-0">Full Router Info</h5>
-                    <span class="badge bg-light text-primary">Published: @ri.PublishedDate</span>
+                    <span class="badge bg-body-secondary text-primary">Published: @ri.PublishedDate</span>
                 </div>
                 <div class="card-body">
                     <div class="row">
@@ -297,7 +297,7 @@
                             {
                                 <table class="table table-sm table-striped">
                                     <thead>
-                                    <tr>
+                                    <tr class="table-active">
                                         <th>Key</th>
                                         <th>Value</th>
                                     </tr>
@@ -326,7 +326,7 @@
                                 foreach (var addr in ri.Addresses)
                                 {
                                     <div class="card mb-3 shadow-sm">
-                                        <div class="card-header py-1 bg-light">
+                                        <div class="card-header py-1 bg-body-secondary">
                                             <strong>@addr.TransportStyle</strong>
                                             <span class="badge bg-secondary float-end">Cost: @addr.Cost</span>
                                         </div>
@@ -353,7 +353,7 @@
                             }
 
                             <h6 class="mt-4">Signature</h6>
-                            <div class="p-2 bg-light border rounded">
+                            <div class="p-2 bg-body-secondary border rounded">
                                 <code class="text-break small">@ri.Signature</code>
                             </div>
                         </div>
