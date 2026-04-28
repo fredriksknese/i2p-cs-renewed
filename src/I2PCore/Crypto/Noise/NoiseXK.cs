@@ -320,7 +320,8 @@ public class NoiseXK
     /// </summary>
     public void MixHashPadding(byte[] padding)
     {
-        kdf.MixHash(padding ?? Array.Empty<byte>());
+        if (padding != null && padding.Length > 0)
+            kdf.MixHash(padding);
     }
 
     /// <summary>

@@ -53,9 +53,8 @@ public class SSU2Host : ITransportProtocol
     private bool _peerTestInProgress;
     private TickCounter LastIpReport;
     private byte[] StaticPrivateKey;
-
-    // SSU2 static keys (persistent across restarts)
     private byte[] StaticPublicKey;
+    private byte[] IntroKey;
 
     // UDP socket for sending/receiving
     private UdpClient UdpSocket;
@@ -478,7 +477,14 @@ public class SSU2Host : ITransportProtocol
                 return;
             }
 
-            var reader = new I2PBufferCursor(packetData);
+            // For packets from unknown endpoints, we must try to decrypt the header first
+            // to see if it's a SessionRequest or PeerTest.
+            // SSU2 spec: k_header_1 = k_header_2 = Bob's Intro Key (our intro key)
+            var trialDecrypted = (byte[])packetData.Clone();
+            var myIntroKey = IntroKey;
+            SSU2HeaderEncryption.DecryptLongHeaderComplete(trialDecrypted, 0, myIntroKey, myIntroKey);
+
+            var reader = new I2PBufferCursor(trialDecrypted);
             var header = SSU2Header.ParseLongHeader(reader);
 
             // Only accept SessionRequest or PeerTest for new incoming packets
@@ -506,7 +512,7 @@ public class SSU2Host : ITransportProtocol
                     Sessions[remoteEP] = session;
                 }
 
-                // Process the SessionRequest
+                // Process the SessionRequest (using the original packet, the session will decrypt it again)
                 session.ProcessReceivedPacket(packetData);
 
                 Logging.LogDebug($"SSU2Host: Created incoming session from {remoteEP}");
@@ -518,11 +524,7 @@ public class SSU2Host : ITransportProtocol
             else
             {
                 Logging.LogWarning(
-                    $"SSU2Host: Received packet type {header.Type} from unknown endpoint {remoteEP}, have {Sessions.Count} sessions");
-                lock (SessionsLock)
-                {
-                    Logging.LogWarning($"SSU2Host: Known endpoints: {string.Join(", ", Sessions.Keys)}");
-                }
+                    $"SSU2Host: Received packet type {header.Type} from unknown endpoint {remoteEP} (Trial Decryption Type: {header.Type})");
             }
         }
         catch (Exception ex)
@@ -536,7 +538,7 @@ public class SSU2Host : ITransportProtocol
         try
         {
             // PeerTest DIRECT packets (type 7) are encrypted with OUR intro key
-            var myIntroKey = StaticPublicKey;
+            var myIntroKey = IntroKey;
 
             // 1. Decrypt header (first 16 bytes are obfuscated)
             var decryptedHeader = (byte[])packetData.Clone();
@@ -645,14 +647,14 @@ public class SSU2Host : ITransportProtocol
         );
 
         // Add SSU2-specific options per spec
-        // s = base64 of intro key (32 bytes) - Bob's static public key
-        // i = base64 of intro key (same as 's' for SSU2)
+        // s = base64 of static key (32 bytes) - Bob's static public key
+        // i = base64 of intro key (32 bytes)
         // v = version (2 for SSU2)
         // caps = capabilities string
         // CRITICAL: Use I2P Base64 encoding (FreenetBase64), not standard .NET Base64!
         // I2P Base64 uses '-' and '~' instead of '+' and '/'
         addr.Options["s"] = FreenetBase64.Encode(new I2PByteBlock(StaticPublicKey));
-        addr.Options["i"] = FreenetBase64.Encode(new I2PByteBlock(StaticPublicKey)); // intro key = static key
+        addr.Options["i"] = FreenetBase64.Encode(new I2PByteBlock(IntroKey));
         addr.Options["v"] = "2";
 
         // If firewalled, include introducers
@@ -691,14 +693,26 @@ public class SSU2Host : ITransportProtocol
             return;
 
         // Try to load existing keys from persistent storage
-        var loadedKeys = TransportKeys.LoadSSU2IntroKey();
+        var loadedKeys = TransportKeys.LoadSSU2Keys();
 
         if (loadedKeys.HasValue)
         {
             // Use existing keys
             StaticPrivateKey = loadedKeys.Value.privateKey;
             StaticPublicKey = loadedKeys.Value.publicKey;
-            Logging.LogInformation("SSU2Host: Loaded intro key from persistent storage");
+            IntroKey = loadedKeys.Value.introKey;
+
+            // Generate intro key if missing (upgrade from old format)
+            if (IntroKey == null)
+            {
+                IntroKey = BufUtils.RandomBytes(32);
+                TransportKeys.SaveSSU2Keys(StaticPrivateKey, StaticPublicKey, IntroKey);
+                Logging.LogInformation("SSU2Host: Generated missing intro key during upgrade");
+            }
+            else
+            {
+                Logging.LogInformation("SSU2Host: Loaded keys from persistent storage");
+            }
         }
         else
         {
@@ -707,9 +721,11 @@ public class SSU2Host : ITransportProtocol
             StaticPrivateKey = priv;
             StaticPublicKey = pub;
 
+            IntroKey = BufUtils.RandomBytes(32);
+
             // Save to persistent storage
-            TransportKeys.SaveSSU2IntroKey(StaticPrivateKey, StaticPublicKey);
-            Logging.LogInformation("SSU2Host: Generated and saved new intro key");
+            TransportKeys.SaveSSU2Keys(StaticPrivateKey, StaticPublicKey, IntroKey);
+            Logging.LogInformation("SSU2Host: Generated and saved new SSU2 keys");
         }
     }
 
@@ -726,7 +742,11 @@ public class SSU2Host : ITransportProtocol
     internal byte[] GetMyStaticKey()
     {
         return StaticPublicKey;
-        // Alias for intro key
+    }
+
+    internal byte[] GetMyIntroKey()
+    {
+        return IntroKey;
     }
 
     internal I2PRouterInfo GetMyRouterInfo()

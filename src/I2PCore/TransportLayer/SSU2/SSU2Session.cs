@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
@@ -28,6 +29,9 @@ public class SSU2Session : ITransport
 
     private readonly SSU2Host Host;
 
+    // Queue for messages waiting for session establishment
+    private readonly ConcurrentQueue<I2NpMessage> PendingMessages = new();
+
     // Maximum payload size (adjusted for IPv4/IPv6)
     private readonly int MaxPayloadSize = SSU2FragmentHandler.MAX_PAYLOAD_SIZE_IPV6;
 
@@ -48,6 +52,7 @@ public class SSU2Session : ITransport
     // ML-KEM post-quantum hybrid state
 
     private long LastActivityTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+    private long HandshakeStartTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
     // Connection IDs
     private ulong LocalConnectionId;
@@ -72,6 +77,9 @@ public class SSU2Session : ITransport
 
     // Packet counters
     private uint SendPacketNumber;
+
+    // Selected address for outbound connection
+    private I2PRouterAddress SelectedAddress;
 
     // Constructor for outgoing connections
     public SSU2Session(SSU2Host host, I2PRouterInfo remoteRouter, bool isOutgoing)
@@ -169,7 +177,14 @@ public class SSU2Session : ITransport
     {
         if (State != SessionState.Established)
         {
-            Logging.LogWarning($"{DebugId}: Cannot send, session not established");
+            if (IsTerminated)
+            {
+                Logging.LogWarning($"{DebugId}: Cannot send, session is terminated");
+                return;
+            }
+
+            Logging.LogDebug($"{DebugId}: Session not established, enqueuing message");
+            PendingMessages.Enqueue(msg);
             return;
         }
 
@@ -209,10 +224,23 @@ public class SSU2Session : ITransport
 
     public void Tick()
     {
-        if (IsTerminated || State != SessionState.Established) return;
+        if (IsTerminated) return;
+
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        if (State != SessionState.Established)
+        {
+            // Handshake timeout (30 seconds)
+            if (now - HandshakeStartTime > 30)
+            {
+                Logging.LogWarning($"{DebugId}: Handshake timeout (30 seconds, State: {State})");
+                Terminate($"Handshake timeout (30 seconds, State: {State})");
+            }
+
+            return;
+        }
 
         // Inactivity timeout (5 minutes)
-        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         if (now - LastActivityTime > 300)
         {
             Logging.LogInformation($"{DebugId}: Inactivity timeout (5 minutes)");
@@ -285,7 +313,7 @@ public class SSU2Session : ITransport
         Logging.LogDebug(
             $"{DebugId}: Fragmenting I2NP message into {fragmentBlocks.Count} fragments ({i2npData.Length} bytes)");
 
-        var kHeader1 = Host.GetMyStaticKey();
+        var kHeader1 = IsOutgoing ? GetRemoteIntroKey() : Host.GetMyIntroKey();
 
         foreach (var blockData in fragmentBlocks)
         {
@@ -346,20 +374,21 @@ public class SSU2Session : ITransport
     private void ExtractRemoteEndpoint()
     {
         // Find SSU2 address in router info with a host and port
-        var ssu2Address = RemoteRouterInfo?.Addresses?.FirstOrDefault(a =>
+        SelectedAddress = RemoteRouterInfo?.Addresses?.FirstOrDefault(a =>
             a.TransportStyle == "SSU2"
             && a.Options.TryGet("host") != null
             && a.Options.TryGet("port") != null
             && a.Options.TryGet("s") != null
-            && (RouterContext.UseIpV6 || !IPAddress.TryParse(a.Options["host"], out var ip) ||
+            && a.Options.TryGet("i") != null
+            && (RouterContext.UseIpV6 || !IPAddress.TryParse(a.Options["host"].ToString(), out var ip) ||
                 ip.AddressFamily != AddressFamily.InterNetworkV6));
 
-        if (ssu2Address == null)
+        if (SelectedAddress == null)
             throw new ArgumentException(
                 "No suitable SSU2 address with host/port found in RouterInfo (IPv6 might be disabled)");
 
-        var host = ssu2Address.Options.TryGet("host")?.ToString();
-        var portStr = ssu2Address.Options.TryGet("port")?.ToString();
+        var host = SelectedAddress.Options.TryGet("host")?.ToString();
+        var portStr = SelectedAddress.Options.TryGet("port")?.ToString();
 
         if (string.IsNullOrEmpty(host) || string.IsNullOrEmpty(portStr))
             throw new ArgumentException("SSU2 address missing host or port");
@@ -418,21 +447,30 @@ public class SSU2Session : ITransport
 
     private byte[] GetRemoteStaticKey()
     {
-        // Extract static key from RouterInfo SSU2 address
-        var ssu2Address = RemoteRouterInfo?.Addresses?.FirstOrDefault(a =>
+        var address = SelectedAddress ?? RemoteRouterInfo?.Addresses?.FirstOrDefault(a =>
             a.Options.Contains("s") && a.TransportStyle == "SSU2");
 
-        if (ssu2Address == null || !ssu2Address.Options.Contains("s"))
+        if (address == null || !address.Options.TryGet("s", out var base64Key))
             throw new ArgumentException("No SSU2 static key in RouterInfo");
 
-        var base64Key = ssu2Address.Options["s"];
-        return FreenetBase64.Decode(base64Key);
+        return FreenetBase64.Decode(base64Key.ToString());
+    }
+
+    private byte[] GetRemoteIntroKey()
+    {
+        var address = SelectedAddress ?? RemoteRouterInfo?.Addresses?.FirstOrDefault(a =>
+            a.Options.Contains("i") && a.TransportStyle == "SSU2");
+
+        if (address == null || !address.Options.TryGet("i", out var base64Key))
+            throw new ArgumentException("No SSU2 intro key in RouterInfo");
+
+        return FreenetBase64.Decode(base64Key.ToString());
     }
 
     private void SendSessionRequest()
     {
         // Get Bob's intro key for header encryption
-        var bobIntroKey = GetRemoteStaticKey(); // Same as static key
+        var bobIntroKey = GetRemoteIntroKey();
         var kHeader1 = bobIntroKey;
         var kHeader2 = bobIntroKey;
 
@@ -536,8 +574,8 @@ public class SSU2Session : ITransport
         );
 
         // Get header keys for data phase
-        // k_header_1 = our intro key (we're sending to remote)
-        var kHeader1 = Host.GetMyStaticKey();
+        // k_header_1 = intro key of the router that published the SSU2 address.
+        var kHeader1 = IsOutgoing ? GetRemoteIntroKey() : Host.GetMyIntroKey();
 
         // Encrypt and build complete packet using data phase keys
         return dataPacket.BuildEncryptedPacket(SendDataKey, kHeader1, SendHeaderKey2);
@@ -547,12 +585,33 @@ public class SSU2Session : ITransport
     {
         try
         {
-            var reader = new I2PBufferCursor(packetData);
+            // Decrypt header for type identification
+            // SSU2 spec: long headers (Request/Created/Confirmed) are obfuscated differently than short headers (Data).
+            // We need to try long header decryption first.
+            var trialDecrypted = (byte[])packetData.Clone();
+            var kHeader1 = IsOutgoing ? GetRemoteIntroKey() : Host.GetMyIntroKey();
+            var kHeader2 = kHeader1; // Initial default for trial
 
-            // Peek at header type
-            var tempReader = new I2PBufferCursor(packetData);
-            tempReader.Seek(16); // Skip to type byte in long header
-            var type = tempReader.ReadByte();
+            // SSU2 spec: for SessionRequest, k_header_1 = k_header_2 = Bob's intro key.
+            // For others, it's more complex, but we can peek the type after decrypting with intro key.
+            SSU2HeaderEncryption.DecryptLongHeaderComplete(trialDecrypted, 0, kHeader1, kHeader2);
+
+            var reader = new I2PBufferCursor(trialDecrypted);
+            var header = SSU2Header.ParseLongHeader(reader);
+            var type = header.Type;
+
+            // If trial decryption with intro key didn't yield a valid long header type,
+            // it might be a data packet (short header).
+            if (type > 2 && type != SSU2Header.TYPE_DATA)
+            {
+                // Try short header decryption if established
+                if (State == SessionState.Established)
+                {
+                    var shortDecrypted = (byte[])packetData.Clone();
+                    SSU2HeaderEncryption.DecryptShortHeader(shortDecrypted, ReceiveHeaderKey2);
+                    type = shortDecrypted[12]; // Type at offset 12 in short header
+                }
+            }
 
             switch (type)
             {
@@ -608,7 +667,7 @@ public class SSU2Session : ITransport
         Array.Copy(packetData, 0, encryptedHeader, 0, 32);
 
         // Get our intro key for header decryption
-        var ourIntroKey = Host.GetStaticPublicKey(); // Our static public key = intro key
+        var ourIntroKey = Host.GetMyIntroKey();
 
         // For Session Request (Bob receives): k_header_1 = k_header_2 = Bob's intro key (NO derivation)
         // SSU2 spec lines 707-720
@@ -616,11 +675,15 @@ public class SSU2Session : ITransport
         var kHeader2 = ourIntroKey;
 
         // Decrypt header in place using IVs from packet end
-        SSU2HeaderEncryption.DecryptLongHeaderInPacket(packetData, 0, kHeader1, kHeader2);
+        SSU2HeaderEncryption.DecryptLongHeaderComplete(packetData, 0, kHeader1, kHeader2);
 
         // Parse header (now decrypted in packetData)
         var headerReader = new I2PBufferCursor(packetData);
         var header = SSU2Header.ParseLongHeader(headerReader);
+
+        // Extract decrypted header for Noise hashing
+        var decryptedHeader = new byte[32];
+        Array.Copy(packetData, 0, decryptedHeader, 0, 32);
 
         // Validate version and network ID
         if (!SSU2SecurityValidator.ValidateVersionAndNetId(header.Version, header.NetId))
@@ -663,7 +726,7 @@ public class SSU2Session : ITransport
         Array.Copy(packetData, 64, encryptedPayload, 0, encryptedPayloadLen);
 
         // Process Noise message 1 WITH HEADER
-        var payload = NoiseState.ProcessMessage1WithHeader(encryptedHeader, ephemeralKey, encryptedPayload);
+        var payload = NoiseState.ProcessMessage1WithHeader(decryptedHeader, ephemeralKey, encryptedPayload);
 
         if (payload == null)
         {
@@ -740,7 +803,7 @@ public class SSU2Session : ITransport
         Array.Copy(packetData, 0, encryptedHeader, 0, 32);
 
         // Get Bob's intro key for header decryption
-        var bobIntroKey = GetRemoteStaticKey();
+        var bobIntroKey = GetRemoteIntroKey();
 
         // For Session Created (Alice receives):
         // k_header_1 = bik (Bob's intro key)
@@ -751,11 +814,15 @@ public class SSU2Session : ITransport
         var kHeader2 = SSU2HeaderEncryption.DeriveSessionCreatedHeaderKey(chainingKey);
 
         // Decrypt header in place using IVs from packet end
-        SSU2HeaderEncryption.DecryptLongHeaderInPacket(packetData, 0, kHeader1, kHeader2);
+        SSU2HeaderEncryption.DecryptLongHeaderComplete(packetData, 0, kHeader1, kHeader2);
 
         // Parse header (now decrypted in packetData)
         var headerReader = new I2PBufferCursor(packetData);
         var header = SSU2Header.ParseLongHeader(headerReader);
+
+        // Extract decrypted header for Noise hashing
+        var decryptedHeader = new byte[32];
+        Array.Copy(packetData, 0, decryptedHeader, 0, 32);
 
         // Validate connection IDs
         if (header.DestinationConnectionId != LocalConnectionId)
@@ -782,7 +849,7 @@ public class SSU2Session : ITransport
         Array.Copy(packetData, 64, encryptedPayload, 0, encryptedPayloadLen);
 
         // Process Noise message 2 WITH HEADER
-        var payload = NoiseState.ProcessMessage2WithHeader(encryptedHeader, ephemeralKey, encryptedPayload);
+        var payload = NoiseState.ProcessMessage2WithHeader(decryptedHeader, ephemeralKey, encryptedPayload);
 
         if (payload == null)
         {
@@ -880,9 +947,9 @@ public class SSU2Session : ITransport
         const int SHORT_HEADER_SIZE = 16;
 
         // Decrypt header (SSU2 spec lines 1750-1776):
-        // k_header_1 = aik (our intro key - our own static key)
+        // k_header_1 = our intro key - our own static key
         // k_header_2 = HKDF(chainKey, ZEROLEN, "SessionConfirmed", 32)
-        var kHeader1 = Host.GetMyStaticKey(); // Our intro key
+        var kHeader1 = Host.GetMyIntroKey(); // Our intro key
         var chainingKey = NoiseState.GetChainingKey();
         var kHeader2 = SSU2HeaderEncryption.DeriveSessionConfirmedHeaderKey(chainingKey);
 
@@ -1002,6 +1069,7 @@ public class SSU2Session : ITransport
         Array.Copy(packetCopy, SHORT_HEADER_SIZE, encryptedStaticKey, 0, 48);
 
         // Process Noise message 3 Part 1
+        NoiseState.MixHash(header.ToByteArray()); // SSU2 spec: hash decrypted header before Part 1
         var staticKey = NoiseState.ProcessMessage3Part1(encryptedStaticKey);
 
         if (staticKey == null)
@@ -1078,6 +1146,9 @@ public class SSU2Session : ITransport
 
         // Notify connection established
         ConnectionEstablished?.Invoke(this, RemoteRouterInfo?.Identity?.IdentHash);
+
+        // Send any pending messages
+        FlushPendingMessages();
     }
 
     private void ProcessDataPacket(byte[] packetData)
@@ -1091,8 +1162,8 @@ public class SSU2Session : ITransport
         LastActivityTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
         // Get header keys for data phase
-        // k_header_1 = remote's intro key (we're receiving from remote)
-        var kHeader1 = GetRemoteStaticKey();
+        // k_header_1 = intro key of the router that published the SSU2 address.
+        var kHeader1 = IsOutgoing ? GetRemoteIntroKey() : Host.GetMyIntroKey();
 
         // Parse and decrypt data phase packet
         var dataPacket = SSU2DataPacket.Parse(packetData, ReceiveDataKey, kHeader1, ReceiveHeaderKey2);
@@ -1308,7 +1379,7 @@ public class SSU2Session : ITransport
         var attempts = 0;
 
         // Get our intro key for header encryption
-        var ourIntroKey = Host.GetStaticPublicKey();
+        var ourIntroKey = Host.GetMyIntroKey();
         var kHeader1 = ourIntroKey;
         var chainingKeyBeforeMsg2 = NoiseState.GetChainingKey();
         var kHeader2 = SSU2HeaderEncryption.DeriveSessionCreatedHeaderKey(chainingKeyBeforeMsg2);
@@ -1405,7 +1476,19 @@ public class SSU2Session : ITransport
         // Build Part 2 payload (RouterInfo block format)
         var part2Payload = confirmed.BuildPart2Payload();
 
+        // Create a canonical header for Noise hashing (spec line 1690)
+        var canonicalHeader = new SSU2Header
+        {
+            IsLongHeader = false,
+            Type = SSU2Header.TYPE_SESSION_CONFIRMED,
+            DestinationConnectionId = RemoteConnectionId,
+            PacketNumber = 0,
+            Flags0 = 0x01 // canonical flags for hashing
+        };
+        var canonicalHeaderBytes = canonicalHeader.ToByteArray();
+
         // Use Noise to create message 3
+        NoiseState.MixHash(canonicalHeaderBytes); // SSU2 spec: hash plaintext header before Part 1
         var encryptedPart1 = NoiseState.CreateMessage3Part1(); // 48 bytes: 32 static key + 16 MAC
         var encryptedPart2 = NoiseState.CreateMessage3Part2(part2Payload); // RouterInfo block + MAC
 
@@ -1423,7 +1506,7 @@ public class SSU2Session : ITransport
         var needsFragmentation = encryptedPart2.Length > maxPayloadForPart2;
 
         // Header encryption keys
-        var kHeader1 = GetRemoteStaticKey(); // Bob's intro key
+        var kHeader1 = GetRemoteIntroKey(); // Bob's intro key
         var chainingKey = NoiseState.GetChainingKey();
         var kHeader2 = SSU2HeaderEncryption.DeriveSessionConfirmedHeaderKey(chainingKey);
 
@@ -1512,6 +1595,30 @@ public class SSU2Session : ITransport
                 $"{DebugId}: SessionConfirmed fragmented: frag0={packet0.Length}B, frag1={packet1.Length}B");
         }
 
+        // Derive data phase keys using Split()
+        NoiseState.Split(IsOutgoing);
+
+        // Derive header encryption keys for data phase per spec lines 1891-1907
+        var sendKey = NoiseState.GetSendKey();
+        var receiveKey = NoiseState.GetReceiveKey();
+
+        // HKDF(key, ZEROLEN, "HKDFSSU2DataKeys", 64)
+        var sendKeyData = NoiseKDF.HKDF(sendKey, Array.Empty<byte>(),
+            Encoding.ASCII.GetBytes("HKDFSSU2DataKeys"), 64);
+        var receiveKeyData = NoiseKDF.HKDF(receiveKey, Array.Empty<byte>(),
+            Encoding.ASCII.GetBytes("HKDFSSU2DataKeys"), 64);
+
+        // k_data = keydata[0:31], k_header_2 = keydata[32:63]
+        SendDataKey = new byte[32];
+        SendHeaderKey2 = new byte[32];
+        Array.Copy(sendKeyData, 0, SendDataKey, 0, 32);
+        Array.Copy(sendKeyData, 32, SendHeaderKey2, 0, 32);
+
+        ReceiveDataKey = new byte[32];
+        ReceiveHeaderKey2 = new byte[32];
+        Array.Copy(receiveKeyData, 0, ReceiveDataKey, 0, 32);
+        Array.Copy(receiveKeyData, 32, ReceiveHeaderKey2, 0, 32);
+
         State = SessionState.Established;
 
         Logging.LogDebug($"{DebugId}: SessionConfirmed sent");
@@ -1522,6 +1629,18 @@ public class SSU2Session : ITransport
 
         // Notify connection established
         ConnectionEstablished?.Invoke(this, RemoteRouterInfo?.Identity?.IdentHash);
+
+        // Send any pending messages
+        FlushPendingMessages();
+    }
+
+    private void FlushPendingMessages()
+    {
+        while (PendingMessages.TryDequeue(out var msg))
+        {
+            Logging.LogDebug($"{DebugId}: Sending pending message {msg}");
+            Send(msg);
+        }
     }
 
     private void ParseSessionCreatedBlocks(I2PBufferCursor blocksData)

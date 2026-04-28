@@ -511,38 +511,18 @@ public class NTCP2Host : ITransportProtocol
         var myRouterInfo = RouterContext.Inst?.MyRouterInfo;
         if (myRouterInfo?.Identity?.IdentHash?.Hash != null) return myRouterInfo.Identity.IdentHash.Hash.ToByteArray();
 
-        // Second fallback: Use SHA-256 of static public key if nothing else available
-        using (var sha256 = SHA256.Create())
-        {
-            var hash = sha256.ComputeHash(StaticPublicKey);
-            Logging.LogWarning($"NTCP2Host: Identity not available, using fallback router hash based on static key! [hash={BitConverter.ToString(hash, 0, 4).Replace("-", "")}]");
-            return hash;
-        }
+        // Last resort fallback (needed during early startup)
+        // Note: Using SHA256 of static key is NOT standard, but it keeps the router 
+        // from crashing and matches previous working behavior.
+        Logging.LogWarning("NTCP2Host: Router identity hash not available yet. Using fallback hash.");
+        return SHA256.HashData(StaticPublicKey);
     }
 
-    internal int GetPublishedPQVersion()
+    internal int GetPreferredPQVersion()
     {
-        var myRI = GetMyRouterInfo();
-        if (myRI == null) return 0;
-
-        // 1. Check address options (standard for NTCP2)
-        var ntcp2Addr = myRI.Addresses?.FirstOrDefault(a =>
-            (a.TransportStyle == "NTCP2" || a.TransportStyle == "NTCP") && a.Options.Contains("v"));
-
-        if (ntcp2Addr != null)
-        {
-            if (ntcp2Addr.Options.Contains("pq") && int.TryParse(ntcp2Addr.Options["pq"], out var pq))
-                return pq;
-            if (ntcp2Addr.Options.Contains("PQ") && int.TryParse(ntcp2Addr.Options["PQ"], out var pq2))
-                return pq2;
-        }
-
-        // 2. Check global capabilities (fallback, used by some routers)
-        if (myRI.Options.Contains("pq") && int.TryParse(myRI.Options["pq"], out var gpq))
-            return gpq;
-        if (myRI.Options.Contains("PQ") && int.TryParse(myRI.Options["PQ"], out var gp2))
-            return gp2;
-
-        return 0; // PQ not advertised
+        // For Bob (responder), we use our preferred version (v4/ML-KEM-768).
+        // initiators (Alice) MUST use the version we published in our RI.
+        // Even if our RI is not fully published yet, we know we want v4.
+        return 4;
     }
 }

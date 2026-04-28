@@ -87,7 +87,7 @@ public class RouterService
     }
 
     public IEnumerable<(string Reason, int Count, IEnumerable<(string ShortId, string FullId)> Routers)>
-        GetTopFailureReasons(string transport, string direction, int topN = 10)
+        GetTopFailureReasons(string transport, string direction, int topN = 30)
     {
         return TransportConnectionLogger.Inst.GetTopFailureReasons(transport, direction, topN);
     }

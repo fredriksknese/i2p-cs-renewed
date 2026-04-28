@@ -351,11 +351,9 @@ public class TransportProvider
                 var transp = CreateTransport(ri);
                 if (transp != null)
                 {
-                    EstablishedTransports[dest] = new EstablishedTransportInfo
-                        { Transport = transp, IsEstablished = false };
-                    transp.ConnectionEstablished += (t, h) => Transport_ConnectionEstablished(t, h);
-                    transp.ConnectionException += (t, e) => Transport_ConnectionException(t, e);
-                    transp.ConnectionShutDown += t => Transport_ConnectionShutDown(t);
+                    // AddTransport already added it to EstablishedTransports
+                    // We just need to ensure the events are hooked up (if not already)
+                    // Actually, AddTransport already hooks them up.
                 }
 
                 return transp;
@@ -520,8 +518,20 @@ public class TransportProvider
                 transp = Inst.GetEstablishedTransport(dest, false);
                 if (transp != null)
                 {
-                    transp.Send(data);
-                    return true;
+                    if (Inst.EstablishedTransports.TryGetValue(dest, out var info) && info.IsEstablished)
+                    {
+                        transp.Send(data);
+                        return true;
+                    }
+
+                    // Not established yet, queue it
+                    if (info != null && !info.IsEstablished)
+                    {
+                        info.PendingMessages.Enqueue(data);
+                        Logging.LogTransport(
+                            $"TransportProvider.Send: Queued message for {dest.Id32Short} (transport connecting, {info.PendingMessages.Count} pending)");
+                        return true;
+                    }
                 }
 
                 if (NetDb.Inst.Contains(dest))

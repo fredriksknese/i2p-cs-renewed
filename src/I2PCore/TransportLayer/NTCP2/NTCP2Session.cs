@@ -97,6 +97,9 @@ public class NTCP2Session : ITransport
     // SipHash keys for frame length obfuscation
     private NTCP2SipHash SendSipHash;
 
+    // Selected address for outbound connection
+    private I2PRouterAddress SelectedAddress;
+
     // Constructor for outgoing connections
     public NTCP2Session(NTCP2Host host, I2PRouterInfo remoteRouter, bool isOutgoing)
     {
@@ -159,8 +162,9 @@ public class NTCP2Session : ITransport
         {
             try
             {
-                // Extract endpoint from RouterInfo
-                var endpoint = ExtractRemoteEndpoint();
+                // Extract endpoint from RouterInfo and store selected address
+                SelectedAddress = ExtractSelectedAddress();
+                var endpoint = GetEndpointFromAddress(SelectedAddress);
 
                 // Create TCP connection (optionally through SOCKS5 proxy)
                 TcpClient = new TcpClient();
@@ -398,7 +402,7 @@ public class NTCP2Session : ITransport
         });
     }
 
-    private IPEndPoint ExtractRemoteEndpoint()
+    private I2PRouterAddress ExtractSelectedAddress()
     {
         // Find NTCP2 address in router info
         var ntcp2Address = RemoteRouterInfo?.Addresses?.FirstOrDefault(a =>
@@ -409,8 +413,13 @@ public class NTCP2Session : ITransport
         if (ntcp2Address == null)
             throw new ArgumentException("No suitable NTCP2 address found in RouterInfo (IPv6 might be disabled)");
 
-        var host = ntcp2Address.Options["host"];
-        var port = int.Parse(ntcp2Address.Options["port"]);
+        return ntcp2Address;
+    }
+
+    private IPEndPoint GetEndpointFromAddress(I2PRouterAddress address)
+    {
+        var host = address.Options["host"];
+        var port = int.Parse(address.Options["port"]);
         var ipAddress = IPAddress.Parse(host);
 
         return new IPEndPoint(ipAddress, port);
@@ -426,9 +435,20 @@ public class NTCP2Session : ITransport
 
         var bestVersion = 0;
 
-        // 1. Check all NTCP2/NTCP addresses.
-        // Some routers publish multiple addresses (IPv4/IPv6) and might only 
-        // put the "pq" option in some of them.
+        // 1. If we have a selected address, use its options first.
+        if (SelectedAddress != null)
+        {
+            if (SelectedAddress.Options.Contains("pq") && int.TryParse(SelectedAddress.Options["pq"], out var pq))
+                bestVersion = Math.Max(bestVersion, pq);
+            if (SelectedAddress.Options.Contains("PQ") && int.TryParse(SelectedAddress.Options["PQ"], out var pq2))
+                bestVersion = Math.Max(bestVersion, pq2);
+            if (int.TryParse(SelectedAddress.Options["v"], out var version) && version >= 3 && version <= 5)
+                bestVersion = Math.Max(bestVersion, version);
+        }
+
+        if (bestVersion > 0) return bestVersion;
+
+        // 2. Fallback: check all NTCP2/NTCP addresses if no selected address or it had no PQ options.
         if (RemoteRouterInfo.Addresses != null)
             foreach (var addr in RemoteRouterInfo.Addresses)
                 if ((addr.TransportStyle == "NTCP2" || addr.TransportStyle == "NTCP") && addr.Options.Contains("v"))
@@ -494,7 +514,7 @@ public class NTCP2Session : ITransport
         // i2pd rejects PQ sessions from routers without an ML-KEM crypto type
         // (see i2pd NTCP2.cpp ProcessSessionRequestMessage: m_CryptoType check).
         PQVersion = DetectRemotePQVersion();
-        var ourPQVersion = Host.GetPublishedPQVersion();
+        var ourPQVersion = Host.GetPreferredPQVersion();
         IsPQ = ourPQVersion >= 3 && PQVersion >= 3 && PQVersion <= 5;
         Logging.LogDebug(
             $"{DebugId}: InitializeNoiseAsAlice: remotePQVersion={PQVersion}, ourPQVersion={ourPQVersion}, IsPQSession={IsPQ}");
@@ -521,9 +541,8 @@ public class NTCP2Session : ITransport
 
     private byte[] GetRemoteStaticKey()
     {
-        // Extract static key from RouterInfo address.
-        // Spec line 1348: can be published as "NTCP" or "NTCP2".
-        var address = RemoteRouterInfo?.Addresses?.FirstOrDefault(a =>
+        // Use selected address if available, otherwise fallback to FirstOrDefault
+        var address = SelectedAddress ?? RemoteRouterInfo?.Addresses?.FirstOrDefault(a =>
             (a.TransportStyle == "NTCP2" || a.TransportStyle == "NTCP") && a.Options.Contains("s"));
 
         if (address == null || !address.Options.Contains("s"))
@@ -535,9 +554,8 @@ public class NTCP2Session : ITransport
 
     private byte[] GetRemoteIV()
     {
-        // Extract IV from RouterInfo address.
-        // Spec line 1348: can be published as "NTCP" or "NTCP2".
-        var address = RemoteRouterInfo?.Addresses?.FirstOrDefault(a =>
+        // Use selected address if available, otherwise fallback to FirstOrDefault
+        var address = SelectedAddress ?? RemoteRouterInfo?.Addresses?.FirstOrDefault(a =>
             (a.TransportStyle == "NTCP2" || a.TransportStyle == "NTCP") && a.Options.Contains("i"));
 
         if (address == null || !address.Options.Contains("i"))
@@ -550,11 +568,12 @@ public class NTCP2Session : ITransport
     private void SendSessionRequest()
     {
         // Build options block for SessionRequest payload
-        // Choose a random padding length. 
         // 0.9.69 allows up to 880 bytes for SessionRequest.
-        // i2pd picks padding based on handshake size; we keep it reasonable (0-256)
+        // i2pd picks padding based on handshake size.
+        // For PQ (ML-KEM-768), Message 1 is ~1264 bytes. 
+        // We limit padding to 64 bytes to stay within MTU (1500) and avoid fragmentation.
         var rng = new Random();
-        var paddingLen = rng.Next(0, 257);
+        var paddingLen = rng.Next(0, 65);
 
         // NTCP2 Spec line 392: limit to 287 bytes total for NTCP style addresses.
         // (32 bytes X + 32 bytes encrypted options/MAC = 64 bytes)
@@ -609,24 +628,31 @@ public class NTCP2Session : ITransport
         var padding = paddingLen > 0 ? new byte[paddingLen] : Array.Empty<byte>();
         if (paddingLen > 0) rng.NextBytes(padding);
 
-        // Send to TCP stream
-        var stream = TcpClient.GetStream();
-        stream.Write(obfuscatedKey, 0, obfuscatedKey.Length);
+        // Per NTCP2 spec line 391: Alice SHOULD buffer and then flush Message 1 together
+        var totalMsg1Size = obfuscatedKey.Length + (encryptedPQFrame?.Length ?? 0) + encryptedPayload.Length + paddingLen;
+        var totalMsg1 = new byte[totalMsg1Size];
+        var writer = new I2PBufferCursor(totalMsg1);
+
+        writer.WriteBytes(obfuscatedKey);
 
         // Store AES state for Message 2 deobfuscation
         AESStateAfterMsg1 = new byte[16];
         Array.Copy(obfuscatedKey, 16, AESStateAfterMsg1, 0, 16);
 
-        if (IsPQ && encryptedPQFrame != null) stream.Write(encryptedPQFrame, 0, encryptedPQFrame.Length);
-        stream.Write(encryptedPayload, 0, encryptedPayload.Length);
+        if (IsPQ && encryptedPQFrame != null) writer.WriteBytes(encryptedPQFrame);
+        writer.WriteBytes(encryptedPayload);
 
-        if (paddingLen > 0) stream.Write(padding, 0, padding.Length);
+        if (paddingLen > 0) writer.WriteBytes(padding);
+
         // Per NTCP2 spec lines 586-596: Alice must MixHash padding after sending Message 1
         NoiseState.MixHashPadding(padding);
 
+        // Send to TCP stream
+        var stream = TcpClient.GetStream();
+        stream.Write(totalMsg1, 0, totalMsg1.Length);
         stream.Flush();
 
-        BytesSent += obfuscatedKey.Length + (encryptedPQFrame?.Length ?? 0) + encryptedPayload.Length + paddingLen;
+        BytesSent += totalMsg1.Length;
 
         Logging.LogInformation(
             $"{DebugId}: SessionRequest sent ({BytesSent} total bytes) to {TcpClient.Client.RemoteEndPoint}");
@@ -654,15 +680,15 @@ public class NTCP2Session : ITransport
         myRouterInfo.Write(riStream);
         CachedMyRouterInfoBytes = riStream.WrittenSpan.ToArray();
 
-        // Calculate total payload size (without MAC - that's added by Noise)
+        // Calculate total payload size (including 16-byte MAC)
         // RI Format: type (1) + length (2) + flood flag (1) + RouterInfo data
         var totalPart2PayloadSize = 1 + 2 + 1 + CachedMyRouterInfoBytes.Length;
 
         // Options Format: type (1) + length (2) + options data (12)
         totalPart2PayloadSize += 1 + 2 + 12;
 
-        // i2pd compatibility: m3p2len in options block must INCLUDE the 16-byte MAC.
-        // Spec says including, and i2pd's m3p2Len = bufLen + 4 + 16.
+        // NTCP2 spec line 440: m3p2len is the length of message 3 part 2,
+        // which includes the 16-byte MAC.
         CachedM3P2Len = (ushort)(totalPart2PayloadSize + 16);
 
         writer.WriteByte((byte)I2PConstants.I2PNetworkId); // NetworkId (byte 0)
@@ -867,7 +893,7 @@ public class NTCP2Session : ITransport
             var isPQ = (ephemeralKey[31] & 0x80) != 0;
 
             // Only accept PQ if we support it and have a version published
-            var ourPQVersion = Host.GetPublishedPQVersion();
+            var ourPQVersion = Host.GetPreferredPQVersion();
 
             if (isPQ && ourPQVersion == 0)
             {
@@ -884,13 +910,9 @@ public class NTCP2Session : ITransport
 
             if (acceptPQ)
             {
-                // Detect PQ version from received buffer size
-                // Alice (initiator) chooses a version from Bob's published RI.
-                // We published ourPQVersion, but we should detect what she actually used.
-                // Min sizes (without padding): v3=880, v4=1264, v5=1648.
-                if (ReceiveBufferPos >= 1648) PQVersion = 5;
-                else if (ReceiveBufferPos >= 1264) PQVersion = 4;
-                else PQVersion = 3;
+                // Bob (responder) uses his published version as the "Source of Truth".
+                // initiators (Alice) MUST use the version published in Bob's RI.
+                PQVersion = ourPQVersion;
 
                 pqKeyLen = PQVersion switch
                 {
@@ -1122,11 +1144,18 @@ public class NTCP2Session : ITransport
 
             // If AEAD verification fails, this returns null
             var options = tempNoise.ProcessMessage1(noiseKey, payloadWithMac);
-            return options != null;
+            if (options != null)
+            {
+                Logging.LogDebug($"{DebugId}: TryDecryptAsNonPQ SUCCESS - bit 7 was indeed false positive.");
+                return true;
+            }
+
+            Logging.LogDebug($"{DebugId}: TryDecryptAsNonPQ failed (AEAD mismatch). Bit 7 likely REAL PQ signal.");
+            return false;
         }
         catch (Exception ex)
         {
-            Logging.LogDebug($"{DebugId}: TryDecryptAsNonPQ failed: {ex.Message}");
+            Logging.LogDebug($"{DebugId}: TryDecryptAsNonPQ failed with exception: {ex.Message}");
             return false;
         }
     }

@@ -46,8 +46,11 @@ public class NoiseKDF
         Array.Copy(Hash, ChainingKey, HashLength);
 
         // NTCP2 and SSU2 follow standard Noise: MixHash(prologue) even when empty.
-        // This differs from ECIES/Ratchet (NoiseProtocol) which skips it.
-        MixHash(Array.Empty<byte>());
+        // Spec: h = HASH(h || prologue). If prologue is empty, h = HASH(h).
+        using (var sha256 = SHA256.Create())
+        {
+            Hash = sha256.ComputeHash(Hash);
+        }
 
         // Debug logging
         Logging.LogDebugData($"NoiseKDF InitializeSymmetric: protocolName length={protocolName.Length}");
@@ -61,6 +64,8 @@ public class NoiseKDF
     /// </summary>
     public void MixHash(byte[] data)
     {
+        if (data == null || data.Length == 0) return;
+
         using (var sha256 = SHA256.Create())
         {
             var dataLen = data?.Length ?? 0;

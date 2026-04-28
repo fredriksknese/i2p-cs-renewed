@@ -85,62 +85,79 @@ public static class TransportKeys
     }
 
     /// <summary>
-    ///     Load SSU2 intro key from persistent storage
-    ///     Returns (introPrivateKey, introPublicKey) or null if not found
+    ///     Load SSU2 keys from persistent storage
+    ///     Returns (staticPrivateKey, staticPublicKey, introKey) or null if not found
     /// </summary>
-    public static (byte[] privateKey, byte[] publicKey)? LoadSSU2IntroKey()
+    public static (byte[] privateKey, byte[] publicKey, byte[] introKey)? LoadSSU2Keys()
     {
         try
         {
-            var keyFile = Path.Combine(KeysDirectory, "ssu2_intro_key.dat");
+            var keyFile = Path.Combine(KeysDirectory, "ssu2_keys.dat");
             if (!File.Exists(keyFile))
-                return null;
+            {
+                // Fallback to old file name for backward compatibility
+                var oldFile = Path.Combine(KeysDirectory, "ssu2_intro_key.dat");
+                if (File.Exists(oldFile))
+                {
+                    keyFile = oldFile;
+                }
+                else
+                {
+                    return null;
+                }
+            }
 
             var data = File.ReadAllBytes(keyFile);
-            if (data.Length != 64) // privKey + pubKey
+            if (data.Length != 64 && data.Length != 96) // (privKey + pubKey) or (privKey + pubKey + introKey)
             {
-                Logging.LogWarning($"SSU2 intro key file corrupted (expected 64 bytes, got {data.Length})");
+                Logging.LogWarning($"SSU2 key file corrupted (expected 64 or 96 bytes, got {data.Length})");
                 return null;
             }
 
             var privateKey = new byte[32];
             var publicKey = new byte[32];
+            var introKey = data.Length == 96 ? new byte[32] : null;
 
             Array.Copy(data, 0, privateKey, 0, 32);
             Array.Copy(data, 32, publicKey, 0, 32);
+            if (introKey != null)
+                Array.Copy(data, 64, introKey, 0, 32);
 
-            Logging.LogInformation("SSU2 intro key loaded from persistent storage");
-            return (privateKey, publicKey);
+            Logging.LogInformation("SSU2 keys loaded from persistent storage");
+            return (privateKey, publicKey, introKey);
         }
         catch (Exception ex)
         {
-            Logging.LogWarning($"Failed to load SSU2 intro key: {ex.Message}");
+            Logging.LogWarning($"Failed to load SSU2 keys: {ex.Message}");
             return null;
         }
     }
 
     /// <summary>
-    ///     Save SSU2 intro key to persistent storage
+    ///     Save SSU2 keys to persistent storage
     /// </summary>
-    public static void SaveSSU2IntroKey(byte[] privateKey, byte[] publicKey)
+    public static void SaveSSU2Keys(byte[] privateKey, byte[] publicKey, byte[] introKey)
     {
         try
         {
-            if (privateKey.Length != 32 || publicKey.Length != 32)
+            if (privateKey.Length != 32 || publicKey.Length != 32 || (introKey != null && introKey.Length != 32))
                 throw new ArgumentException("Invalid key sizes");
 
-            var keyFile = Path.Combine(KeysDirectory, "ssu2_intro_key.dat");
-            var data = new byte[64]; // 32 + 32
+            var keyFile = Path.Combine(KeysDirectory, "ssu2_keys.dat");
+            var size = introKey == null ? 64 : 96;
+            var data = new byte[size];
 
             Array.Copy(privateKey, 0, data, 0, 32);
             Array.Copy(publicKey, 0, data, 32, 32);
+            if (introKey != null)
+                Array.Copy(introKey, 0, data, 64, 32);
 
             File.WriteAllBytes(keyFile, data);
-            Logging.LogInformation("SSU2 intro key saved to persistent storage");
+            Logging.LogInformation("SSU2 keys saved to persistent storage");
         }
         catch (Exception ex)
         {
-            Logging.LogWarning($"Failed to save SSU2 intro key: {ex.Message}");
+            Logging.LogWarning($"Failed to save SSU2 keys: {ex.Message}");
         }
     }
 }

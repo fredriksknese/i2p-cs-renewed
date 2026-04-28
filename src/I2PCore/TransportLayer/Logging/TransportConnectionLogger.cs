@@ -140,7 +140,7 @@ public class TransportConnectionLogger
     ///     Get the top N failure reasons for a given transport and direction.
     /// </summary>
     public IEnumerable<(string Reason, int Count, IEnumerable<(string ShortId, string FullId)> Routers)>
-        GetTopFailureReasons(string transport, string direction, int topN = 10)
+        GetTopFailureReasons(string transport, string direction, int topN = 30)
     {
         ConcurrentQueue<FailureEntry> queue;
         if (transport == "NTCP2")
