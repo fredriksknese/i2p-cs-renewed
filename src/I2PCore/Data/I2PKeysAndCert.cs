@@ -16,6 +16,14 @@ public class I2PKeysAndCert : I2PType, IEquatable<I2PKeysAndCert>
         Data.Randomize();
 
         Certificate = signkey.Certificate;
+
+        // The signing certificate may not carry the encryption key type.
+        // Ensure the stored Key Certificate has the correct KeyPublicKeyType
+        // so that PrivateKeyLength is correct when the destination is
+        // serialized and later deserialized.
+        if (Certificate.CType == I2PCertificate.CertTypes.Key)
+            Certificate.KeyPublicKeyType = pubkey.Certificate.KeyPublicKeyType;
+
         PublicKey = pubkey;
         SigningPublicKey = signkey;
     }

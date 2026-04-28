@@ -67,6 +67,7 @@ public class Garlic : I2PType
 
     private void ParseData(I2PBufferCursor reader)
     {
+        Cloves.Clear();
         var startPos = reader.Position;
 
         var cloves = reader.ReadByte();

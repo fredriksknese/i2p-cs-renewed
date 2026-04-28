@@ -130,7 +130,13 @@ public class SessionManager
         }
     }
 
-    public Garlic DecryptMessage(GarlicMessage message)
+    /// <param name="suppressTunnelPageLog">
+    ///     When true, decrypt failures are NOT logged to the tunnel page.
+    ///     Used for messages arriving via inbound tunnels, which are almost
+    ///     always router-level garlic (build replies, NetDB) that can't be
+    ///     decrypted by the client SKM. Only loopback failures are logged.
+    /// </param>
+    public Garlic DecryptMessage(GarlicMessage message, bool suppressTunnelPageLog = false)
     {
         var msgData = message.EgData.ToByteArray();
 
@@ -142,9 +148,9 @@ public class SessionManager
             {
                 Logging.LogDebug(
                     $"{Context}: DecryptMessage: ECIES decrypt OK (NewSession={eciesResult.IsNewSession}, Reply={eciesResult.IsHandshakeReply})");
-                HttpProxyLogger.Inst.Log("GARLIC", Context?.Destination?.IdentHash?.Id32Short ?? "?",
-                    "Decrypted",
-                    $"ECIES garlic decrypted (NewSession={eciesResult.IsNewSession}, Reply={eciesResult.IsHandshakeReply}, len={msgData.Length})");
+                Context.Log("Decrypted",
+                    $"ECIES garlic decrypted (NewSession={eciesResult.IsNewSession}, Reply={eciesResult.IsHandshakeReply}, len={msgData.Length})",
+                    eciesResult.RemoteDestination?.Id32Short);
                 if (eciesResult.IsNewSession)
                 {
                     var session = GetSession(eciesResult.RemoteDestination);
@@ -161,11 +167,41 @@ public class SessionManager
             }
 
             var (inbound, outbound) = EciesManager.SessionCounts;
-            // Log to proxy page only when we have active outbound sessions (expecting replies)
-            if (outbound > 0)
-                HttpProxyLogger.Inst.Log("GARLIC", Context?.Destination?.IdentHash?.Id32Short ?? "?",
-                    "Error",
+
+            // Only log failures to the tunnel page for loopback deliveries (not tunnel-delivered
+            // router-level garlic that is just noise on the client destination's page).
+            if (!suppressTunnelPageLog)
+            {
+                Context.Log("Error",
                     $"ECIES decrypt failed: {eciesResult.Error ?? "?"} (len={msgData.Length}, sessions: in={inbound} out={outbound})");
+
+                // Diagnostic: show key fingerprint, message fingerprint, and step-4 detail
+                if (msgData.Length > 100)
+                {
+                    var myPubFp = BitConverter.ToString(EciesManager.LocalStaticPublicKey, 0, 8);
+                    var msgFp = BitConverter.ToString(msgData, 0, 8);
+                    Context.Log("Debug",
+                        $"Decrypt FAIL: my pubkey [{myPubFp}], msg[0:8]=[{msgFp}], len={msgData.Length}");
+
+                    if (eciesResult.Error != null && msgData.Length > 500)
+                    {
+                        Context.Log("Debug",
+                            $"Step4 detail: {eciesResult.Error} | variants tried for len={msgData.Length}: " +
+                            $"MLKEM1024={msgData.Length >= 1680}, MLKEM768={msgData.Length >= 1296}, MLKEM512={msgData.Length >= 912}");
+
+                        if (msgData.Length >= 32)
+                        {
+                            var ephEncoded = new byte[32];
+                            Array.Copy(msgData, 0, ephEncoded, 0, 32);
+                            var ephDecoded = Crypto.Elligator2.Decode(ephEncoded);
+                            var decodedFp = ephDecoded != null ? BitConverter.ToString(ephDecoded, 0, 8) : "NULL";
+                            Context.Log("Debug",
+                                $"Elligator2 diag: encoded[0:8]=[{BitConverter.ToString(ephEncoded, 0, 8)}] decoded[0:8]=[{decodedFp}]");
+                        }
+                    }
+                }
+            }
+
             Logging.LogDebug(
                 $"{Context}: DecryptMessage: ECIES failed: {eciesResult.Error ?? "?"} (len={msgData.Length}, sessions: in={inbound} out={outbound})");
         }
@@ -296,33 +332,36 @@ public class SessionManager
     {
         var sess = GetSession(dest);
 
-        if (sess?.RemoteLeaseSet is null)
+        // For local destinations, always get the latest keys — the ECIES
+        // session keys are regenerated each time the process starts, so a
+        // cached LeaseSet from a previous run would have stale keys.
+        var localDest = Router.GetClientDestination(dest);
+        if (localDest != null)
         {
-            var localDest = Router.GetClientDestination(dest);
-            if (localDest != null)
+            if (localDest.SignedLeases != null)
             {
-                if (localDest.SignedLeases != null)
-                {
-                    sess.LeaseSetReceived(localDest.SignedLeases);
-                    return localDest.SignedLeases;
-                }
-
-                // Synthetic LeaseSet for local bypass
-                var keys = localDest.MySessions.PublicKeys;
-                if (keys != null && keys.Any())
-                {
-                    Logging.LogDebug($"{Context}: Sessions: Creating synthetic LeaseSet for local {dest.Id32Short}");
-                    var synthetic = new I2PLeaseSet2(
-                        localDest.Destination,
-                        new List<I2PLease2>(),
-                        keys,
-                        localDest.Destination.SigningPublicKey,
-                        null);
-                    sess.LeaseSetReceived(synthetic);
-                    return synthetic;
-                }
+                sess.LeaseSetReceived(localDest.SignedLeases);
+                return localDest.SignedLeases;
             }
 
+            // Synthetic LeaseSet for local bypass
+            var keys = localDest.MySessions.PublicKeys;
+            if (keys != null && keys.Any())
+            {
+                Logging.LogDebug($"{Context}: Sessions: Creating synthetic LeaseSet for local {dest.Id32Short}");
+                var synthetic = new I2PLeaseSet2(
+                    localDest.Destination,
+                    new List<I2PLease2>(),
+                    keys,
+                    localDest.Destination.SigningPublicKey,
+                    null);
+                sess.LeaseSetReceived(synthetic);
+                return synthetic;
+            }
+        }
+
+        if (sess?.RemoteLeaseSet is null)
+        {
             var cachedls = NetDb.Inst.FindLeaseSet(dest);
             if (cachedls != null)
             {

@@ -29,11 +29,13 @@ public class ECIESSessionKeyManager
     private readonly ConcurrentDictionary<SessionTag, I2PIdentHash> _handshakeTagToDestination;
 
     // Session storage
-    private readonly ConcurrentDictionary<I2PIdentHash, ECIESInboundSession> _inboundSessions;
+    private readonly ConcurrentDictionary<I2PIdentHash, ECIESSession> _sessions;
     private readonly I2PDestination _localDestination;
     private readonly byte[] _localStaticPrivateKey;
     private readonly byte[] _localStaticPublicKey;
-    private readonly ConcurrentDictionary<I2PIdentHash, ECIESOutboundSession> _outboundSessions;
+
+    /// <summary>Exposed for diagnostics only.</summary>
+    internal byte[] LocalStaticPublicKey => _localStaticPublicKey;
 
     // Tag lookup (16 bytes tag -> session)
     private readonly ConcurrentDictionary<SessionTag, I2PIdentHash> _tagToDestination;
@@ -76,8 +78,7 @@ public class ECIESSessionKeyManager
         _localStaticPrivateKey = localStaticPrivateKey;
         _localStaticPublicKey = localStaticPublicKey;
 
-        _inboundSessions = new ConcurrentDictionary<I2PIdentHash, ECIESInboundSession>();
-        _outboundSessions = new ConcurrentDictionary<I2PIdentHash, ECIESOutboundSession>();
+        _sessions = new ConcurrentDictionary<I2PIdentHash, ECIESSession>();
         _tagToDestination = new ConcurrentDictionary<SessionTag, I2PIdentHash>();
         _handshakeTagToDestination = new ConcurrentDictionary<SessionTag, I2PIdentHash>();
     }
@@ -86,7 +87,7 @@ public class ECIESSessionKeyManager
     ///     Get session counts
     /// </summary>
     public (int inbound, int outbound) SessionCounts =>
-        (_inboundSessions.Count, _outboundSessions.Count);
+        (_sessions.Count(s => s.Value.IsEstablished), _sessions.Count(s => !s.Value.IsEstablished));
 
     /// <summary>
     ///     Create a new outbound session and generate New Session message
@@ -106,10 +107,10 @@ public class ECIESSessionKeyManager
         if (payload == null)
             throw new ArgumentNullException(nameof(payload));
 
-        // Create or get outbound session
-        var session = _outboundSessions.GetOrAdd(remoteHash, _ =>
+        // Create or get session
+        var session = _sessions.GetOrAdd(remoteHash, _ =>
         {
-            return new ECIESOutboundSession(
+            return new ECIESSession(
                 _localDestination,
                 remoteHash,
                 remotePublicKey,
@@ -154,9 +155,9 @@ public class ECIESSessionKeyManager
 
                 var remoteHash = GetRemoteHash(remoteStaticKey);
 
-                var session = _inboundSessions.GetOrAdd(remoteHash, _ =>
+                var session = _sessions.GetOrAdd(remoteHash, _ =>
                 {
-                    return new ECIESInboundSession(
+                    return new ECIESSession(
                         _localDestination,
                         remoteStaticKey,
                         _localStaticPrivateKey,
@@ -164,14 +165,20 @@ public class ECIESSessionKeyManager
                         variant);
                 });
 
-                var reply = session.CreateNewSessionReply(messageData, replyPayload, out _, out var sendK, out var ck);
+                Logging.LogDebug($"ECIESSessionKeyManager.ProcessNewSession: Handled hybrid variant {variant} for {remoteHash.Id32Short}");
+
+                var reply = session.CreateNewSessionReply(messageData, replyPayload, out _, out _);
                 foreach (var tag in session.InboundTags) _tagToDestination.TryAdd(tag, remoteHash);
-                EstablishOutboundSession(remoteHash, sendK, ck);
 
                 return (payload, reply);
             }
-            catch { /* Try next variant or fallback */ }
+            catch (Exception ex)
+            {
+                Logging.LogDebug($"ECIESSessionKeyManager.ProcessNewSession: Hybrid variant {variant} failed: {ex.Message}");
+            }
         }
+
+        Logging.LogDebug($"ECIESSessionKeyManager.ProcessNewSession: Falling back to standard IK (len={messageData.Length})");
 
         // Fallback to standard X25519
         try
@@ -181,18 +188,19 @@ public class ECIESSessionKeyManager
 
             var remoteHash = GetRemoteHash(remoteStaticKey);
 
-            var session = _inboundSessions.GetOrAdd(remoteHash, _ =>
+            var session = _sessions.GetOrAdd(remoteHash, _ =>
             {
-                return new ECIESInboundSession(
+                return new ECIESSession(
                     _localDestination,
                     remoteStaticKey,
                     _localStaticPrivateKey,
                     _localStaticPublicKey);
             });
 
-            var reply = session.CreateNewSessionReply(messageData, replyPayload, out _, out var sendK, out var ck);
+            Logging.LogDebug($"ECIESSessionKeyManager.ProcessNewSession: Handled standard IK for {remoteHash.Id32Short}");
+
+            var reply = session.CreateNewSessionReply(messageData, replyPayload, out _, out _);
             foreach (var tag in session.InboundTags) _tagToDestination.TryAdd(tag, remoteHash);
-            EstablishOutboundSession(remoteHash, sendK, ck);
 
             return (payload, reply);
         }
@@ -208,8 +216,7 @@ public class ECIESSessionKeyManager
     /// </summary>
     public byte[] ProcessNewSessionReply(
         I2PIdentHash remoteDestination,
-        byte[] replyData,
-        List<SessionTag> tags = null)
+        byte[] replyData)
     {
         if (remoteDestination == null)
             throw new ArgumentNullException(nameof(remoteDestination));
@@ -217,10 +224,10 @@ public class ECIESSessionKeyManager
         if (replyData == null)
             throw new ArgumentNullException(nameof(replyData));
 
-        if (!_outboundSessions.TryGetValue(remoteDestination, out var session))
-            throw new InvalidOperationException($"No outbound session for {remoteDestination.Id32Short}");
+        if (!_sessions.TryGetValue(remoteDestination, out var session))
+            throw new InvalidOperationException($"No session for {remoteDestination.Id32Short}");
 
-        return session.ProcessNewSessionReply(replyData, tags);
+        return session.ProcessNewSessionReply(replyData);
     }
 
     /// <summary>
@@ -236,8 +243,8 @@ public class ECIESSessionKeyManager
         if (payload == null)
             throw new ArgumentNullException(nameof(payload));
 
-        if (!_outboundSessions.TryGetValue(remoteDestination, out var session))
-            throw new InvalidOperationException($"No outbound session for {remoteDestination.Id32Short}");
+        if (!_sessions.TryGetValue(remoteDestination, out var session))
+            throw new InvalidOperationException($"No session for {remoteDestination.Id32Short}");
 
         return session.CreateExistingSessionMessage(payload);
     }
@@ -275,17 +282,20 @@ public class ECIESSessionKeyManager
         }
 
         // 3. Try as hybrid handshake reply (no tag)
-        foreach (var sess in _outboundSessions.Values)
+        var hybridWaiting = 0;
+        foreach (var sess in _sessions.Values)
         {
             if (sess.IsHybridWaitingForReply)
             {
+                hybridWaiting++;
                 try
                 {
                     var payload = sess.ProcessNewSessionReply(message);
-                    
-                    // Register deterministic handshake tags for this session
-                    foreach (var tag in sess.HandshakeTags) _tagToDestination[tag] = sess.RemoteHash;
 
+                    // Register deterministic handshake tags for this session
+                    foreach (var tag in sess.InboundTags) _tagToDestination[tag] = sess.RemoteHash;
+
+                    Logging.LogDebug($"ECIESSessionKeyManager: Step 3 matched hybrid reply for {sess.RemoteHash?.Id32Short}");
                     return new ProcessedDestinationMessage
                     {
                         Success = true,
@@ -299,6 +309,9 @@ public class ECIESSessionKeyManager
             }
         }
 
+        if (message.Length > 500)
+            Logging.LogDebug($"ECIESSessionKeyManager.ProcessMessage: Step 3 tried {hybridWaiting} hybrid sessions, none matched (len={message.Length}). Trying step 4 (NewSession).");
+
         // 4. Try as new session message
         var newSessionResult = ProcessNewSessionMessage(message);
         if (newSessionResult.Success)
@@ -311,9 +324,9 @@ public class ECIESSessionKeyManager
 
     private void EstablishInboundSession(ProcessedDestinationMessage result, byte[] messageData)
     {
-        _inboundSessions.GetOrAdd(result.RemoteDestination, _ =>
+        _sessions.GetOrAdd(result.RemoteDestination, _ =>
         {
-            return new ECIESInboundSession(
+            return new ECIESSession(
                 _localDestination,
                 result.RemoteStaticKey,
                 _localStaticPrivateKey,
@@ -329,15 +342,15 @@ public class ECIESSessionKeyManager
         I2PIdentHash remoteHash,
         byte[] message)
     {
-        if (!_outboundSessions.TryGetValue(remoteHash, out var session))
-            return new ProcessedDestinationMessage { Success = false, Error = "Outbound session not found" };
+        if (!_sessions.TryGetValue(remoteHash, out var session))
+            return new ProcessedDestinationMessage { Success = false, Error = "Session not found" };
 
         try
         {
-            var payload = session.ProcessNewSessionReply(message, null);
+            var payload = session.ProcessNewSessionReply(message);
 
             // Register deterministic handshake tags for this session
-            foreach (var tag in session.HandshakeTags) _tagToDestination[tag] = remoteHash;
+            foreach (var tag in session.InboundTags) _tagToDestination[tag] = remoteHash;
 
             return new ProcessedDestinationMessage
             {
@@ -361,7 +374,7 @@ public class ECIESSessionKeyManager
         I2PIdentHash remoteHash,
         byte[] message)
     {
-        if (!_inboundSessions.TryGetValue(remoteHash, out var session))
+        if (!_sessions.TryGetValue(remoteHash, out var session))
             return new ProcessedDestinationMessage
             {
                 Success = false,
@@ -402,11 +415,20 @@ public class ECIESSessionKeyManager
         if (message.Length >= 1296) variants.Add(NoiseIKhfs.KEMVariant.MLKEM768);
         if (message.Length >= 912) variants.Add(NoiseIKhfs.KEMVariant.MLKEM512);
 
+        var errors = new List<string>();
+
         foreach (var variant in variants)
         {
             try
             {
                 var hybridMsg = ECIESHybridNewSessionMessage.Parse(message, variant);
+
+                // Diagnostic: test Elligator2 decode of the ephemeral key
+                var ephDecoded = Crypto.Elligator2.Decode(hybridMsg.EphemeralPublicKey);
+                var ephFp = ephDecoded != null ? BitConverter.ToString(ephDecoded, 0, Math.Min(8, ephDecoded.Length)) : "NULL";
+                var ephEncFp = BitConverter.ToString(hybridMsg.EphemeralPublicKey, 0, 8);
+                Logging.LogInformation($"ProcessNewSessionMessage: {variant} ephemeral encoded=[{ephEncFp}] decoded=[{ephFp}] decodedLen={ephDecoded?.Length ?? -1}");
+
                 var (payload, remoteStaticKey, remoteKemPublicKey) = hybridMsg.Decrypt(
                     _localStaticPrivateKey, _localStaticPublicKey, variant);
 
@@ -424,7 +446,10 @@ public class ECIESSessionKeyManager
                     KEMVariant = variant
                 };
             }
-            catch { /* Try next variant or fallback */ }
+            catch (Exception ex)
+            {
+                errors.Add($"{variant}:{ex.GetType().Name}:{ex.Message}");
+            }
         }
 
         // Fallback to standard X25519
@@ -447,10 +472,11 @@ public class ECIESSessionKeyManager
         }
         catch (Exception ex)
         {
+            errors.Add($"IK:{ex.GetType().Name}:{ex.Message}");
             return new ProcessedDestinationMessage
             {
                 Success = false,
-                Error = ex.Message
+                Error = $"All variants failed: [{string.Join(" | ", errors)}]"
             };
         }
     }
@@ -463,9 +489,10 @@ public class ECIESSessionKeyManager
     {
         if (temporaryHash == null || realHash == null || temporaryHash == realHash) return;
 
-        if (_inboundSessions.TryRemove(temporaryHash, out var session))
+        if (_sessions.TryRemove(temporaryHash, out var session))
         {
-            _inboundSessions[realHash] = session;
+            _sessions[realHash] = session;
+            session.RemoteHash = realHash;
 
             // Move tags
             foreach (var kvp in _tagToDestination.ToArray())
@@ -478,11 +505,6 @@ public class ECIESSessionKeyManager
 
             Logging.LogDebug(
                 $"ECIESSessionKeyManager: Confirmed remote hash: {temporaryHash.Id32Short} -> {realHash.Id32Short}");
-        }
-
-        if (_outboundSessions.TryRemove(temporaryHash, out var outSession))
-        {
-            _outboundSessions.TryAdd(realHash, outSession);
         }
     }
 
@@ -509,25 +531,15 @@ public class ECIESSessionKeyManager
     {
         var now = DateTime.UtcNow;
 
-        // Clean up inbound sessions
-        var expiredInbound = _inboundSessions
+        // Clean up sessions
+        var expired = _sessions
             .Where(kvp => (now - kvp.Value.LastUsed).TotalMinutes > SessionExpirationMinutes)
             .Select(kvp => kvp.Key)
             .ToList();
 
-        foreach (var hash in expiredInbound)
-            if (_inboundSessions.TryRemove(hash, out var session))
-                session.Cleanup();
-
-        // Clean up outbound sessions
-        var expiredOutbound = _outboundSessions
-            .Where(kvp => (now - kvp.Value.LastUsed).TotalMinutes > SessionExpirationMinutes)
-            .Select(kvp => kvp.Key)
-            .ToList();
-
-        foreach (var hash in expiredOutbound)
-            if (_outboundSessions.TryRemove(hash, out var session))
-                session.Cleanup();
+        foreach (var hash in expired)
+            if (_sessions.TryRemove(hash, out var session))
+                session.Dispose();
     }
 
     /// <summary>
@@ -535,7 +547,7 @@ public class ECIESSessionKeyManager
     /// </summary>
     public bool HasOutboundSession(I2PIdentHash destination)
     {
-        return _outboundSessions.ContainsKey(destination);
+        return _sessions.ContainsKey(destination);
     }
 
     /// <summary>
@@ -543,7 +555,7 @@ public class ECIESSessionKeyManager
     /// </summary>
     public bool HasAvailableOutboundTags(I2PIdentHash destination)
     {
-        if (_outboundSessions.TryGetValue(destination, out var session)) return session.HasAvailableTags;
+        if (_sessions.TryGetValue(destination, out var session)) return session.HasAvailableOutboundTags;
         return false;
     }
 
@@ -552,24 +564,15 @@ public class ECIESSessionKeyManager
     /// </summary>
     public byte[] CreateHandshakeReply(I2PIdentHash remoteHash, byte[] newSessionData, byte[] replyPayload = null)
     {
-        if (!_inboundSessions.TryGetValue(remoteHash, out var session))
-            throw new InvalidOperationException($"No inbound session for {remoteHash.Id32Short}");
+        if (!_sessions.TryGetValue(remoteHash, out var session))
+            throw new InvalidOperationException($"No session for {remoteHash.Id32Short}");
 
-        var reply = session.CreateNewSessionReply(newSessionData, replyPayload, out _, out var sendK, out var ck);
+        var reply = session.CreateNewSessionReply(newSessionData, replyPayload, out _, out _);
         
         // Register tags derived during reply generation
         foreach (var tag in session.InboundTags) _tagToDestination.TryAdd(tag, remoteHash);
         
-        // Bob (responder) also establishes an outbound session to send back to Alice
-        EstablishOutboundSession(remoteHash, sendK, ck);
-
         return reply;
-    }
-
-    private void EstablishOutboundSession(I2PIdentHash remoteHash, byte[] sendK, byte[] ck)
-    {
-        var session = new ECIESOutboundSession(_localDestination, remoteHash, sendK, ck);
-        _outboundSessions[remoteHash] = session;
     }
 
     /// <summary>
@@ -577,13 +580,13 @@ public class ECIESSessionKeyManager
     /// </summary>
     public bool HasInboundSession(I2PIdentHash destination)
     {
-        return _inboundSessions.ContainsKey(destination);
+        return _sessions.TryGetValue(destination, out var s) && s.IsEstablished;
     }
 
     public bool IsOutboundHandshakeInProgress(I2PIdentHash destination)
     {
         if (destination == null) return false;
-        return _outboundSessions.TryGetValue(destination, out var session) && !session.IsEstablished;
+        return _sessions.TryGetValue(destination, out var session) && !session.IsEstablished;
     }
 }
 

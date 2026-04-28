@@ -575,9 +575,22 @@ public class ClientContext
             var path = Path.IsPathRooted(keysFile) ? keysFile : Path.Combine(RouterContext.RouterPath, keysFile);
             if (File.Exists(path))
             {
-                destInfo = new I2PDestinationInfo(File.ReadAllText(path));
+                try
+                {
+                    destInfo = new I2PDestinationInfo(File.ReadAllText(path));
+                    // Validate the signing key is usable (detects files saved with
+                    // a missing KeyPublicKeyType that caused wrong PrivateKey length)
+                    if (destInfo.PrivateSigningKey.Key.Length <= 0)
+                        throw new Exception("Signing key has invalid length — keys file was saved with wrong encryption key type");
+                }
+                catch (Exception ex)
+                {
+                    Logging.LogWarning($"ClientContext: Keys file '{path}' is corrupt ({ex.Message}). Regenerating.");
+                    destInfo = null;
+                }
             }
-            else
+
+            if (destInfo == null)
             {
                 destInfo = new I2PDestinationInfo(sigType, cryptoType);
                 File.WriteAllText(path, destInfo.ToBase64());

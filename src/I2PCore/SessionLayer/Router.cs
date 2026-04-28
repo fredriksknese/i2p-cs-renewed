@@ -406,7 +406,11 @@ public static class Router
 
     public static ClientDestination GetClientDestination(I2PIdentHash hash)
     {
-        return ClientDestination.AllDestinations.Keys.FirstOrDefault(d => d.Destination.IdentHash == hash);
+        var local = ClientDestination.AllDestinations.Keys.FirstOrDefault(d => d.Destination.IdentHash == hash);
+        if (local != null) return local;
+
+        // Fallback: check if hash is a temporary IdentHash (literal X25519 static key)
+        return FindLocalDestinationByStaticKey(hash.Hash.ToByteArray());
     }
 
     public static ClientDestination FindLocalDestinationByStaticKey(byte[] staticPublicKey)

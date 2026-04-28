@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using I2PCore.Crypto;
 using I2PCore.Data;
 using I2PCore.TunnelLayer;
 using I2PCore.TunnelLayer.I2NP.Data;
@@ -134,16 +135,35 @@ public partial class ClientDestination : IClient
         var localDest = Router.GetClientDestination(destHash);
         if (localDest != null && msg is GarlicMessage garlic)
         {
-            Logging.LogInformation($"{this}: Send: Local loopback for {destHash.Id32Short} bypassing tunnels (E2E encryption preserved).");
+            Log("Debug", $"Loopback attempt to {destHash.Id32Short} (len={garlic.EgData.Length})");
             var decr = localDest.DecryptGarlic(garlic);
             if (decr != null)
             {
+                var cloveTypes = string.Join(", ", decr.Cloves.Select(c => c.Message?.GetType().Name ?? "?"));
+                Log("Decrypted", $"Loopback OK: {decr.Cloves.Count} cloves [{cloveTypes}]", destHash.Id32Short);
                 // Run in background to avoid deep recursion in local loopback
                 _ = Task.Run(() => localDest.HandleDecryptedGarlic(decr, null));
                 return ClientStates.Established;
             }
 
-            Logging.LogWarning($"{this}: Send: Local loopback delivery failed for {destHash.Id32Short}.");
+            // Loopback decrypt failed — log diagnostic to BOTH sender and receiver tunnel pages
+            var egData = garlic.EgData.ToByteArray();
+            var msgFp = egData.Length >= 8 ? BitConverter.ToString(egData, 0, 8) : "?";
+            var myPub = localDest.MySessions?.EciesManager?.LocalStaticPublicKey;
+            var destPubFp = myPub != null ? BitConverter.ToString(myPub, 0, 8) : "?";
+            Log("Error", $"Loopback FAILED to {destHash.Id32Short}: msg[0:8]=[{msgFp}], dest pubkey=[{destPubFp}], len={egData.Length}");
+            localDest.Log("Error", $"Loopback FAILED from {Destination.IdentHash.Id32Short}: msg[0:8]=[{msgFp}], my pubkey=[{destPubFp}], len={egData.Length}");
+
+            // Also log Elligator2 diagnostic on failure
+            if (egData.Length >= 32)
+            {
+                var ephEncoded = new byte[32];
+                Array.Copy(egData, 0, ephEncoded, 0, 32);
+                var ephDecoded = Crypto.Elligator2.Decode(ephEncoded);
+                var decodedFp = ephDecoded != null ? BitConverter.ToString(ephDecoded, 0, 8) : "NULL";
+                localDest.Log("Error", $"Loopback Elligator2: encoded[0:8]=[{BitConverter.ToString(ephEncoded, 0, 8)}] decoded=[{decodedFp}]");
+            }
+
             return ClientStates.NoLeases;
         }
 

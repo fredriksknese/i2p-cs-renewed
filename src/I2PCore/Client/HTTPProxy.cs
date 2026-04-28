@@ -767,7 +767,19 @@ public class HTTPProxy : IDisposable
         i2pStream.PacketReceived += packetReceivedHandler;
 
         // Send initial data after subscribing to events to avoid missing immediate responses (loopback)
-        if (initialData != null) i2pStream.Send(initialData);
+        if (initialData != null)
+        {
+            try
+            {
+                i2pStream.Send(initialData);
+            }
+            catch (Exception ex)
+            {
+                HttpProxyLogger.Inst.Log(method, target, "Error",
+                    $"Stream send FAILED: {ex.GetType().Name}: {ex.Message}");
+                throw;
+            }
+        }
 
         try
         {

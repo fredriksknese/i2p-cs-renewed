@@ -17,14 +17,10 @@ public partial class ClientDestination : IClient
     {
         try
         {
-            Log("Received", $"Garlic message received (len={msg.EgData.Length})");
-            var decr = MySessions.DecryptMessage(msg);
+            var decr = MySessions.DecryptMessage(msg, suppressTunnelPageLog: true);
             if (decr == null)
             {
                 // Fallback: try as a tunnel build reply garlic.
-                // When paired tunnels are used (Java I2P BuildRequestor),
-                // build reply garlic arrives on client inbound tunnels but
-                // the tag is registered with TunnelProvider, not this client's SKM.
                 if (TunnelProvider.Inst?.TryHandleBuildReplyGarlic(msg, null) == true)
                 {
                     Logging.LogDebug($"{this}: GarlicMessageReceived: Handled as build reply garlic.");
@@ -32,14 +28,16 @@ public partial class ClientDestination : IClient
                 }
 
                 // Most undecryptable garlic on client tunnels is router-level
-                // (build replies, DB lookups, delivery status) — not proxy errors.
+                // (build replies, DB lookups, delivery status) — not client errors.
+                // Do NOT log to the tunnel page — it's noise.
                 Logging.LogDebug(
                     $"{this}: GarlicMessageReceived: Failed to decrypt garlic (len={msg.EgData.Length}). Likely router-level garlic.");
                 return;
             }
 
             var cloveTypes = string.Join(", ", decr.Cloves.Select(c => c.Message?.GetType().Name ?? "?"));
-            Log("Decrypted", $"Garlic decrypted: {decr.Cloves.Count} cloves [{cloveTypes}]");
+            Log("Decrypted", $"Garlic decrypted: {decr.Cloves.Count} cloves [{cloveTypes}]",
+                decr.RemoteHash?.Id32Short);
 
             HandleDecryptedGarlic(decr, null);
         }
@@ -72,8 +70,14 @@ public partial class ClientDestination : IClient
                             if (clove.Message is DatabaseStoreMessage dbsmsgLocal && dbsmsgLocal.LeaseSet != null)
                             {
                                 MySessions.ConfirmRemoteHash(decr.RemoteHash, dbsmsgLocal.LeaseSet.Destination.IdentHash);
-                                MySessions.RemoteIsActive(dbsmsgLocal.LeaseSet.Destination.IdentHash);
+                                // Store the LeaseSet BEFORE RemoteIsActive so that
+                                // SendLeaseSetUpdate (triggered by RemoteIsActive) can
+                                // find the remote's public keys and actually send the
+                                // reply.  This is critical for completing the ECIES
+                                // handshake when the initial New Session contains only a
+                                // LeaseSet update without a DataMessage.
                                 MySessions.LeaseSetReceived(dbsmsgLocal.LeaseSet);
+                                MySessions.RemoteIsActive(dbsmsgLocal.LeaseSet.Destination.IdentHash);
                                 lastSender = dbsmsgLocal.LeaseSet.Destination;
                             }
                             TunnelProvider.Inst.DistributeIncomingMessage(null, clove.Message.CreateHeader16);
@@ -163,6 +167,16 @@ public partial class ClientDestination : IClient
                         DataReceived?.Invoke(this, dmsg.Item1.DataMessagePayload, dmsg.Item2);
                     }
                 });
+
+            // If we received a New Session (ECIES handshake) but the garlic
+            // contained no DataMessage, the remote is waiting for our handshake
+            // reply.  Proactively send it now (piggy-backed on a LeaseSet update)
+            // so the session is established and queued data can flow.
+            if (decr.RemoteHash != null && destinationMessages == null)
+            {
+                if (MySessions.Sessions.TryGetValue(decr.RemoteHash, out var sess) && sess.HasPendingHandshake)
+                    ThreadPool.QueueUserWorkItem(_ => sess.FlushHandshakeReply());
+            }
         }
         catch (Exception ex)
         {

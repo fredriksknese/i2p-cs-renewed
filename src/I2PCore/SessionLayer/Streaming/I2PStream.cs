@@ -205,8 +205,23 @@ public class I2PStream : IDisposable
         _ackTimer?.Dispose();
     }
 
-    // Events
-    public event Action<I2PStream, byte[]> DataReceived;
+    // Events — DataReceived buffers payloads that arrive before any handler is
+    // attached (common for incoming streams whose SYN carries initial data).
+    private Action<I2PStream, byte[]> _dataReceived;
+    private readonly ConcurrentQueue<byte[]> _earlyData = new();
+
+    public event Action<I2PStream, byte[]> DataReceived
+    {
+        add
+        {
+            _dataReceived += value;
+            // Deliver any data that arrived before the handler was attached
+            while (_earlyData.TryDequeue(out var buffered))
+                value(this, buffered);
+        }
+        remove => _dataReceived -= value;
+    }
+
     public event Action<I2PStream> StreamClosed;
     public event Action<I2PStream, StreamStatus> StatusChanged;
     public event Action<I2PStream, uint, int> PacketSent;
@@ -259,7 +274,15 @@ public class I2PStream : IDisposable
         if (Status != StreamStatus.Open && Status != StreamStatus.New)
             throw new InvalidOperationException($"Cannot send in state {Status}");
         _sendBuffer.Enqueue(data);
-        FlushSendBuffer();
+        try
+        {
+            FlushSendBuffer();
+        }
+        catch (Exception ex)
+        {
+            Logging.LogWarning($"I2PStream {RecvStreamId:X8}: FlushSendBuffer FAILED: {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}");
+            throw;
+        }
     }
 
     /// <summary>
@@ -290,7 +313,11 @@ public class I2PStream : IDisposable
             Logging.LogDebug($"I2PStream {RecvStreamId:X8}: Handshake: Received remote SendStreamId {SendStreamId:X8}");
         }
 
-        if (packet.ReceiveStreamId != RecvStreamId)
+        // ReceiveStreamId=0 is allowed for initial SYN packets (the remote doesn't
+        // know our RecvStreamId yet).  Java I2P (ConnectionPacketHandler) permits this
+        // during connection establishment.  Once both sides have exchanged stream IDs,
+        // non-zero mismatches are still rejected.
+        if (packet.ReceiveStreamId != 0 && packet.ReceiveStreamId != RecvStreamId)
         {
             Logging.LogWarning(
                 $"I2PStream {RecvStreamId:X8}: ReceiveStreamId mismatch! Got {packet.ReceiveStreamId:X8}, expected {RecvStreamId:X8}. Dropping packet.");
@@ -387,7 +414,10 @@ public class I2PStream : IDisposable
                 }
 
             _receiveQueue.Enqueue(packet);
-            DataReceived?.Invoke(this, payloadData);
+            if (_dataReceived != null)
+                _dataReceived.Invoke(this, payloadData);
+            else
+                _earlyData.Enqueue(payloadData);
         }
 
         // Handle close/reset flags

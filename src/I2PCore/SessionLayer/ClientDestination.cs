@@ -247,7 +247,14 @@ public partial class ClientDestination : IClient
 
     public Garlic DecryptGarlic(GarlicMessage msg)
     {
-        return MySessions.DecryptMessage(msg);
+        Log("Received", $"Garlic message received (len={msg.EgData.Length})");
+        var decr = MySessions.DecryptMessage(msg);
+        if (decr != null)
+        {
+            var cloveTypes = string.Join(", ", decr.Cloves.Select(c => c.Message?.GetType().Name ?? "?"));
+            Log("Decrypted", $"Garlic decrypted: {decr.Cloves.Count} cloves [{cloveTypes}]", decr.RemoteHash?.Id32Short);
+        }
+        return decr;
     }
 
     public OutboundTunnel GetEstablishedOutboundTunnel()

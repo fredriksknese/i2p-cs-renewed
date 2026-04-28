@@ -136,11 +136,12 @@ public abstract class NoiseProtocol
     /// <summary>
     ///     Clear sensitive key material
     /// </summary>
-    protected void ClearKeys()
+    public virtual void Clear()
     {
         if (chainingKey != null) Array.Clear(chainingKey, 0, chainingKey.Length);
         if (hash != null) Array.Clear(hash, 0, hash.Length);
         if (encryptionKey != null) Array.Clear(encryptionKey, 0, encryptionKey.Length);
+        nonce = 0;
     }
 }
 
@@ -347,9 +348,16 @@ public class NoiseHandshakeState : NoiseProtocol
     /// <summary>
     ///     Finalize handshake and get transport keys
     /// </summary>
-    public (byte[] sendKey, byte[] receiveKey, byte[] ck, byte[] h) FinalizeHandshake()
+    public (byte[] key1, byte[] key2, byte[] ck, byte[] h) FinalizeHandshake()
     {
         var (send, recv, ck) = Split();
         return (send, recv, ck, (byte[])hash.Clone());
+    }
+
+    public override void Clear()
+    {
+        base.Clear();
+        if (LocalStaticPrivateKey != null) Array.Clear(LocalStaticPrivateKey, 0, LocalStaticPrivateKey.Length);
+        if (LocalEphemeralPrivateKey != null) Array.Clear(LocalEphemeralPrivateKey, 0, LocalEphemeralPrivateKey.Length);
     }
 }

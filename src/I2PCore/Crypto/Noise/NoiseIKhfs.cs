@@ -20,7 +20,7 @@ namespace I2PCore.Crypto.Noise;
 ///         e, es, s, ss, ekem1, payload
 ///         <- ekem2, payload
 /// </summary>
-public class NoiseIKhfs
+public class NoiseIKhfs : NoiseHandshakeState
 {
     public enum KEMVariant
     {
@@ -30,29 +30,17 @@ public class NoiseIKhfs
     }
 
     private readonly KEMVariant kemVariant;
+    private readonly bool isInitiator;
 
-    // Noise protocol state
-    private byte[] chainingKey;
-    protected int cipherNonce;
-    private byte[] hash;
-    private bool isInitiator;
-    private byte[] kemCiphertext; // ekem1: KEM ciphertext
-    private byte[] kemSharedSecret; // Shared secret from KEM
-    private byte[] localEphemeralPrivate;
-    private byte[] localEphemeralPublic;
+    private byte[] localKemSecretKey; // Alice's decap_key
+    private byte[] localKemPublicKey; // Alice's encap_key (e1)
+    private byte[] remoteKemPublicKey; // received by Bob
+    private byte[] kemCiphertext; // ekem2 (Bob's response)
 
-    // KEM state
-    private byte[] localKemPublicKey; // e1: Alice's ML-KEM public key (encap_key)
-    private byte[] localKemSecretKey; // Alice's ML-KEM secret key (decap_key)
-    private byte[] localStaticPrivate;
-    private byte[] localStaticPublic;
-    private byte[] remoteEphemeralKey;
-    private byte[] remoteKemPublicKey; // e1: received from Alice
-    private byte[] remoteStaticKey;
-
-    public NoiseIKhfs(KEMVariant variant = KEMVariant.MLKEM512)
+    public NoiseIKhfs(KEMVariant variant, bool initiator)
     {
         kemVariant = variant;
+        isInitiator = initiator;
 
         var protocolName = variant switch
         {
@@ -62,136 +50,55 @@ public class NoiseIKhfs
             _ => throw new ArgumentException($"Unsupported KEM variant: {variant}")
         };
 
-        InitializeProtocol(protocolName);
+        Initialize(protocolName);
     }
 
-    private void InitializeProtocol(string protocolName)
-    {
-        var h = HKDF.InitializeProtocol(protocolName);
-        hash = new byte[32];
-        chainingKey = new byte[32];
-        Array.Copy(h, hash, 32);
-        Array.Copy(h, chainingKey, 32);
-        cipherNonce = 0;
-
-        // Standard Noise initialization: MixHash(empty prologue)
-        // Java I2P precomputes this in SymmetricState static initializer.
-        MixHash(Array.Empty<byte>());
-    }
-
-    private void Initialize(byte[] staticPrivate, byte[] staticPublic, bool initiator)
-    {
-        localStaticPrivate = staticPrivate;
-        localStaticPublic = staticPublic;
-        isInitiator = initiator;
-    }
-
-    protected void MixHash(byte[] data)
-    {
-        using (var sha256 = SHA256.Create())
-        {
-            var combined = new byte[hash.Length + data.Length];
-            Array.Copy(hash, 0, combined, 0, hash.Length);
-            Array.Copy(data, 0, combined, hash.Length, data.Length);
-            hash = sha256.ComputeHash(combined);
-        }
-    }
-
-    protected void MixKey(byte[] inputKeyMaterial)
-    {
-        var output = HKDF.DeriveKey(chainingKey, inputKeyMaterial, null, 64);
-        chainingKey = new byte[32];
-        Array.Copy(output, 0, chainingKey, 0, 32);
-    }
-
-    protected byte[] GetCipherKey()
-    {
-        var output = HKDF.DeriveKey(chainingKey, new byte[0], null, 64);
-        var key = new byte[32];
-        Array.Copy(output, 32, key, 0, 32);
-        return key;
-    }
-
-    protected void IncrementNonce()
-    {
-        cipherNonce++;
-    }
-
-    /// <summary>
-    ///     Create initiator (sender of first message)
-    ///     Uses local static keys and remote static public key
-    /// </summary>
     public static NoiseIKhfs CreateInitiator(
         byte[] localStaticPrivate,
         byte[] localStaticPublic,
         byte[] remoteStaticPublic,
         KEMVariant variant = KEMVariant.MLKEM512)
     {
-        var noise = new NoiseIKhfs(variant);
-        noise.Initialize(localStaticPrivate, localStaticPublic, true);
-        noise.remoteStaticKey = remoteStaticPublic;
+        var noise = new NoiseIKhfs(variant, true);
+        noise.LocalStaticPrivateKey = localStaticPrivate;
+        noise.LocalStaticPublicKey = localStaticPublic;
+        noise.RemoteStaticPublicKey = remoteStaticPublic;
 
-        // <- s
+        // Pattern <- s
         noise.MixHash(remoteStaticPublic);
-
         return noise;
     }
 
-    /// <summary>
-    ///     Create Responder (receiver of first message)
-    ///     Uses only local static keys
-    /// </summary>
     public static NoiseIKhfs CreateResponder(
         byte[] localStaticPrivate,
         byte[] localStaticPublic,
         KEMVariant variant = KEMVariant.MLKEM512)
     {
-        var noise = new NoiseIKhfs(variant);
-        noise.Initialize(localStaticPrivate, localStaticPublic, false);
+        var noise = new NoiseIKhfs(variant, false);
+        noise.LocalStaticPrivateKey = localStaticPrivate;
+        noise.LocalStaticPublicKey = localStaticPublic;
+        noise.RemoteStaticPublicKey = null;
 
-        // <- s
+        // Pattern <- s
         noise.MixHash(localStaticPublic);
-
         return noise;
     }
 
     /// <summary>
-    ///     Initiator: Create first message (e, es, e1, s, ss, payload)
-    ///     Pattern: -> e, es, e1, s, ss, p
-    ///     Returns (ephemeral_public_elligator2, encrypted_e1, encrypted_static, encrypted_payload)
+    ///     Message 1 (Alice to Bob): -> e, es, F, s, ss, p
     /// </summary>
     public (byte[] ephemeralPublic, byte[] encryptedKemPublicKey, byte[] encryptedStatic, byte[] encryptedPayload)
         WriteMessageA(byte[] payload)
     {
-        if (remoteStaticKey == null)
-            throw new InvalidOperationException("Remote static key not set");
+        if (!isInitiator) throw new InvalidOperationException("Must be initiator");
 
-        byte[] ephemeralEncoded = null;
-        var attempts = 0;
+        // -> e
+        var ephemeralEncoded = GenerateEphemeralKeyElligator2();
 
-        while (ephemeralEncoded == null)
-            try
-            {
-                // Generate encodable ephemeral X25519 keypair
-                localEphemeralPrivate = Elligator2.GenerateEncodablePrivateKey();
-                localEphemeralPublic = X25519.GetPublicKey(localEphemeralPrivate);
+        // -> es
+        PerformES(true);
 
-                // Encode ephemeral public key with Elligator2
-                ephemeralEncoded = Elligator2.Encode(localEphemeralPublic);
-            }
-            catch (InvalidOperationException ex) when (ex.Message.Contains("Elligator2"))
-            {
-                if (++attempts > 100) throw;
-            }
-
-        // MixHash(e)
-        MixHash(localEphemeralPublic);
-
-        // es: MixKey(DH(e, rs))
-        var es = X25519DH(localEphemeralPrivate, remoteStaticKey);
-        MixKey(es);
-
-        // Generate ML-KEM keypair (e1 pattern)
+        // -> F (Alice's ML-KEM public key)
         switch (kemVariant)
         {
             case KEMVariant.MLKEM512:
@@ -204,227 +111,107 @@ public class NoiseIKhfs
                 (localKemPublicKey, localKemSecretKey) = MLKEM1024.GenerateKeyPair();
                 break;
             default:
-                throw new ArgumentException("Invalid KEM variant");
+                throw new ArgumentException();
         }
+        var encryptedKemPublicKey = EncryptAndHash(localKemPublicKey);
 
-        // EncryptAndHash(encap_key) - e1 pattern
-        var cipherKem = CreateCipher();
-        cipherKem.Init(true, new ParametersWithIV(
-            new KeyParameter(GetCipherKey()), GetNonce()));
+        // -> s
+        var encryptedStatic = SendStaticKey();
 
-        var encryptedKemPublicKey = new byte[localKemPublicKey.Length + 16];
-        var len = cipherKem.ProcessBytes(localKemPublicKey, 0, localKemPublicKey.Length, encryptedKemPublicKey, 0);
-        len += cipherKem.DoFinal(encryptedKemPublicKey, len);
+        // -> ss
+        PerformSS();
 
-        MixHash(encryptedKemPublicKey);
-
-        // Encrypt static key: s
-        var cipherStatic = CreateCipher();
-        cipherStatic.Init(true, new ParametersWithIV(
-            new KeyParameter(GetCipherKey()), GetNonce()));
-
-        var encryptedStatic = new byte[localStaticPublic.Length + 16];
-        len = cipherStatic.ProcessBytes(localStaticPublic, 0, localStaticPublic.Length, encryptedStatic, 0);
-        len += cipherStatic.DoFinal(encryptedStatic, len);
-
-        MixHash(encryptedStatic);
-
-        // ss: MixKey(DH(s, rs))
-        var ss = X25519DH(localStaticPrivate, remoteStaticKey);
-        MixKey(ss);
-
-        // Encrypt payload
-        var cipherPayload = CreateCipher();
-        cipherPayload.Init(true, new ParametersWithIV(
-            new KeyParameter(GetCipherKey()), GetNonce()));
-
-        var encryptedPayload = new byte[payload.Length + 16];
-        len = cipherPayload.ProcessBytes(payload, 0, payload.Length, encryptedPayload, 0);
-        len += cipherPayload.DoFinal(encryptedPayload, len);
-
-        MixHash(encryptedPayload);
+        // -> p
+        var encryptedPayload = EncryptAndHash(payload);
 
         return (ephemeralEncoded, encryptedKemPublicKey, encryptedStatic, encryptedPayload);
     }
 
     /// <summary>
-    ///     Responder: Read first message (e, es, e1, s, ss, payload)
-    ///     Pattern:
-    ///     <- e, es, e1, s, ss, p
-    ///         Returns ( decrypted_payload, remote_static_key, remote_kem_public_key)
+    ///     Message 1 (Bob receiving from Alice): -> e, es, F, s, ss, p
     /// </summary>
-    public (byte[] payload, byte[] remoteStaticKey, byte[] remoteKemPublicKey) ReadMessageA(
-        byte[] ephemeralPublicEncoded,
-        byte[] encryptedKemPublicKey,
-        byte[] encryptedStatic,
-        byte[] encryptedPayload)
+    public (byte[] payload, byte[] remoteStaticKey, byte[] remoteKemPublicKey)
+        ReadMessageA(
+            byte[] ephemeralPublicEncoded,
+            byte[] encryptedKemPublicKey,
+            byte[] encryptedStatic,
+            byte[] encryptedPayload)
     {
-        // Decode Elligator2 ephemeral key
-        remoteEphemeralKey = Elligator2.Decode(ephemeralPublicEncoded);
-        if (remoteEphemeralKey == null)
-            throw new ArgumentException("Invalid Elligator2 encoded ephemeral key");
+        if (isInitiator) throw new InvalidOperationException("Must be responder");
 
-        MixHash(remoteEphemeralKey);
+        // -> e
+        ReceiveEphemeralKeyElligator2(ephemeralPublicEncoded);
 
-        // es: MixKey(DH(s, re))
-        var es = X25519DH(localStaticPrivate, remoteEphemeralKey);
-        MixKey(es);
+        // -> es
+        PerformES(false);
 
-        // DecryptAndHash(encap_key) - e1 pattern
-        var cipherKem = CreateCipher();
-        cipherKem.Init(false, new ParametersWithIV(
-            new KeyParameter(GetCipherKey()), GetNonce()));
+        // -> F
+        remoteKemPublicKey = DecryptAndHash(encryptedKemPublicKey);
 
-        var decryptedKemPublicKey = new byte[cipherKem.GetOutputSize(encryptedKemPublicKey.Length)];
-        var len = cipherKem.ProcessBytes(encryptedKemPublicKey, 0, encryptedKemPublicKey.Length, decryptedKemPublicKey,
-            0);
-        len += cipherKem.DoFinal(decryptedKemPublicKey, len);
+        // -> s
+        ReceiveStaticKey(encryptedStatic);
 
-        Array.Resize(ref decryptedKemPublicKey, len);
-        remoteKemPublicKey = decryptedKemPublicKey;
+        // -> ss
+        PerformSS();
 
-        MixHash(encryptedKemPublicKey);
+        // -> p
+        var payload = DecryptAndHash(encryptedPayload);
 
-        // Decrypt static key
-        var cipherStatic = CreateCipher();
-        cipherStatic.Init(false, new ParametersWithIV(
-            new KeyParameter(GetCipherKey()), GetNonce()));
-
-        var decryptedStatic = new byte[cipherStatic.GetOutputSize(encryptedStatic.Length)];
-        len = cipherStatic.ProcessBytes(encryptedStatic, 0, encryptedStatic.Length, decryptedStatic, 0);
-        len += cipherStatic.DoFinal(decryptedStatic, len);
-
-        Array.Resize(ref decryptedStatic, len);
-        remoteStaticKey = decryptedStatic;
-
-        MixHash(encryptedStatic);
-
-        // ss: MixKey(DH(s, rs))
-        var ss = X25519DH(localStaticPrivate, remoteStaticKey);
-        MixKey(ss);
-
-        // Decrypt payload
-        var cipherPayload = CreateCipher();
-        cipherPayload.Init(false, new ParametersWithIV(
-            new KeyParameter(GetCipherKey()), GetNonce()));
-
-        var decryptedPayload = new byte[cipherPayload.GetOutputSize(encryptedPayload.Length)];
-        len = cipherPayload.ProcessBytes(encryptedPayload, 0, encryptedPayload.Length, decryptedPayload, 0);
-        len += cipherPayload.DoFinal(decryptedPayload, len);
-
-        Array.Resize(ref decryptedPayload, len);
-        MixHash(encryptedPayload);
-
-        return (decryptedPayload, remoteStaticKey, remoteKemPublicKey);
+        return (payload, RemoteStaticPublicKey, remoteKemPublicKey);
     }
 
     /// <summary>
-    ///     Responder: Create reply message (e, ee, ekem1, se, payload)
-    ///     Pattern:
-    ///     <- tag, e, ee, ekem1, se, p
-    ///         Must be called after ReadMessageA to have remoteKemPublicKey available
-    ///         Returns ( ephemeral_public_elligator2, encrypted_ekem1, empty_section_mac, encrypted_payload)
+    ///     Message 2 (Bob to Alice): <- e, ee, F, FF, se, p
     /// </summary>
     public (byte[] ephemeralPublic, byte[] encryptedKemCiphertext, byte[] emptySectionMac, byte[] encryptedPayload)
-        WriteMessageB(
-            byte[] payload)
+        WriteMessageB(byte[] payload)
     {
-        if (remoteEphemeralKey == null)
-            throw new InvalidOperationException("Must call ReadMessageA first");
-        if (remoteKemPublicKey == null)
-            throw new InvalidOperationException("Remote KEM public key not available from ReadMessageA");
+        if (isInitiator) throw new InvalidOperationException("Must be responder");
 
-        byte[] ephemeralEncoded = null;
-        var attempts = 0;
+        // <- e
+        var ephemeralEncoded = GenerateEphemeralKeyElligator2();
 
-        while (ephemeralEncoded == null)
-            try
-            {
-                // Generate encodable ephemeral X25519 keypair
-                localEphemeralPrivate = Elligator2.GenerateEncodablePrivateKey();
-                localEphemeralPublic = X25519.GetPublicKey(localEphemeralPrivate);
+        // <- ee
+        PerformEE();
 
-                // Encode ephemeral public key with Elligator2
-                ephemeralEncoded = Elligator2.Encode(localEphemeralPublic);
-            }
-            catch (InvalidOperationException ex) when (ex.Message.Contains("Elligator2"))
-            {
-                if (++attempts > 100) throw;
-            }
-
-        // MixHash(e)
-        MixHash(localEphemeralPublic);
-
-        // ee: MixKey(DH(e, re))
-        var ee = X25519DH(localEphemeralPrivate, remoteEphemeralKey);
-        MixKey(ee);
-
-        // Encapsulate with remote's KEM public key (ekem1 pattern)
-        byte[] kemCipher, kemShared;
-
+        // <- F, FF (Bob's ML-KEM ciphertext)
+        byte[] ct, ss;
         switch (kemVariant)
         {
             case KEMVariant.MLKEM512:
-                (kemCipher, kemShared) = MLKEM512.Encapsulate(remoteKemPublicKey);
+                (ct, ss) = MLKEM512.Encapsulate(remoteKemPublicKey);
                 break;
             case KEMVariant.MLKEM768:
-                (kemCipher, kemShared) = MLKEM768.Encapsulate(remoteKemPublicKey);
+                (ct, ss) = MLKEM768.Encapsulate(remoteKemPublicKey);
                 break;
             case KEMVariant.MLKEM1024:
-                (kemCipher, kemShared) = MLKEM1024.Encapsulate(remoteKemPublicKey);
+                (ct, ss) = MLKEM1024.Encapsulate(remoteKemPublicKey);
                 break;
             default:
-                throw new ArgumentException("Invalid KEM variant");
+                throw new ArgumentException();
         }
+        kemCiphertext = ct;
 
-        kemCiphertext = kemCipher;
-        kemSharedSecret = kemShared;
+        // Encrypt and Hash ciphertext BEFORE mixing the shared secret
+        var encryptedKemCiphertext = EncryptAndHash(kemCiphertext);
 
-        // EncryptAndHash(kem_ciphertext) - ekem1 pattern
-        var cipherKem = CreateCipher();
-        cipherKem.Init(true, new ParametersWithIV(
-            new KeyParameter(GetCipherKey()), GetNonce()));
+        // Now mix the shared secret (FF pattern)
+        MixKey(ss);
 
-        var encryptedKemCiphertext = new byte[kemCiphertext.Length + 16];
-        var len = cipherKem.ProcessBytes(kemCiphertext, 0, kemCiphertext.Length, encryptedKemCiphertext, 0);
-        len += cipherKem.DoFinal(encryptedKemCiphertext, len);
+        // <- consistency: empty section (like standard IK)
+        var emptySectionMac = EncryptAndHash(Array.Empty<byte>());
 
-        MixHash(encryptedKemCiphertext);
+        // <- se
+        PerformSE(false);
 
-        // MixKey(kem_shared_key)
-        MixKey(kemSharedSecret);
-
-        // Empty section (for consistency with standard IK pattern)
-        var cipherEmpty = CreateCipher();
-        cipherEmpty.Init(true, new ParametersWithIV(
-            new KeyParameter(GetCipherKey()), GetNonce()));
-
-        var emptySectionMac = new byte[16]; // Just the MAC, no data
-        cipherEmpty.DoFinal(emptySectionMac, 0);
-
-        // se: MixKey(DH(e, rs))
-        var se = X25519DH(localEphemeralPrivate, remoteStaticKey);
-        MixKey(se);
-
-        // Encrypt payload
-        var cipherPayload = CreateCipher();
-        cipherPayload.Init(true, new ParametersWithIV(
-            new KeyParameter(GetCipherKey()), GetNonce()));
-
-        var encryptedPayload = new byte[payload.Length + 16];
-        len = cipherPayload.ProcessBytes(payload, 0, payload.Length, encryptedPayload, 0);
-        len += cipherPayload.DoFinal(encryptedPayload, len);
-
-        MixHash(encryptedPayload);
+        // <- p
+        var encryptedPayload = EncryptAndHash(payload);
 
         return (ephemeralEncoded, encryptedKemCiphertext, emptySectionMac, encryptedPayload);
     }
 
     /// <summary>
-    ///     Initiator: Read reply message (e, ee, ekem1, se, payload)
-    ///     Pattern:
-    ///     <- tag, e, ee, ekem1, se, p
-    ///         Must be called after WriteMessageA to have localKemSecretKey available
+    ///     Message 2 (Alice receiving from Bob): <- e, ee, F, FF, se, p
     /// </summary>
     public byte[] ReadMessageB(
         byte[] ephemeralPublicEncoded,
@@ -432,128 +219,57 @@ public class NoiseIKhfs
         byte[] emptySectionMac,
         byte[] encryptedPayload)
     {
-        if (localKemSecretKey == null)
-            throw new InvalidOperationException("Must call WriteMessageA first");
+        if (!isInitiator) throw new InvalidOperationException("Must be initiator");
 
-        // Decode Elligator2 ephemeral key
-        remoteEphemeralKey = Elligator2.Decode(ephemeralPublicEncoded);
-        if (remoteEphemeralKey == null)
-            throw new ArgumentException("Invalid Elligator2 encoded ephemeral key");
+        // <- e
+        ReceiveEphemeralKeyElligator2(ephemeralPublicEncoded);
 
-        // MixHash(e)
-        MixHash(remoteEphemeralKey);
+        // <- ee
+        PerformEE();
 
-        // ee: MixKey(DH(e, re))
-        var ee = X25519DH(localEphemeralPrivate, remoteEphemeralKey);
-        MixKey(ee);
+        // <- F, FF
+        kemCiphertext = DecryptAndHash(encryptedKemCiphertext);
 
-        // DecryptAndHash(kem_ciphertext) - ekem1 pattern
-        var cipherKem = CreateCipher();
-        cipherKem.Init(false, new ParametersWithIV(
-            new KeyParameter(GetCipherKey()), GetNonce()));
-
-        var decryptedKemCiphertext = new byte[cipherKem.GetOutputSize(encryptedKemCiphertext.Length)];
-        var len = cipherKem.ProcessBytes(encryptedKemCiphertext, 0, encryptedKemCiphertext.Length,
-            decryptedKemCiphertext, 0);
-        len += cipherKem.DoFinal(decryptedKemCiphertext, len);
-
-        Array.Resize(ref decryptedKemCiphertext, len);
-        kemCiphertext = decryptedKemCiphertext;
-
-        MixHash(encryptedKemCiphertext);
-
-        // Decapsulate KEM
+        // Now decapsulate and mix shared secret
+        byte[] ss;
         switch (kemVariant)
         {
             case KEMVariant.MLKEM512:
-                kemSharedSecret = MLKEM512.Decapsulate(kemCiphertext, localKemSecretKey);
+                ss = MLKEM512.Decapsulate(kemCiphertext, localKemSecretKey);
                 break;
             case KEMVariant.MLKEM768:
-                kemSharedSecret = MLKEM768.Decapsulate(kemCiphertext, localKemSecretKey);
+                ss = MLKEM768.Decapsulate(kemCiphertext, localKemSecretKey);
                 break;
             case KEMVariant.MLKEM1024:
-                kemSharedSecret = MLKEM1024.Decapsulate(kemCiphertext, localKemSecretKey);
+                ss = MLKEM1024.Decapsulate(kemCiphertext, localKemSecretKey);
                 break;
             default:
-                throw new ArgumentException("Invalid KEM variant");
+                throw new ArgumentException();
         }
+        MixKey(ss);
 
-        // MixKey(kem_shared_key)
-        MixKey(kemSharedSecret);
+        // <- empty section
+        DecryptAndHash(emptySectionMac);
 
-        // Empty section (verify MAC only)
-        var cipherEmpty = CreateCipher();
-        cipherEmpty.Init(false, new ParametersWithIV(
-            new KeyParameter(GetCipherKey()), GetNonce()));
+        // <- se
+        PerformSE(true);
 
-        var emptyVerify = new byte[cipherEmpty.GetOutputSize(emptySectionMac.Length)];
-        cipherEmpty.ProcessBytes(emptySectionMac, 0, emptySectionMac.Length, emptyVerify, 0);
-        cipherEmpty.DoFinal(emptyVerify, 0);
-
-        // se: MixKey(DH(e, rs))
-        var se = X25519DH(localStaticPrivate, remoteStaticKey);
-        MixKey(se);
-
-        // Decrypt payload
-        var cipherPayload = CreateCipher();
-        cipherPayload.Init(false, new ParametersWithIV(
-            new KeyParameter(GetCipherKey()), GetNonce()));
-
-        var decryptedPayload = new byte[cipherPayload.GetOutputSize(encryptedPayload.Length)];
-        len = cipherPayload.ProcessBytes(encryptedPayload, 0, encryptedPayload.Length, decryptedPayload, 0);
-        len += cipherPayload.DoFinal(decryptedPayload, len);
-
-        Array.Resize(ref decryptedPayload, len);
-        MixHash(encryptedPayload);
-
-        return decryptedPayload;
-    }
-
-    private byte[] X25519DH(byte[] privateKey, byte[] publicKey)
-    {
-        var sharedSecret = new byte[32];
-        Org.BouncyCastle.Math.EC.Rfc7748.X25519.ScalarMult(privateKey, 0, publicKey, 0, sharedSecret, 0);
-        return sharedSecret;
-    }
-
-    private Org.BouncyCastle.Crypto.Modes.ChaCha20Poly1305 CreateCipher()
-    {
-        return new Org.BouncyCastle.Crypto.Modes.ChaCha20Poly1305();
-    }
-
-    private byte[] GetNonce()
-    {
-        var nonce = new byte[12];
-        // Nonce is 4 bytes of zeros followed by 8-byte counter (little-endian)
-        var counter = (ulong)cipherNonce;
-        for (var i = 0; i < 8; i++) nonce[4 + i] = (byte)((counter >> (i * 8)) & 0xFF);
-        IncrementNonce();
-        return nonce;
-    }
-
-    public byte[] GetChainingKey()
-    {
-        return (byte[])chainingKey.Clone();
+        // <- p
+        return DecryptAndHash(encryptedPayload);
     }
 
     public (byte[] sendKey, byte[] receiveKey, byte[] ck) FinalizeHandshake()
     {
-        var ck = (byte[])chainingKey.Clone();
-        var output = HKDF.DeriveKey(chainingKey, new byte[0], null, 64);
-        var k1 = new byte[32];
-        var k2 = new byte[32];
-        Array.Copy(output, 0, k1, 0, 32);
-        Array.Copy(output, 32, k2, 0, 32);
-
-        // Per Noise spec, initiator uses k1 for sending, responder for receiving
+        var (k1, k2, ck) = Split();
         return isInitiator ? (k1, k2, ck) : (k2, k1, ck);
     }
 
+    public byte[] GetChainingKey() => ChainingKey;
+    public byte[] GetHandshakeHash() => Hash;
+
     public void Dispose()
     {
-        if (localStaticPrivate != null) Array.Clear(localStaticPrivate, 0, localStaticPrivate.Length);
-        if (localEphemeralPrivate != null) Array.Clear(localEphemeralPrivate, 0, localEphemeralPrivate.Length);
+        Clear();
         if (localKemSecretKey != null) Array.Clear(localKemSecretKey, 0, localKemSecretKey.Length);
-        if (kemSharedSecret != null) Array.Clear(kemSharedSecret, 0, kemSharedSecret.Length);
     }
 }

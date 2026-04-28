@@ -53,6 +53,7 @@ internal class Session
     }
 
     private byte[] _outboundHandshakePayload;
+    private readonly object _encryptLock = new();
 
     private readonly ConcurrentQueue<PendingGarlic> _outboundHandshakeQueue = new();
 
@@ -125,6 +126,26 @@ internal class Session
         _pendingHandshakeData = msgData;
     }
 
+    /// <summary>
+    ///     Check whether this session has a pending ECIES handshake (received
+    ///     New Session but hasn't sent the reply yet).
+    /// </summary>
+    internal bool HasPendingHandshake => _pendingHandshakeData != null;
+
+    /// <summary>
+    ///     Proactively send the ECIES handshake reply.
+    ///     Called after processing a New Session whose cloves contained a
+    ///     LeaseSet but no DataMessage — without this, the responder would
+    ///     never send anything back and the initiator would wait forever.
+    /// </summary>
+    internal void FlushHandshakeReply()
+    {
+        if (_pendingHandshakeData == null || RemoteLeaseSet == null) return;
+
+        Logging.LogInformation($"{this}: FlushHandshakeReply: Sending proactive handshake reply to {RemoteDestination?.Id32Short}");
+        SendLeaseSetUpdate(RemoteDestination);
+    }
+
     internal void UpdateRemoteDestination(I2PIdentHash newDest)
     {
         if (newDest == null || newDest == RemoteDestination) return;
@@ -191,118 +212,127 @@ internal class Session
         InboundTunnel replytunnel,
         IList<GarlicClove> cloves)
     {
-        // Build ECIES Proposal 144 blocks (NOT legacy Garlic format)
-        var payload = BuildECIESPayload(cloves);
-
-        // Check if we have an existing session with this destination
-        var hasSession = EciesKeys.HasOutboundSession(RemoteDestination) &&
-                         EciesKeys.HasAvailableOutboundTags(RemoteDestination);
-
-        if (!hasSession && _pendingHandshakeData == null && EciesKeys.IsOutboundHandshakeInProgress(RemoteDestination))
+        lock (_encryptLock)
         {
-            // Allow retransmission of the handshake message itself
-            if (_outboundHandshakePayload != null && _outboundHandshakePayload.SequenceEqual(payload))
+            // Build ECIES Proposal 144 blocks (NOT legacy Garlic format)
+            var payload = BuildECIESPayload(cloves);
+
+            // Check if we have an existing session with this destination
+            var hasSession = EciesKeys.HasOutboundSession(RemoteDestination) &&
+                             EciesKeys.HasAvailableOutboundTags(RemoteDestination);
+
+            if (!hasSession && _pendingHandshakeData == null && EciesKeys.IsOutboundHandshakeInProgress(RemoteDestination))
             {
-                Logging.LogDebug($"{this}: ECIES handshake retransmission for {RemoteDestination.Id32Short}.");
-            }
-            else
-            {
-                Logging.LogInformation($"{this}: ECIES handshake already in progress for {RemoteDestination.Id32Short}. Queuing message.");
-                _outboundHandshakeQueue.Enqueue(new PendingGarlic
+                // Allow retransmission of the handshake message itself
+                if (_outboundHandshakePayload != null && _outboundHandshakePayload.SequenceEqual(payload))
                 {
-                    PublicKeys = remotepublickeys,
-                    ReplyTunnel = replytunnel,
-                    Cloves = cloves
-                });
-                return null;
+                    Logging.LogDebug($"{this}: ECIES handshake retransmission for {RemoteDestination.Id32Short}.");
+                }
+                else
+                {
+                    Logging.LogInformation($"{this}: ECIES handshake already in progress for {RemoteDestination.Id32Short}. Queuing message.");
+                    _outboundHandshakeQueue.Enqueue(new PendingGarlic
+                    {
+                        PublicKeys = remotepublickeys,
+                        ReplyTunnel = replytunnel,
+                        Cloves = cloves
+                    });
+                    return null;
+                }
             }
-        }
 
-        byte[] eciesMessage = null;
+            byte[] eciesMessage = null;
 
-        if (_pendingHandshakeData != null)
-        {
-            try
+            if (_pendingHandshakeData != null)
             {
-                eciesMessage = EciesKeys.CreateHandshakeReply(RemoteDestination, _pendingHandshakeData, payload);
-                _pendingHandshakeData = null;
+                try
+                {
+                    eciesMessage = EciesKeys.CreateHandshakeReply(RemoteDestination, _pendingHandshakeData, payload);
+                    _pendingHandshakeData = null;
+
+                    Logging.LogInformation(
+                        $"{this}: Encrypted ECIES handshake reply to {RemoteDestination.Id32Short}: {eciesMessage.Length} bytes");
+                    Context.Log("Sent",
+                        $"ECIES Handshake Reply sent: {eciesMessage.Length} bytes, {cloves.Count} clove(s)",
+                        RemoteDestination.Id32Short);
+                }
+                catch (Exception ex)
+                {
+                    Logging.LogWarning($"{this}: Failed to create ECIES handshake reply: {ex.Message}");
+                }
+            }
+
+            if (eciesMessage == null && hasSession)
+                // Use existing session with session tag
+                try
+                {
+                    var existingMsg = EciesKeys.CreateExistingSession(RemoteDestination, payload);
+                    eciesMessage = existingMsg.ToByteArray();
+
+                    Logging.LogDebug(
+                        $"{this}: Encrypted ECIES message using existing session to {RemoteDestination.Id32Short}, {eciesMessage.Length} bytes");
+                }
+                catch (Exception ex)
+                {
+                    // Fall back to new session if existing session fails
+                    Logging.LogWarning($"{this}: Existing ECIES session failed, creating new session: {ex.Message}");
+                    hasSession = false;
+                }
+
+            if (eciesMessage == null && !hasSession)
+            {
+                // Find best hybrid variant from remotepublickeys
+                NoiseIKhfs.KEMVariant? variant = null;
+                if (remotepublickeys.Any(pk => pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM1024_X25519))
+                    variant = NoiseIKhfs.KEMVariant.MLKEM1024;
+                else if (remotepublickeys.Any(pk => pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM768_X25519))
+                    variant = NoiseIKhfs.KEMVariant.MLKEM768;
+                else if (remotepublickeys.Any(pk => pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM512_X25519))
+                    variant = NoiseIKhfs.KEMVariant.MLKEM512;
+
+                // Create new session with Noise IK or hybrid IKhfs handshake
+                var x25519Key = remotepublickeys.FirstOrDefault(pk =>
+                    pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.X25519 ||
+                    pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM512_X25519 ||
+                    pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM768_X25519 ||
+                    pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM1024_X25519);
+
+                if (x25519Key == null) x25519Key = remotepublickeys.FirstOrDefault();
+
+                if (x25519Key == null)
+                {
+                    Logging.LogWarning(
+                        $"{this}: No public keys available for {RemoteDestination.Id32Short}, cannot encrypt.");
+                    return null;
+                }
+
+                var remoteKeyTypes =
+                    string.Join(", ", remotepublickeys.Select(pk => pk.Certificate.PublicKeyType.ToString()));
+                Logging.LogInformation($"{this}: EncryptECIES: Remote has key types [{remoteKeyTypes}]. " +
+                                       $"Selected {x25519Key.Certificate.PublicKeyType} " +
+                                       $"(variant={variant?.ToString() ?? "plain IK"}) for {RemoteDestination.Id32Short}. " +
+                                       $"Payload={payload.Length} bytes, {cloves.Count} clove(s).");
+
+                // Log the remote public key fingerprint we're encrypting TO
+                var remotePubFp = BitConverter.ToString(x25519Key.ToByteArray(), 0, Math.Min(8, x25519Key.ToByteArray().Length));
+                Context.Log("Debug",
+                    $"Encrypting to remote pubkey [{remotePubFp}], variant={variant?.ToString() ?? "IK"}",
+                    RemoteDestination.Id32Short);
+
+                eciesMessage = EciesKeys.CreateNewSession(RemoteDestination, x25519Key, payload, variant);
+                _outboundHandshakePayload = payload;
 
                 Logging.LogInformation(
-                    $"{this}: Encrypted ECIES handshake reply to {RemoteDestination.Id32Short}: {eciesMessage.Length} bytes");
+                    $"{this}: Encrypted ECIES new session to {RemoteDestination.Id32Short}: {eciesMessage.Length} bytes");
                 Context.Log("Sent",
-                    $"ECIES Handshake Reply sent: {eciesMessage.Length} bytes, {cloves.Count} clove(s)",
+                    $"ECIES New Session sent: {eciesMessage.Length} bytes, {cloves.Count} clove(s), variant={variant?.ToString() ?? "IK"}",
                     RemoteDestination.Id32Short);
             }
-            catch (Exception ex)
-            {
-                Logging.LogWarning($"{this}: Failed to create ECIES handshake reply: {ex.Message}");
-            }
+
+            // Wrap ECIES message in GarlicMessage format (I2NP type 11)
+            // Format: 4-byte length + ECIES data
+            return new GarlicMessage(eciesMessage);
         }
-
-        if (eciesMessage == null && hasSession)
-            // Use existing session with session tag
-            try
-            {
-                var existingMsg = EciesKeys.CreateExistingSession(RemoteDestination, payload);
-                eciesMessage = existingMsg.ToByteArray();
-
-                Logging.LogDebug(
-                    $"{this}: Encrypted ECIES message using existing session to {RemoteDestination.Id32Short}, {eciesMessage.Length} bytes");
-            }
-            catch (Exception ex)
-            {
-                // Fall back to new session if existing session fails
-                Logging.LogWarning($"{this}: Existing ECIES session failed, creating new session: {ex.Message}");
-                hasSession = false;
-            }
-
-        if (!hasSession || eciesMessage == null)
-        {
-            // Find best hybrid variant from remotepublickeys
-            NoiseIKhfs.KEMVariant? variant = null;
-            if (remotepublickeys.Any(pk => pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM1024_X25519))
-                variant = NoiseIKhfs.KEMVariant.MLKEM1024;
-            else if (remotepublickeys.Any(pk => pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM768_X25519))
-                variant = NoiseIKhfs.KEMVariant.MLKEM768;
-            else if (remotepublickeys.Any(pk => pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM512_X25519))
-                variant = NoiseIKhfs.KEMVariant.MLKEM512;
-
-            // Create new session with Noise IK or hybrid IKhfs handshake
-            var x25519Key = remotepublickeys.FirstOrDefault(pk =>
-                pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.X25519 ||
-                pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM512_X25519 ||
-                pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM768_X25519 ||
-                pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM1024_X25519);
-
-            if (x25519Key == null) x25519Key = remotepublickeys.FirstOrDefault();
-
-            if (x25519Key == null)
-            {
-                Logging.LogWarning(
-                    $"{this}: No public keys available for {RemoteDestination.Id32Short}, cannot encrypt.");
-                return null;
-            }
-
-            var remoteKeyTypes =
-                string.Join(", ", remotepublickeys.Select(pk => pk.Certificate.PublicKeyType.ToString()));
-            Logging.LogInformation($"{this}: EncryptECIES: Remote has key types [{remoteKeyTypes}]. " +
-                                   $"Selected {x25519Key.Certificate.PublicKeyType} " +
-                                   $"(variant={variant?.ToString() ?? "plain IK"}) for {RemoteDestination.Id32Short}. " +
-                                   $"Payload={payload.Length} bytes, {cloves.Count} clove(s).");
-
-            eciesMessage = EciesKeys.CreateNewSession(RemoteDestination, x25519Key, payload, variant);
-            _outboundHandshakePayload = payload;
-
-            Logging.LogInformation(
-                $"{this}: Encrypted ECIES new session to {RemoteDestination.Id32Short}: {eciesMessage.Length} bytes");
-            Context.Log("Sent",
-                $"ECIES New Session sent: {eciesMessage.Length} bytes, {cloves.Count} clove(s), variant={variant?.ToString() ?? "IK"}",
-                RemoteDestination.Id32Short);
-        }
-
-        // Wrap ECIES message in GarlicMessage format (I2NP type 11)
-        // Format: 4-byte length + ECIES data
-        return new GarlicMessage(eciesMessage);
     }
 
     internal void MySignedLeasesUpdated(I2PIdentHash dest)
@@ -324,6 +354,32 @@ internal class Session
                     $"{this} Session: LeaseSetReceived: ignoring older remote LS {ls}");
 
                 return;
+            }
+
+            // If the encryption keys changed (e.g. remote restarted and generated
+            // new ECIES session keys), the existing outbound ECIES session is stale
+            // and must be discarded so the next send starts a fresh handshake.
+            if (RemoteLeaseSet != null && EciesKeys != null && ls.PublicKeys != null)
+            {
+                var oldKey = RemoteLeaseSet.PublicKeys?.FirstOrDefault(pk =>
+                    pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.X25519 ||
+                    pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM768_X25519);
+                var newKey = ls.PublicKeys.FirstOrDefault(pk =>
+                    pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.X25519 ||
+                    pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM768_X25519);
+
+                if (oldKey != null && newKey != null &&
+                    !oldKey.ToByteArray().SequenceEqual(newKey.ToByteArray()))
+                {
+                    Logging.LogInformation(
+                        $"{this} Session: Remote encryption keys changed for {RemoteDestination?.Id32Short} — clearing ECIES session");
+                    // Remove the stale ECIES session so a new handshake is started
+                    if (RemoteDestination != null && EciesKeys.HasOutboundSession(RemoteDestination))
+                    {
+                        // The session will be recreated on the next send
+                        EciesKeys.CleanupExpired();
+                    }
+                }
             }
 
             Logging.LogDebug(
@@ -361,7 +417,13 @@ internal class Session
         Logging.LogDebug(
             $"{this} Session: SendLeaseSetUpdate: sending LS to {dest.Id32Short}");
 
-        var replytunnel = Context.SelectInboundTunnel();
+        // For local destinations, don't use a reply tunnel for the LS ACK.
+        // Using null auto-ACKs the LeaseSet immediately, which prevents an
+        // infinite loop where each side's LS update triggers the other to
+        // send its own LS update back (because the tunnel-delivered
+        // DeliveryStatusMessage ACK arrives too late).
+        var isLocal = Router.GetClientDestination(dest) != null;
+        var replytunnel = isLocal ? null : Context.SelectInboundTunnel();
         var cloves = GenerateRemoteLsUpdate(new List<GarlicClove>(), replytunnel);
 
         Context.Send(
@@ -463,7 +525,7 @@ internal class Session
         // Use LOCAL delivery for LeaseSet, matching Java I2P behavior.
         // The remote router stores the LeaseSet in its NetDB when it
         // receives a DatabaseStoreMessage with LOCAL delivery.
-        cloves.Add(
+        cloves.Insert(0,
             new GarlicClove(
                 new GarlicCloveDeliveryLocal(
                     myleases)));
@@ -471,7 +533,7 @@ internal class Session
         if (replytunnel != null)
         {
             var lsack = new DeliveryStatusMessage(I2NpMessage.GenerateMessageId());
-            cloves.Add(
+            cloves.Insert(1,
                 new GarlicClove(
                     new GarlicCloveDeliveryTunnel(
                         lsack,
