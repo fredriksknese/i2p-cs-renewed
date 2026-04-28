@@ -33,7 +33,7 @@ internal class Session
     private readonly TimeWindowDictionary<uint, LeaseSetUpdateAck> NotAckedLsUpdates = new(WaitForLsUpdateAck);
 
     private readonly TimeWindowDictionary<OutboundTunnel, ILease> OutboundRemoteLeasePairs = new(TickSpan.Minutes(1));
-    private readonly I2PIdentHash RemoteDestination;
+    private I2PIdentHash RemoteDestination;
 
     private readonly TimeSpan TimeCompareEpsilon = TimeSpan.FromSeconds(2);
 
@@ -51,6 +51,8 @@ internal class Session
         public InboundTunnel ReplyTunnel;
         public IList<GarlicClove> Cloves;
     }
+
+    private byte[] _outboundHandshakePayload;
 
     private readonly ConcurrentQueue<PendingGarlic> _outboundHandshakeQueue = new();
 
@@ -123,8 +125,18 @@ internal class Session
         _pendingHandshakeData = msgData;
     }
 
+    internal void UpdateRemoteDestination(I2PIdentHash newDest)
+    {
+        if (newDest == null || newDest == RemoteDestination) return;
+
+        Logging.LogDebug($"{this}: Updating RemoteDestination from {RemoteDestination.Id32Short} to {newDest.Id32Short}");
+        RemoteDestination = newDest;
+        EgaesKeys.UpdateRemoteDestination(newDest);
+    }
+
     internal void HandshakeCompleted()
     {
+        _outboundHandshakePayload = null;
         Logging.LogInformation($"{this}: Handshake completed. Flushing {_outboundHandshakeQueue.Count} queued messages.");
         while (_outboundHandshakeQueue.TryDequeue(out var pending))
         {
@@ -188,14 +200,22 @@ internal class Session
 
         if (!hasSession && _pendingHandshakeData == null && EciesKeys.IsOutboundHandshakeInProgress(RemoteDestination))
         {
-            Logging.LogInformation($"{this}: ECIES handshake already in progress for {RemoteDestination.Id32Short}. Queuing message.");
-            _outboundHandshakeQueue.Enqueue(new PendingGarlic
+            // Allow retransmission of the handshake message itself
+            if (_outboundHandshakePayload != null && _outboundHandshakePayload.SequenceEqual(payload))
             {
-                PublicKeys = remotepublickeys,
-                ReplyTunnel = replytunnel,
-                Cloves = cloves
-            });
-            return null;
+                Logging.LogDebug($"{this}: ECIES handshake retransmission for {RemoteDestination.Id32Short}.");
+            }
+            else
+            {
+                Logging.LogInformation($"{this}: ECIES handshake already in progress for {RemoteDestination.Id32Short}. Queuing message.");
+                _outboundHandshakeQueue.Enqueue(new PendingGarlic
+                {
+                    PublicKeys = remotepublickeys,
+                    ReplyTunnel = replytunnel,
+                    Cloves = cloves
+                });
+                return null;
+            }
         }
 
         byte[] eciesMessage = null;
@@ -209,9 +229,9 @@ internal class Session
 
                 Logging.LogInformation(
                     $"{this}: Encrypted ECIES handshake reply to {RemoteDestination.Id32Short}: {eciesMessage.Length} bytes");
-                HttpProxyLogger.Inst.Log("GARLIC", RemoteDestination.Id32Short,
-                    "Sent",
-                    $"ECIES Handshake Reply sent: {eciesMessage.Length} bytes, {cloves.Count} clove(s)");
+                Context.Log("Sent",
+                    $"ECIES Handshake Reply sent: {eciesMessage.Length} bytes, {cloves.Count} clove(s)",
+                    RemoteDestination.Id32Short);
             }
             catch (Exception ex)
             {
@@ -271,27 +291,18 @@ internal class Session
                                    $"Payload={payload.Length} bytes, {cloves.Count} clove(s).");
 
             eciesMessage = EciesKeys.CreateNewSession(RemoteDestination, x25519Key, payload, variant);
+            _outboundHandshakePayload = payload;
 
             Logging.LogInformation(
                 $"{this}: Encrypted ECIES new session to {RemoteDestination.Id32Short}: {eciesMessage.Length} bytes");
-            HttpProxyLogger.Inst.Log("GARLIC", RemoteDestination.Id32Short,
-                "Sent",
-                $"ECIES New Session sent: {eciesMessage.Length} bytes, {cloves.Count} clove(s), variant={variant?.ToString() ?? "IK"}");
+            Context.Log("Sent",
+                $"ECIES New Session sent: {eciesMessage.Length} bytes, {cloves.Count} clove(s), variant={variant?.ToString() ?? "IK"}",
+                RemoteDestination.Id32Short);
         }
 
         // Wrap ECIES message in GarlicMessage format (I2NP type 11)
         // Format: 4-byte length + ECIES data
-        var destbuf = new byte[eciesMessage.Length + I2NpMessage.I2NpMaxHeaderSize + 4];
-        var writer = new I2PBufferCursor(destbuf, I2NpMessage.I2NpMaxHeaderSize);
-
-        // Write length (big-endian)
-        writer.WriteUInt32BigEndian((uint)eciesMessage.Length);
-
-        // Write ECIES message
-        writer.WriteBytes(eciesMessage);
-
-        var totalLength = 4 + eciesMessage.Length;
-        return new GarlicMessage(new I2PBufferCursor(destbuf, I2NpMessage.I2NpMaxHeaderSize, totalLength));
+        return new GarlicMessage(eciesMessage);
     }
 
     internal void MySignedLeasesUpdated(I2PIdentHash dest)

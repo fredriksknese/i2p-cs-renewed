@@ -358,6 +358,7 @@ public class SessionManager
 
         if (Sessions.TryRemove(temporaryHash, out var session))
         {
+            session.UpdateRemoteDestination(realHash);
             Sessions[realHash] = session;
             EciesManager?.ConfirmRemoteHash(temporaryHash, realHash);
             Logging.LogDebug($"{Context}: Sessions: Confirmed remote hash {temporaryHash.Id32Short} -> {realHash.Id32Short}");

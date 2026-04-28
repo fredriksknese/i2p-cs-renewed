@@ -1,0 +1,70 @@
+@page
+@model ServerTunnelLogsModel
+@{
+    ViewData["Title"] = "Server Tunnel Logs";
+}
+
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1>Server Tunnel Logs</h1>
+        <a asp-page="/ServerTunnelLogs" class="btn btn-outline-primary btn-sm">Refresh</a>
+    </div>
+
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">Recent Tunnel Activity</h5>
+            <small>Last 2000 events</small>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive" style="max-height: 75vh; overflow-y: auto;">
+                <table class="table table-hover table-sm mb-0">
+                    <thead class="table-dark sticky-top">
+                    <tr>
+                        <th style="width: 180px;">Timestamp</th>
+                        <th style="width: 150px;">Tunnel</th>
+                        <th style="width: 120px;">Status</th>
+                        <th>Details</th>
+                        <th style="width: 120px;">Target</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    @if (!Model.Logs.Any())
+                    {
+                        <tr>
+                            <td colspan="5" class="text-center py-4 text-muted">
+                                No tunnel activity logged yet.
+                            </td>
+                        </tr>
+                    }
+                    else
+                    {
+                        @foreach (var log in Model.Logs)
+                        {
+                            <tr>
+                                <td><small class="text-muted">@log.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff")</small></td>
+                                <td><span class="fw-bold">@log.TunnelName</span></td>
+                                <td>
+                                    <span class="badge @(log.Status switch
+                                                       {
+                                                           "Received" => "bg-info",
+                                                           "Decrypted" => "bg-success",
+                                                           "LeaseSet" => "bg-primary",
+                                                           "Sent" => "bg-secondary",
+                                                           "Started" => "bg-success",
+                                                           "Streaming" => "bg-info",
+                                                           "Connecting" => "bg-warning text-dark",
+                                                           "Error" => "bg-danger",
+                                                           _ => "bg-secondary"
+                                                       })">@log.Status</span>
+                                </td>
+                                <td style="word-break: break-all;">@log.Details</td>
+                                <td><small class="text-muted">@log.Target</small></td>
+                            </tr>
+                        }
+                    }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>

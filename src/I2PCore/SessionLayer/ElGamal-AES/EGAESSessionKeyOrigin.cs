@@ -24,13 +24,19 @@ public class EgaesSessionKeyOrigin
     private readonly I2PDestination MyDestination;
 
     private readonly TimeWindowDictionary<uint, SessionAndTags> NotAckedTags = new(UnAcKedTagLifetime);
-    private readonly I2PIdentHash RemoteDestination;
+    private I2PIdentHash RemoteDestination;
 
     internal EgaesSessionKeyOrigin(ClientDestination context, I2PDestination mydest, I2PIdentHash remotedest)
     {
         Context = context;
         MyDestination = mydest;
         RemoteDestination = remotedest;
+    }
+
+    internal void UpdateRemoteDestination(I2PIdentHash newDest)
+    {
+        if (newDest == null || newDest == RemoteDestination) return;
+        RemoteDestination = newDest;
     }
 
     public virtual int LowWatermarkForNewTags

@@ -109,6 +109,7 @@ public class I2PStream : IDisposable
     private int _pacingTime;
     private uint _previousReceivedSequence;
     private I2PDestination _remoteDestination;
+    public I2PDestination RemoteDestination => _remoteDestination;
     private DateTime _remoteLeaseExpiry = DateTime.MinValue;
 
     // Timers

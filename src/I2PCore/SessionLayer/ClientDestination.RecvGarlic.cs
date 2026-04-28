@@ -17,6 +17,7 @@ public partial class ClientDestination : IClient
     {
         try
         {
+            Log("Received", $"Garlic message received (len={msg.EgData.Length})");
             var decr = MySessions.DecryptMessage(msg);
             if (decr == null)
             {
@@ -38,8 +39,7 @@ public partial class ClientDestination : IClient
             }
 
             var cloveTypes = string.Join(", ", decr.Cloves.Select(c => c.Message?.GetType().Name ?? "?"));
-            HttpProxyLogger.Inst.Log("GARLIC", Destination?.IdentHash?.Id32Short ?? "?",
-                "Decrypted", $"Garlic decrypted: {decr.Cloves.Count} cloves [{cloveTypes}]");
+            Log("Decrypted", $"Garlic decrypted: {decr.Cloves.Count} cloves [{cloveTypes}]");
 
             HandleDecryptedGarlic(decr, null);
         }
@@ -121,12 +121,11 @@ public partial class ClientDestination : IClient
                                             $"{this}: New lease set received in stream for {dbsmsg.LeaseSet.Destination} {dbsmsg.LeaseSet}.");
                                         var lsEncKeys = dbsmsg.LeaseSet.PublicKeys?
                                             .Select(pk => pk.Certificate?.PublicKeyType.ToString() ?? "?");
-                                        HttpProxyLogger.Inst.Log("GARLIC",
-                                            dbsmsg.LeaseSet.Destination?.IdentHash?.Id32Short ?? "?",
-                                            "LeaseSet",
+                                        Log("LeaseSet",
                                             $"Remote LeaseSet received via garlic: {dbsmsg.LeaseSet.Leases?.Count() ?? 0} leases, " +
                                             $"keys=[{string.Join(", ", lsEncKeys ?? Enumerable.Empty<string>())}], " +
-                                            $"expires {dbsmsg.LeaseSet.Expire:HH:mm:ss}");
+                                            $"expires {dbsmsg.LeaseSet.Expire:HH:mm:ss}",
+                                            dbsmsg.LeaseSet.Destination?.IdentHash?.Id32Short ?? "?");
                                         MySessions.LeaseSetReceived(dbsmsg.LeaseSet);
                                         lastSender = dbsmsg.LeaseSet.Destination;
                                         ThreadPool.QueueUserWorkItem(a => UpdateClientState());

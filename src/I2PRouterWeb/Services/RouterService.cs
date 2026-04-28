@@ -72,6 +72,11 @@ public class RouterService
         return HttpProxyLogger.Inst.GetLogs().Reverse();
     }
 
+    public IEnumerable<ServerTunnelLogger.LogEntry> GetServerTunnelLogs()
+    {
+        return ServerTunnelLogger.Inst.GetLogs().Reverse();
+    }
+
     public IEnumerable<ActivityLogEntry> GetActivityLog()
     {
         return _activityLog.ToArray().Reverse();

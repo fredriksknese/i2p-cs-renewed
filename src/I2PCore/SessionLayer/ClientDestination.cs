@@ -171,6 +171,18 @@ public partial class ClientDestination : IClient
 
     public bool Terminated { get; protected set; }
 
+    public void Log(string status, string details = null, string target = null)
+    {
+        if (Name == "HTTP Proxy")
+        {
+            HttpProxyLogger.Inst.Log("GARLIC", target ?? Destination?.IdentHash?.Id32Short ?? "?", status, details);
+        }
+        else
+        {
+            ServerTunnelLogger.Inst.Log(Name ?? "?", status, details, target ?? Destination?.IdentHash?.Id32Short ?? "?");
+        }
+    }
+
     /// <summary>
     ///     Gets the state of the client.
     /// </summary>

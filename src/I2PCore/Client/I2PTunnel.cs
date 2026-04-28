@@ -79,6 +79,7 @@ public class I2PTunnelClient : II2PTunnel, IDisposable
         Logging.LogInformation(
             $"I2PTunnelClient: Listening on 127.0.0.1:{_listenPort} -> "
             + $"{_remoteDestination.IdentHash.Id32Short}");
+        _clientDestination.Log("Started", $"Listening on 127.0.0.1:{_listenPort} -> {_remoteDestination.IdentHash.Id32Short}");
 
         Task.Run(() => AcceptLoop(_cts.Token));
     }
@@ -139,6 +140,7 @@ public class I2PTunnelClient : II2PTunnel, IDisposable
                 I2PStream i2pStream;
                 try
                 {
+                    _clientDestination.Log("Connecting", $"Creating stream to {_remoteDestination.IdentHash.Id32Short}", _remoteDestination.IdentHash.Id32Short);
                     i2pStream = _streamingDestination.CreateStream(_remoteDestination);
                 }
                 catch (Exception ex)
@@ -332,6 +334,7 @@ public class I2PTunnelServer : II2PTunnel, IDisposable
         Logging.LogInformation(
             $"I2PTunnelServer: Accepting I2P streams -> {_targetHost}:{_targetPort} "
             + $"(dest: {_clientDestination.Destination.IdentHash.Id32Short})");
+        _clientDestination.Log("Started", $"Accepting I2P streams -> {_targetHost}:{_targetPort}");
 
         Task.Run(() => AcceptLoop(_cts.Token));
     }
@@ -371,6 +374,7 @@ public class I2PTunnelServer : II2PTunnel, IDisposable
                 if (i2pStream == null)
                     continue;
 
+                _clientDestination.Log("Streaming", $"Accepted incoming stream from {i2pStream.RemoteDestination.IdentHash.Id32Short}", i2pStream.RemoteDestination.IdentHash.Id32Short);
                 _ = Task.Run(() => HandleIncoming(i2pStream, ct), ct);
             }
         }
