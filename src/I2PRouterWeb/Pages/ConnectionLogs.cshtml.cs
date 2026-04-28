@@ -36,6 +36,22 @@ public class ConnectionLogsModel : PageModel
         Ssu2OutboundFailures { get; set; } =
         Array.Empty<(string, int, IEnumerable<(string, string)>)>();
 
+    public IEnumerable<(string ShortId, string FullId, int Count, IEnumerable<(string Reason, int Count)> Reasons)>
+        Ntcp2InboundFailedRouters { get; set; } =
+        Array.Empty<(string, string, int, IEnumerable<(string, int)>)>();
+
+    public IEnumerable<(string ShortId, string FullId, int Count, IEnumerable<(string Reason, int Count)> Reasons)>
+        Ntcp2OutboundFailedRouters { get; set; } =
+        Array.Empty<(string, string, int, IEnumerable<(string, int)>)>();
+
+    public IEnumerable<(string ShortId, string FullId, int Count, IEnumerable<(string Reason, int Count)> Reasons)>
+        Ssu2InboundFailedRouters { get; set; } =
+        Array.Empty<(string, string, int, IEnumerable<(string, int)>)>();
+
+    public IEnumerable<(string ShortId, string FullId, int Count, IEnumerable<(string Reason, int Count)> Reasons)>
+        Ssu2OutboundFailedRouters { get; set; } =
+        Array.Empty<(string, string, int, IEnumerable<(string, int)>)>();
+
     public void OnGet()
     {
         Logs = _routerService.GetTransportConnectionLogs();
@@ -44,6 +60,11 @@ public class ConnectionLogsModel : PageModel
         Ntcp2OutboundFailures = _routerService.GetTopFailureReasons("NTCP2", "Outbound");
         Ssu2InboundFailures = _routerService.GetTopFailureReasons("SSU2", "Inbound");
         Ssu2OutboundFailures = _routerService.GetTopFailureReasons("SSU2", "Outbound");
+
+        Ntcp2InboundFailedRouters = _routerService.GetTopFailedRouters("NTCP2", "Inbound");
+        Ntcp2OutboundFailedRouters = _routerService.GetTopFailedRouters("NTCP2", "Outbound");
+        Ssu2InboundFailedRouters = _routerService.GetTopFailedRouters("SSU2", "Inbound");
+        Ssu2OutboundFailedRouters = _routerService.GetTopFailedRouters("SSU2", "Outbound");
     }
 
     public FileResult OnGetExportCsv(string transport, string direction, string reason)

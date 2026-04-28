@@ -110,7 +110,7 @@
             <div class="card h-100">
                 <div class="card-header">
                     <h6 class="mb-0">
-                        Top 10
+                        Top 30
                         @if (transport == "NTCP2")
                         {
                             <span class="badge bg-primary">NTCP2</span>
@@ -192,6 +192,118 @@
                                             else
                                             {
                                                 <div class="text-muted small">No router details available.</div>
+                                            }
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                            </tbody>
+                        </table>
+                    }
+                    else
+                    {
+                        <div class="text-center py-3 text-muted small">No failures recorded.</div>
+                    }
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@* ── Top Failed Routers / IPs ── *@
+<div class="row mb-4">
+    <div class="col-12">
+        <hr class="my-4" />
+        <h4 class="mb-3">Top Failed Routers / IPs</h4>
+        <p class="text-muted small">Summary of failure reasons grouped by the most frequent remote endpoints.</p>
+    </div>
+    @{
+        var failedRouterSections = new[]
+        {
+            ("NTCP2", "Inbound", Model.Ntcp2InboundFailedRouters),
+            ("NTCP2", "Outbound", Model.Ntcp2OutboundFailedRouters),
+            ("SSU2", "Inbound", Model.Ssu2InboundFailedRouters),
+            ("SSU2", "Outbound", Model.Ssu2OutboundFailedRouters),
+        };
+    }
+    @foreach (var (transport, direction, routers) in failedRouterSections)
+    {
+        <div class="col-md-6 mb-3">
+            <div class="card h-100">
+                <div class="card-header">
+                    <h6 class="mb-0">
+                        Top 30
+                        @if (transport == "NTCP2")
+                        {
+                            <span class="badge bg-primary">NTCP2</span>
+                        }
+                        else
+                        {
+                            <span class="badge bg-info text-dark">SSU2</span>
+                        }
+                        @if (direction == "Inbound")
+                        {
+                            <span class="badge bg-info">Inbound</span>
+                        }
+                        else
+                        {
+                            <span class="badge bg-secondary">Outbound</span>
+                        }
+                        Failed Routers / IPs
+                    </h6>
+                </div>
+                <div class="card-body p-0">
+                    @if (routers.Any())
+                    {
+                        <table class="table table-sm table-hover mb-0">
+                            <thead>
+                            <tr>
+                                <th>Router / IP</th>
+                                <th class="text-end" style="width: 80px;">Failures</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            @{ var rIdx = 0; }
+                            @foreach (var (shortId, fullId, count, reasons) in routers)
+                            {
+                                var rCollapseId = $"collapse-router-{transport}-{direction}-{rIdx++}";
+                                <tr>
+                                    <td class="small text-break" data-bs-toggle="collapse" data-bs-target="#@rCollapseId" style="cursor: pointer;">
+                                        <div class="d-flex align-items-start">
+                                            <span class="me-2">▶</span>
+                                            <div>
+                                                <span class="me-1">@(fullId.Contains(":") ? "📍" : "🌐")</span>
+                                                @if (fullId.Contains(":"))
+                                                {
+                                                    <span class="font-monospace small fw-bold">@shortId</span>
+                                                }
+                                                else
+                                                {
+                                                    <a href="/RouterDetail?hash=@Uri.EscapeDataString(shortId)"
+                                                       class="text-decoration-none font-monospace small fw-bold"
+                                                       onclick="event.stopPropagation();">
+                                                        @shortId
+                                                    </a>
+                                                }
+                                                <div class="text-muted font-monospace" style="font-size: 0.7rem;">@fullId</div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td class="text-end fw-bold align-middle" data-bs-toggle="collapse" data-bs-target="#@rCollapseId" style="cursor: pointer;">@count</td>
+                                </tr>
+                                <tr class="collapse" id="@rCollapseId">
+                                    <td colspan="2" class="bg-body-tertiary border-start border-3 border-info">
+                                        <div class="ps-4 py-2">
+                                            @if (reasons.Any())
+                                            {
+                                                <div class="small text-muted mb-1 fw-bold">Reasons for failure:</div>
+                                                @foreach (var r in reasons)
+                                                {
+                                                    <div class="small d-flex justify-content-between mb-1 border-bottom border-secondary-subtle pb-1">
+                                                        <span class="text-danger-emphasis me-2">@r.Reason</span>
+                                                        <span class="fw-bold">@r.Count</span>
+                                                    </div>
+                                                }
                                             }
                                         </div>
                                     </td>

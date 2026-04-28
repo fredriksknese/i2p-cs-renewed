@@ -166,6 +166,37 @@ public class TransportConnectionLogger
             .Take(topN);
     }
 
+    /// <summary>
+    ///     Get the top N failed routers/IPs for a given transport and direction.
+    /// </summary>
+    public IEnumerable<(string ShortId, string FullId, int Count, IEnumerable<(string Reason, int Count)> Reasons)>
+        GetTopFailedRouters(string transport, string direction, int topN = 30)
+    {
+        ConcurrentQueue<FailureEntry> queue;
+        if (transport == "NTCP2")
+            queue = direction == "Inbound" ? _ntcp2InboundFailures : _ntcp2OutboundFailures;
+        else if (transport == "SSU2")
+            queue = direction == "Inbound" ? _ssu2InboundFailures : _ssu2OutboundFailures;
+        else
+            return Enumerable.Empty<(string, string, int, IEnumerable<(string, int)>)>();
+
+        return queue.ToArray()
+            .GroupBy(f => (
+                ShortId: f.RouterId ?? f.RemoteEndPoint?.Address.ToString() ?? "Unknown",
+                FullId: f.RouterFullId ?? f.RemoteEndPoint?.ToString() ?? ""
+            ))
+            .Select(g => (
+                g.Key.ShortId,
+                g.Key.FullId,
+                Count: g.Count(),
+                Reasons: (IEnumerable<(string Reason, int Count)>)g.GroupBy(f => f.Reason)
+                    .Select(rg => (Reason: rg.Key, Count: rg.Count()))
+                    .OrderByDescending(r => r.Count)
+            ))
+            .OrderByDescending(x => x.Count)
+            .Take(topN);
+    }
+
     public IEnumerable<DetailedFailureInfo> GetDetailedFailuresByReason(
         string transport, string direction, string reason)
     {
