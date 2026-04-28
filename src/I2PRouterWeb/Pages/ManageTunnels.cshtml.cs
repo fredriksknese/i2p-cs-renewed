@@ -77,7 +77,12 @@ public class ManageTunnelsModel : PageModel
             return Page();
         }
 
-        var cryptoTypes = string.Join(",", NewTunnelCryptoKeyTypes);
+        // Ensure MLKEM variants come before plain X25519 so remote routers
+        // prefer the stronger post-quantum option (first listed = preferred).
+        var orderedCryptoKeys = NewTunnelCryptoKeyTypes
+            .OrderByDescending(k => k.Contains("MLKEM", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var cryptoTypes = string.Join(",", orderedCryptoKeys);
         var options = new Dictionary<string, string>
         {
             { "type", NewTunnelType },
@@ -87,7 +92,7 @@ public class ManageTunnelsModel : PageModel
             { "inbound.quantity", NewTunnelQuantity.ToString() },
             { "outbound.quantity", NewTunnelQuantity.ToString() },
             { "signaturetype", NewTunnelSigningKeyType },
-            { "cryptotype", NewTunnelCryptoKeyTypes.FirstOrDefault() ?? "X25519" },
+            { "cryptotype", orderedCryptoKeys.FirstOrDefault() ?? "X25519" },
             { "i2cp.leaseSetEncType", cryptoTypes },
             { "startOnLaunch", NewTunnelStartOnLaunch.ToString().ToLowerInvariant() }
         };

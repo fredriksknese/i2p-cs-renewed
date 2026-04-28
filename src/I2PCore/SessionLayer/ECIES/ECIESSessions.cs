@@ -370,6 +370,8 @@ public class ECIESSession
         return message;
     }
 
+    private const int TagsPerDirection = 5000;
+
     private void InitializeBiDirectionalTags()
     {
         lock (_sessionLock)
@@ -379,7 +381,7 @@ public class ECIESSession
 
             // Inbound tags: derived from ck and our receive key (what we expect from remote)
             var inboundTagSet = new ECIESTagSet(_ck, _receiveKey);
-            for (var i = 0; i < 500; i++)
+            for (var i = 0; i < TagsPerDirection; i++)
             {
                 var (tag, key) = inboundTagSet.ConsumeNext();
                 _inboundTags[tag] = new TagInfo { Key = key, Index = i, Created = DateTime.UtcNow };
@@ -387,7 +389,7 @@ public class ECIESSession
 
             // Outbound tags: derived from ck and our send key (what we send to remote)
             var outboundTagSet = new ECIESTagSet(_ck, _sendKey);
-            for (var i = 0; i < 500; i++)
+            for (var i = 0; i < TagsPerDirection; i++)
             {
                 var (tag, key) = outboundTagSet.ConsumeNext();
                 _outboundTags.Enqueue((tag, new TagInfo { Key = key, Index = i, Created = DateTime.UtcNow }));

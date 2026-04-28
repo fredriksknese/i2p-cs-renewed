@@ -30,11 +30,11 @@ public class I2PStream : IDisposable
     // Constants per i2pd reference (Streaming.h)
     public const int STREAMING_MTU = 1730;
     public const int STREAMING_MTU_RATCHETS = 1812;
-    public const int INITIAL_WINDOW_SIZE = 10;
+    public const int INITIAL_WINDOW_SIZE = 64; // Java I2P: MAX_SLOW_START_WINDOW = 64
     public const int MIN_WINDOW_SIZE = 3;
     public const int MAX_WINDOW_SIZE = 512;
-    public const int INITIAL_RTT = 1500; // ms
-    public const int INITIAL_RTO = 9000; // ms
+    public const int INITIAL_RTT = 50; // ms — conservative estimate, EWMA will measure the real value
+    public const int INITIAL_RTO = 1000; // ms
     public const int MIN_RTO = 20; // ms
     public const int SYN_TIMEOUT = 200; // ms
     public const int MAX_NUM_RESEND_ATTEMPTS = 10;
@@ -297,7 +297,20 @@ public class I2PStream : IDisposable
     /// <summary>
     ///     Handle a received packet for this stream
     /// </summary>
+    private readonly object _receiveLock = new();
+
     public void HandleNextPacket(StreamingPacket packet)
+    {
+        // Lock the entire receive path — on loopback, multiple garlic messages
+        // can arrive concurrently via Task.Run(), and without synchronisation
+        // _lastReceivedSequence / _savedPackets / data delivery can race.
+        lock (_receiveLock)
+        {
+            HandleNextPacketLocked(packet);
+        }
+    }
+
+    private void HandleNextPacketLocked(StreamingPacket packet)
     {
         Logging.LogDebug(
             $"I2PStream {RecvStreamId:X8}: HandleNextPacket: Seq {packet.SequenceNumber} Ack {packet.AckThrough} Flags {packet.Flags}");
@@ -368,7 +381,11 @@ public class I2PStream : IDisposable
                 }
             }
 
-            ScheduleAck();
+            // Send ACK immediately — delayed ACKs (ScheduleAck) add latency
+            // that throttles throughput, especially on loopback where RTT ≈ 0.
+            // The sender's window only opens when ACKs arrive, so every ms of
+            // delay directly reduces throughput.
+            SendQuickAck();
         }
         else if (seqn > _lastReceivedSequence + 1)
         {
@@ -910,19 +927,29 @@ public class I2PStream : IDisposable
 
     private void SendQuickAck()
     {
+        var isSyn = !_synSent;
+
         var ack = new StreamingPacket
         {
             SendStreamId = RecvStreamId,
             ReceiveStreamId = SendStreamId,
-            SequenceNumber = 0,
+            // SYN packets consume a sequence number (the responder's seq 0).
+            // Pure ACK-only packets always use seq 0 without consuming it.
+            // Without this, BuildDataPacket would also produce seq 0 and the
+            // receiver would drop the first data packet as a duplicate.
+            SequenceNumber = isSyn ? _sequenceNumber++ : 0,
             AckThrough = _lastReceivedSequence,
-            Flags = StreamingPacket.FLAG_NO_ACK
+            Flags = 0
         };
 
-        if (!_synSent)
+        if (isSyn)
         {
             _synSent = true;
             SetSynOptions(ack);
+        }
+        else
+        {
+            SignPacket(ack);
         }
 
         // Generate NACKs for gaps in received sequence

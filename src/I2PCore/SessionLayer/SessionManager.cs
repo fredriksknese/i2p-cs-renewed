@@ -87,8 +87,10 @@ public class SessionManager
                     break;
 
                 case RouterContext.HttpProxyEncryptionType.Hybrid:
-                    AddKeyForType(I2PKeyType.KeyTypes.X25519, eciesprivkey, eciespubkey);
+                    // MLKEM768 first — remote routers pick the first supported type,
+                    // so listing the stronger post-quantum option first maximises its use.
                     AddKeyForType(I2PKeyType.KeyTypes.MLKEM768_X25519, eciesprivkey, eciespubkey);
+                    AddKeyForType(I2PKeyType.KeyTypes.X25519, eciesprivkey, eciespubkey);
                     break;
             }
         }

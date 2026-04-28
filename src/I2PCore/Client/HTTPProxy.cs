@@ -42,6 +42,11 @@ public class HTTPProxy : IDisposable
         "Referer",
         "Accept-Language",
         "Accept-Charset",
+        "Accept-Encoding", // Stripped — the streaming layer has its own compression;
+                           // letting the web server gzip confuses the magic-byte detection.
+                           // Java I2P strips this too (I2PTunnelHTTPClient).
+        "Connection",      // Stripped — we force Connection: close below so the web server
+                           // closes the TCP connection after the response, signalling EOF.
         "Keep-Alive",
         "Proxy-Connection",
         "Proxy-Authorization",
@@ -583,6 +588,11 @@ public class HTTPProxy : IDisposable
         sb.Append("User-Agent: ");
         sb.Append(I2PUserAgent);
         sb.Append("\r\n");
+
+        // Force Connection: close so the web server closes the TCP socket after the
+        // response.  Without this, HTTP/1.1 keep-alive keeps the connection open and
+        // the browser never sees EOF — it waits forever or offers a download.
+        sb.Append("Connection: close\r\n");
 
         // X-Accept-Encoding: signal I2P gzip support (Java I2P default behaviour)
         sb.Append("X-Accept-Encoding: ");

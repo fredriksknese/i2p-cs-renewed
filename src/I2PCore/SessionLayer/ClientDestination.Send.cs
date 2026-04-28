@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using I2PCore.Crypto;
 using I2PCore.Data;
@@ -13,6 +14,8 @@ namespace I2PCore.SessionLayer;
 
 public partial class ClientDestination : IClient
 {
+
+
     private SendPreconditionState CheckSendPreconditions(I2PIdentHash dest)
     {
         var isLocal = Router.GetClientDestination(dest) != null;
@@ -141,8 +144,8 @@ public partial class ClientDestination : IClient
             {
                 var cloveTypes = string.Join(", ", decr.Cloves.Select(c => c.Message?.GetType().Name ?? "?"));
                 Log("Decrypted", $"Loopback OK: {decr.Cloves.Count} cloves [{cloveTypes}]", destHash.Id32Short);
-                // Run in background to avoid deep recursion in local loopback
-                _ = Task.Run(() => localDest.HandleDecryptedGarlic(decr, null));
+                // Use ThreadPool to avoid deep recursion (data→ACK→flush→data→ACK...)
+                ThreadPool.UnsafeQueueUserWorkItem(_ => localDest.HandleDecryptedGarlic(decr, null), null);
                 return ClientStates.Established;
             }
 
