@@ -74,6 +74,13 @@ public class TunnelsModel : PageModel
 
     private TunnelDisplayInfo BuildInfo(Tunnel tunnel, string direction)
     {
+        var clientName = "";
+        if (tunnel.Owner is ClientTunnelProvider ctp)
+        {
+            var client = ctp.GetClientForTunnel(tunnel);
+            clientName = client?.Name ?? "";
+        }
+
         var hops = new List<string>();
         try
         {
@@ -119,7 +126,8 @@ public class TunnelsModel : PageModel
             BytesReceived = bytesRecv,
             SendBitrate = sendRate,
             ReceiveBitrate = recvRate,
-            IsExploratory = tunnel.Config?.Pool == TunnelConfig.TunnelPool.Exploratory
+            IsExploratory = tunnel.Config?.Pool == TunnelConfig.TunnelPool.Exploratory,
+            ClientName = clientName
         };
     }
 
@@ -143,6 +151,7 @@ public class TunnelDisplayInfo
     public string TunnelId { get; set; } = "";
     public string Direction { get; set; } = "";
     public string Pool { get; set; } = "";
+    public string ClientName { get; set; } = "";
     public int HopCount { get; set; }
     public List<string> Hops { get; set; } = new();
     public bool IsActive { get; set; }

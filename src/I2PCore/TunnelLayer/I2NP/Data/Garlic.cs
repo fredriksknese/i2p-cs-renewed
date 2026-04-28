@@ -16,6 +16,8 @@ public class Garlic : I2PType
     public List<GarlicClove> Cloves = new();
     public I2PByteBlock Data;
 
+    public I2PIdentHash RemoteHash { get; set; }
+
     public Garlic(I2PBufferCursor reader)
     {
         ParseData(reader);

@@ -339,7 +339,8 @@ public partial class ClientDestination : IClient
         if (cb is null) return false;
 
         var lls = MySessions.GetLeaseSet(dest);
-        if (lls != null && NetDb.AreLeasesGood(lls))
+        var isLocal = Router.GetClientDestination(dest) != null;
+        if (lls != null && (isLocal || NetDb.AreLeasesGood(lls)))
         {
             cb?.Invoke(dest, lls, tag);
             return true;

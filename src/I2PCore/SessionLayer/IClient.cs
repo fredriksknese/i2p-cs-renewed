@@ -2,15 +2,17 @@
 
 namespace I2PCore.SessionLayer;
 
-internal enum RemovalReason
+public enum RemovalReason
 {
     BuildFailed,
     Expired,
     Failed
 }
 
-internal interface IClient
+public interface IClient
 {
+    string Name { get; }
+
     int InboundTunnelHopCount { get; }
     int OutboundTunnelHopCount { get; }
 

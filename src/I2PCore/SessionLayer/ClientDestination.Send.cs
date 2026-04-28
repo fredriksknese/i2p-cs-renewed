@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using I2PCore.Data;
 using I2PCore.TunnelLayer;
 using I2PCore.TunnelLayer.I2NP.Data;
@@ -13,6 +14,23 @@ public partial class ClientDestination : IClient
 {
     private SendPreconditionState CheckSendPreconditions(I2PIdentHash dest)
     {
+        var isLocal = Router.GetClientDestination(dest) != null;
+
+        if (isLocal)
+        {
+            var ls = MySessions.GetLeaseSet(dest);
+            if (ls != null)
+            {
+                return new SendPreconditionState
+                {
+                    ClientState = ClientStates.Established,
+                    RemoteLeaseSet = ls
+                };
+            }
+
+            return new SendPreconditionState { ClientState = ClientStates.NoLeases };
+        }
+
         if (InboundEstablishedPool.IsEmpty)
         {
             Logging.LogDebug($"{this}: Inbound established pool is empty.");
@@ -57,8 +75,10 @@ public partial class ClientDestination : IClient
     {
         if (Terminated) throw new InvalidOperationException($"Destination {this} is terminated.");
 
+        var isLocal = Router.GetClientDestination(dest.IdentHash) != null;
+
         var replytunnel = SelectInboundTunnel();
-        if (replytunnel is null)
+        if (replytunnel is null && !isLocal)
         {
             Logging.LogWarning($"{this}: Send: No inbound tunnel available for reply.");
             return ClientStates.NoTunnels;
@@ -101,9 +121,33 @@ public partial class ClientDestination : IClient
     /// <param name="msg">I2NPMessage</param>
     internal ClientStates Send(I2PDestination dest, I2NpMessage msg)
     {
+        return Send(dest.IdentHash, msg);
+    }
+
+    /// <summary>
+    ///     Send a I2NPMessage to the Destination IdentHash through a local out tunnel.
+    /// </summary>
+    internal ClientStates Send(I2PIdentHash destHash, I2NpMessage msg)
+    {
         if (Terminated) throw new InvalidOperationException($"This Destination {this} is terminated.");
 
-        var result = CheckSendPreconditions(dest.IdentHash);
+        var localDest = Router.GetClientDestination(destHash);
+        if (localDest != null && msg is GarlicMessage garlic)
+        {
+            Logging.LogInformation($"{this}: Send: Local loopback for {destHash.Id32Short} bypassing tunnels (E2E encryption preserved).");
+            var decr = localDest.DecryptGarlic(garlic);
+            if (decr != null)
+            {
+                // Run in background to avoid deep recursion in local loopback
+                _ = Task.Run(() => localDest.HandleDecryptedGarlic(decr, null));
+                return ClientStates.Established;
+            }
+
+            Logging.LogWarning($"{this}: Send: Local loopback delivery failed for {destHash.Id32Short}.");
+            return ClientStates.NoLeases;
+        }
+
+        var result = CheckSendPreconditions(destHash);
 
         switch (result.ClientState)
         {
@@ -115,8 +159,8 @@ public partial class ClientDestination : IClient
                 return result.ClientState;
 
             case ClientStates.NoLeases:
-                Logging.LogDebug($"{this}: No leases available.");
-                LookupDestination(dest.IdentHash, HandleDestinationLookupResult);
+                Logging.LogDebug($"{this}: No leases available for {destHash.Id32Short}.");
+                LookupDestination(destHash, HandleDestinationLookupResult);
                 return result.ClientState;
         }
 
@@ -126,32 +170,29 @@ public partial class ClientDestination : IClient
 
         if (leasehorizon.TotalSeconds < 0)
         {
-#if !LOG_ALL_LEASE_MGMT
-            Logging.LogDebug(
-                $"{this} Send: Leases for {dest.IdentHash.Id32Short} have all expired ({Tunnel.TunnelLifetime}). Looking up.");
-#endif
-            LookupDestination(dest.IdentHash, HandleDestinationLookupResult);
+            Logging.LogDebug($"{this} Send: Leases for {destHash.Id32Short} have all expired. Looking up.");
+            LookupDestination(destHash, HandleDestinationLookupResult);
             return ClientStates.NoLeases;
         }
 
         if (leasehorizon < MinLeaseLifetime)
         {
-#if !LOG_ALL_LEASE_MGMT
-            Logging.LogDebug(
-                $"{this} Send: Leases for {dest.IdentHash.Id32Short} is getting old ({leasehorizon}). Looking up.");
-#endif
-            LookupDestination(dest.IdentHash, HandleDestinationLookupResult);
+            Logging.LogDebug($"{this} Send: Leases for {destHash.Id32Short} is getting old ({leasehorizon}). Looking up.");
+            LookupDestination(destHash, HandleDestinationLookupResult);
         }
 
         Logging.LogInformation($"{this}: Send: Routing garlic via outbound tunnel " +
-                               $"{result.OutTunnel.TunnelDebugTrace} to remote lease " +
-                               $"GW={result.RemoteLease.TunnelGw.Id32Short} TunnelId={result.RemoteLease.TunnelId}, " +
+                               (result.OutTunnel?.TunnelDebugTrace ?? "LOCAL") + " to remote lease " +
+                               $"GW={result.RemoteLease?.TunnelGw?.Id32Short ?? "LOCAL"} TunnelId={result.RemoteLease?.TunnelId ?? 0}, " +
                                $"msg type={msg.MessageType}, payload={msg.Payload.Length} bytes");
 
-        result.OutTunnel.Send(
-            new TunnelMessageTunnel(
-                msg,
-                result.RemoteLease.TunnelGw, result.RemoteLease.TunnelId));
+        if (result.OutTunnel != null && result.RemoteLease != null)
+        {
+            result.OutTunnel.Send(
+                new TunnelMessageTunnel(
+                    msg,
+                    result.RemoteLease.TunnelGw, result.RemoteLease.TunnelId));
+        }
 
         return ClientStates.Established;
     }

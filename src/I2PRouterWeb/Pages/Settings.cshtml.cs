@@ -37,10 +37,6 @@ public class SettingsModel : PageModel
 
     [BindProperty] public int TransitSharePercent { get; set; }
 
-    [BindProperty] public RouterContext.HttpProxyEncryptionType ProxyEncryption { get; set; }
-
-    [BindProperty] public int HttpProxyPort { get; set; }
-
     public string? CurrentExternalAddress { get; set; }
     public string? DetectedExternalAddress { get; set; }
     public int CurrentTcpPort { get; set; }
@@ -53,9 +49,6 @@ public class SettingsModel : PageModel
     public int CurrentMaxNtcp2InboundConnections { get; set; }
     public int CurrentMaxNtcp2OutboundConnections { get; set; }
     public int CurrentTransitSharePercent { get; set; }
-    public RouterContext.HttpProxyEncryptionType CurrentProxyEncryption { get; set; }
-    public int CurrentHttpProxyPort { get; set; }
-    public bool CurrentHttpProxyRunning { get; set; }
     public string? SuccessMessage { get; set; }
 
     public void OnGet()
@@ -74,8 +67,6 @@ public class SettingsModel : PageModel
         MaxNtcp2InboundConnections = _routerService.MaxNtcp2InboundConnections;
         MaxNtcp2OutboundConnections = _routerService.MaxNtcp2OutboundConnections;
         TransitSharePercent = _routerService.TransitSharePercent;
-        ProxyEncryption = _routerService.ProxyEncryption;
-        HttpProxyPort = _routerService.HttpProxyPort;
     }
 
     public IActionResult OnPost()
@@ -95,9 +86,8 @@ public class SettingsModel : PageModel
                 return Page();
             }
 
-        _routerService.HttpProxyPort = HttpProxyPort;
         _routerService.ApplySettings(ipAddress, TcpPort, UdpPort, IsFirewalled, UseIPv6, EnableSSU2, FloodfillEnabled,
-            ProxyEncryption, MaxTransitTunnels, TransitSharePercent, MaxNtcp2InboundConnections,
+            _routerService.ProxyEncryption, MaxTransitTunnels, TransitSharePercent, MaxNtcp2InboundConnections,
             MaxNtcp2OutboundConnections);
 
         LoadCurrentSettings();
@@ -120,8 +110,5 @@ public class SettingsModel : PageModel
         CurrentMaxNtcp2InboundConnections = _routerService.MaxNtcp2InboundConnections;
         CurrentMaxNtcp2OutboundConnections = _routerService.MaxNtcp2OutboundConnections;
         CurrentTransitSharePercent = _routerService.TransitSharePercent;
-        CurrentProxyEncryption = _routerService.ProxyEncryption;
-        CurrentHttpProxyPort = _routerService.HttpProxyPort;
-        CurrentHttpProxyRunning = _routerService.IsHttpProxyRunning;
     }
 }

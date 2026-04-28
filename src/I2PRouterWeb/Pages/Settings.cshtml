@@ -120,28 +120,6 @@
                         <div class="form-text">Percentage of total bandwidth allocated to transit traffic.</div>
                     </div>
 
-                    <hr/>
-                    <h6 class="mb-3">HTTP Proxy</h6>
-
-                    <div class="mb-3">
-                        <label for="httpProxyPort" class="form-label">HTTP Proxy Port</label>
-                        <input type="number" class="form-control" id="httpProxyPort"
-                               asp-for="HttpProxyPort" min="1024" max="65535" required>
-                        <div class="form-text">Local port for the HTTP proxy (browse .i2p sites). Default: 4445.</div>
-                    </div>
-
-                    <div class="mb-3">
-                        <label for="proxyEncryption" class="form-label">Encryption Type</label>
-                        <select class="form-select" id="proxyEncryption" asp-for="ProxyEncryption">
-                            <option value="@RouterContext.HttpProxyEncryptionType.Ecies">ECIES-X25519</option>
-                            <option value="@RouterContext.HttpProxyEncryptionType.Mlkem">MLKEM768-X25519</option>
-                            <option value="@RouterContext.HttpProxyEncryptionType.Hybrid">ECIES-X25519 + MLKEM768-X25519
-                                (Hybrid)
-                            </option>
-                        </select>
-                        <div class="form-text">Choose the cryptographic protection level for your client tunnel.</div>
-                    </div>
-
                     <button type="submit" class="btn btn-outline-primary">Apply Settings</button>
                 </form>
             </div>
@@ -205,21 +183,6 @@
                     <dd class="col-sm-6">
                         <span class="badge bg-@(Model.CurrentFloodfillEnabled ? "success" : "secondary")">
                             @(Model.CurrentFloodfillEnabled ? "Enabled" : "Disabled")
-                        </span>
-                    </dd>
-
-                    <dt class="col-sm-6">HTTP Proxy:</dt>
-                    <dd class="col-sm-6">
-                        <span class="badge bg-@(Model.CurrentHttpProxyRunning ? "success" : "secondary")">
-                            @(Model.CurrentHttpProxyRunning ? "Running" : "Stopped")
-                        </span>
-                        <small class="text-muted d-block">Port @Model.CurrentHttpProxyPort</small>
-                    </dd>
-
-                    <dt class="col-sm-6">Encryption:</dt>
-                    <dd class="col-sm-6">
-                        <span class="badge bg-primary">
-                            @Model.CurrentProxyEncryption
                         </span>
                     </dd>
                 </dl>

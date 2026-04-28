@@ -121,6 +121,9 @@ public static class Router
 
                 if (rci.FloodfillEnabled) FloodfillServer.Start();
 
+                // Start client services and tunnels
+                ClientContext.Inst.Start();
+
                 _worker = new Thread(Run)
                 {
                     Name = "Router",
@@ -403,7 +406,23 @@ public static class Router
 
     public static ClientDestination GetClientDestination(I2PIdentHash hash)
     {
-        return RunningDestinations.Values.FirstOrDefault(d => d.Destination.IdentHash == hash);
+        return ClientDestination.AllDestinations.Keys.FirstOrDefault(d => d.Destination.IdentHash == hash);
+    }
+
+    public static ClientDestination FindLocalDestinationByStaticKey(byte[] staticPublicKey)
+    {
+        if (staticPublicKey == null || staticPublicKey.Length != 32) return null;
+
+        return ClientDestination.AllDestinations.Keys.FirstOrDefault(d =>
+        {
+            var keys = d.MySessions?.PublicKeys;
+            return keys != null && keys.Any(k =>
+                (k.Certificate.PublicKeyType == I2PKeyType.KeyTypes.X25519 ||
+                 k.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM512_X25519 ||
+                 k.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM768_X25519 ||
+                 k.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM1024_X25519) &&
+                k.ToByteArray().SequenceEqual(staticPublicKey));
+        });
     }
 
     internal static void HandleI2NpMessageReceived(Ii2NpHeader msg, InboundTunnel from)

@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
+using System.Collections.Concurrent;
 using I2PCore.Crypto.Noise;
 using I2PCore.Data;
 using I2PCore.SessionLayer.ECIES;
@@ -42,6 +43,17 @@ internal class Session
     /// </summary>
     protected DateTime AcKedLeaseSetExpireTime = DateTime.MinValue;
 
+    private byte[] _pendingHandshakeData;
+
+    private class PendingGarlic
+    {
+        public IEnumerable<I2PPublicKey> PublicKeys;
+        public InboundTunnel ReplyTunnel;
+        public IList<GarlicClove> Cloves;
+    }
+
+    private readonly ConcurrentQueue<PendingGarlic> _outboundHandshakeQueue = new();
+
     internal Session(ClientDestination context, I2PDestination mydest, I2PIdentHash remotedest)
     {
         Context = context;
@@ -72,8 +84,20 @@ internal class Session
                 return false;
             }
 
+            var isLocal = Router.GetClientDestination(RemoteDestination) != null;
             var signed = Context.SignedLeases;
-            if (signed is null) return false;
+
+            if (signed is null)
+            {
+                // For local bypass, we can send a synthetic LeaseSet if we have public keys
+                if (isLocal)
+                {
+                    return AcKedLeaseSetExpireTime == DateTime.MinValue ||
+                           AcKedLeaseSetExpireTime < DateTime.UtcNow + RemoteLeaseSetUpdateMargin;
+                }
+
+                return false;
+            }
 
             // remote never received our leases?
             if (AcKedLeaseSetExpireTime == DateTime.MinValue) return true;
@@ -94,15 +118,34 @@ internal class Session
             pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM1024_X25519);
     }
 
+    internal void SetPendingHandshake(byte[] msgData)
+    {
+        _pendingHandshakeData = msgData;
+    }
+
+    internal void HandshakeCompleted()
+    {
+        Logging.LogInformation($"{this}: Handshake completed. Flushing {_outboundHandshakeQueue.Count} queued messages.");
+        while (_outboundHandshakeQueue.TryDequeue(out var pending))
+        {
+            var msg = EncryptECIES(pending.PublicKeys, pending.ReplyTunnel, pending.Cloves);
+            if (msg != null)
+            {
+                Context.Send(RemoteDestination, msg);
+            }
+        }
+    }
+
     internal GarlicMessage Encrypt(
         IEnumerable<I2PPublicKey> remotepublickeys,
         InboundTunnel replytunnel,
         IList<GarlicClove> cloves,
         bool checkremotelsage = true)
     {
+        var isLocal = Router.GetClientDestination(RemoteDestination) != null;
         if (checkremotelsage && RemoteNeedsLeaseSetUpdate)
         {
-            if (replytunnel != null)
+            if (replytunnel != null || isLocal)
             {
                 Logging.LogDebug($"{this}: Sending my leases to remote {RemoteDestination.Id32Short}.");
                 GenerateRemoteLsUpdate(cloves, replytunnel);
@@ -143,9 +186,40 @@ internal class Session
         var hasSession = EciesKeys.HasOutboundSession(RemoteDestination) &&
                          EciesKeys.HasAvailableOutboundTags(RemoteDestination);
 
+        if (!hasSession && _pendingHandshakeData == null && EciesKeys.IsOutboundHandshakeInProgress(RemoteDestination))
+        {
+            Logging.LogInformation($"{this}: ECIES handshake already in progress for {RemoteDestination.Id32Short}. Queuing message.");
+            _outboundHandshakeQueue.Enqueue(new PendingGarlic
+            {
+                PublicKeys = remotepublickeys,
+                ReplyTunnel = replytunnel,
+                Cloves = cloves
+            });
+            return null;
+        }
+
         byte[] eciesMessage = null;
 
-        if (hasSession)
+        if (_pendingHandshakeData != null)
+        {
+            try
+            {
+                eciesMessage = EciesKeys.CreateHandshakeReply(RemoteDestination, _pendingHandshakeData, payload);
+                _pendingHandshakeData = null;
+
+                Logging.LogInformation(
+                    $"{this}: Encrypted ECIES handshake reply to {RemoteDestination.Id32Short}: {eciesMessage.Length} bytes");
+                HttpProxyLogger.Inst.Log("GARLIC", RemoteDestination.Id32Short,
+                    "Sent",
+                    $"ECIES Handshake Reply sent: {eciesMessage.Length} bytes, {cloves.Count} clove(s)");
+            }
+            catch (Exception ex)
+            {
+                Logging.LogWarning($"{this}: Failed to create ECIES handshake reply: {ex.Message}");
+            }
+        }
+
+        if (eciesMessage == null && hasSession)
             // Use existing session with session tag
             try
             {
@@ -342,21 +416,38 @@ internal class Session
 
     private IList<GarlicClove> GenerateRemoteLsUpdate(IList<GarlicClove> cloves, InboundTunnel replytunnel)
     {
+        var isLocal = Router.GetClientDestination(RemoteDestination) != null;
         var signedleases = Context.SignedLeases;
         if (signedleases is null)
         {
-            Logging.LogWarning($"{this}: GenerateRemoteLsUpdate: SignedLeases is null! Cannot send update.");
-            return cloves;
+            if (isLocal)
+            {
+                var keys = Context.MySessions.PublicKeys;
+                if (keys != null && keys.Any())
+                {
+                    signedleases = new I2PLeaseSet2(
+                        Context.Destination,
+                        new List<I2PLease2>(),
+                        keys,
+                        Context.Destination.SigningPublicKey,
+                        null);
+                }
+            }
+
+            if (signedleases is null)
+            {
+                Logging.LogWarning($"{this}: GenerateRemoteLsUpdate: SignedLeases is null! Cannot send update.");
+                return cloves;
+            }
         }
 
-        if (replytunnel is null)
+        if (replytunnel is null && !isLocal)
         {
             Logging.LogWarning($"{this}: GenerateRemoteLsUpdate: replytunnel is null! Cannot send update.");
             return cloves;
         }
 
         var myleases = new DatabaseStoreMessage(signedleases);
-        var lsack = new DeliveryStatusMessage(I2NpMessage.GenerateMessageId());
 
         // Use LOCAL delivery for LeaseSet, matching Java I2P behavior.
         // The remote router stores the LeaseSet in its NetDB when it
@@ -366,18 +457,26 @@ internal class Session
                 new GarlicCloveDeliveryLocal(
                     myleases)));
 
-        cloves.Add(
-            new GarlicClove(
-                new GarlicCloveDeliveryTunnel(
-                    lsack,
-                    replytunnel.Destination, replytunnel.GatewayTunnelId)));
-
-
-        NotAckedLsUpdates[lsack.StatusMessageId] = new LeaseSetUpdateAck
+        if (replytunnel != null)
         {
-            ExpireTimeForLeaseSet = signedleases.Expire,
-            MessageId = lsack.MessageId
-        };
+            var lsack = new DeliveryStatusMessage(I2NpMessage.GenerateMessageId());
+            cloves.Add(
+                new GarlicClove(
+                    new GarlicCloveDeliveryTunnel(
+                        lsack,
+                        replytunnel.Destination, replytunnel.GatewayTunnelId)));
+
+
+            NotAckedLsUpdates[lsack.StatusMessageId] = new LeaseSetUpdateAck
+            {
+                ExpireTimeForLeaseSet = signedleases.Expire,
+                MessageId = lsack.MessageId
+            };
+        }
+        else
+        {
+            AcKedLeaseSetExpireTime = signedleases.Expire;
+        }
 
         return cloves;
     }

@@ -1,0 +1,271 @@
+@page
+@model ManageTunnelsModel
+@{
+    ViewData["Title"] = "Manage Tunnels";
+}
+
+<div class="row mb-3">
+    <div class="col-12">
+        <h1 class="mb-2">Manage Tunnels</h1>
+        <p class="text-muted">Configure your client and server tunnels.</p>
+    </div>
+</div>
+
+@if (Model.SuccessMessage != null)
+{
+    <div class="alert alert-success alert-dismissible fade show" role="alert">
+        @Model.SuccessMessage
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+}
+
+@if (Model.ErrorMessage != null)
+{
+    <div class="alert alert-danger alert-dismissible fade show" role="alert">
+        @Model.ErrorMessage
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+}
+
+<div class="row">
+    <div class="col-lg-8">
+        <!-- HTTP Proxy Section -->
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Default HTTP Proxy</h5>
+                <span class="badge bg-@(Model.HttpProxyRunning ? "success" : "secondary")">
+                    @(Model.HttpProxyRunning ? "Running" : "Stopped")
+                </span>
+            </div>
+            <div class="card-body">
+                <form asp-page-handler="UpdateHttpProxy" method="post">
+                    <div class="row align-items-end">
+                        <div class="col-md-3">
+                            <label class="form-label">Port</label>
+                            <input type="number" class="form-control" asp-for="HttpProxyPort" min="1024" max="65535" required>
+                        </div>
+                        <div class="col-md-5">
+                            <label class="form-label">Encryption Type</label>
+                            <select class="form-select" asp-for="ProxyEncryption">
+                                <option value="@I2PCore.SessionLayer.RouterContext.HttpProxyEncryptionType.Ecies">ECIES-X25519</option>
+                                <option value="@I2PCore.SessionLayer.RouterContext.HttpProxyEncryptionType.Mlkem">MLKEM768-X25519</option>
+                                <option value="@I2PCore.SessionLayer.RouterContext.HttpProxyEncryptionType.Hybrid">Hybrid (ECIES + MLKEM)</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <button type="submit" class="btn btn-primary w-100">Update & Restart</button>
+                        </div>
+                    </div>
+                    <div class="form-text mt-2">The default HTTP proxy allows you to browse .i2p websites.</div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Generic Tunnels Section -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Client & Server Tunnels</h5>
+            </div>
+            <div class="card-body p-0">
+                @if (!Model.GenericTunnels.Any())
+                {
+                    <p class="p-3 text-muted mb-0 text-center">No tunnels configured. Use the form below to create one.</p>
+                }
+                else
+                {
+                    <div class="table-responsive">
+                        <table class="table table-hover table-striped mb-0">
+                            <thead>
+                                <tr>
+                                        <th>Name</th>
+                                        <th>Type</th>
+                                        <th>Port</th>
+                                        <th>Destination (B32)</th>
+                                        <th>Status</th>
+                                        <th>Autostart</th>
+                                        <th class="text-end">Actions</th>
+                                    </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var t in Model.GenericTunnels)
+                                {
+                                    <tr>
+                                        <td class="fw-bold">@t.Name</td>
+                                        <td><code>@t.Type</code></td>
+                                        <td>@t.Port</td>
+                                        <td class="small">
+                                            @if (t.Base32Address != null)
+                                            {
+                                                <code>@t.Base32Address</code>
+                                            }
+                                            else
+                                            {
+                                                <span class="text-muted">N/A</span>
+                                            }
+                                        </td>
+                                        <td>
+                                            <span class="badge bg-@(t.IsRunning ? "success" : "secondary")">
+                                                @(t.IsRunning ? "Running" : "Stopped")
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <form asp-page-handler="Action" method="post" class="d-inline">
+                                                <input type="hidden" name="name" value="@t.Name" />
+                                                <button type="submit" name="action" value="toggle_autostart" class="btn btn-sm btn-outline-@(t.StartOnLaunch ? "success" : "secondary")">
+                                                    @(t.StartOnLaunch ? "Enabled" : "Disabled")
+                                                </button>
+                                            </form>
+                                        </td>
+                                        <td class="text-end">
+                                            <form asp-page-handler="Action" method="post" class="d-inline">
+                                                <input type="hidden" name="name" value="@t.Name" />
+                                                @if (t.IsRunning)
+                                                {
+                                                    <button type="submit" name="action" value="stop" class="btn btn-sm btn-outline-warning">Stop</button>
+                                                }
+                                                else
+                                                {
+                                                    <button type="submit" name="action" value="start" class="btn btn-sm btn-outline-success">Start</button>
+                                                }
+                                                <button type="submit" name="action" value="remove" class="btn btn-sm btn-outline-danger" onclick="return confirm('Remove this tunnel?')">Remove</button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <!-- Create New Tunnel Form -->
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Create New Tunnel</h5>
+            </div>
+            <div class="card-body">
+                <form asp-page-handler="CreateTunnel" method="post">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Tunnel Name</label>
+                            <input type="text" class="form-control" asp-for="NewTunnelName" placeholder="My Tunnel" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Type</label>
+                            <select class="form-select" asp-for="NewTunnelType" onchange="toggleFields()">
+                                <option value="client">Client Tunnel</option>
+                                <option value="httpclient">HTTP Client Tunnel</option>
+                                <option value="server">Server Tunnel</option>
+                                <option value="httpserver">HTTP Server Tunnel</option>
+                            </select>
+                        </div>
+
+                        <div id="hostField" class="col-md-6" style="display:none;">
+                            <label class="form-label">Local Host (Target)</label>
+                            <input type="text" class="form-control" asp-for="NewTunnelHost" placeholder="127.0.0.1">
+                        </div>
+
+                        <div class="col-md-6">
+                            <label class="form-label" id="portLabel">Local Port (Listen)</label>
+                            <input type="number" class="form-control" asp-for="NewTunnelPort" min="1" max="65535" required>
+                        </div>
+
+                        <div id="destField" class="col-md-12">
+                            <label class="form-label">Remote Destination (Base64)</label>
+                            <textarea class="form-control" asp-for="NewTunnelDestination" rows="2" placeholder="The destination address..."></textarea>
+                        </div>
+
+                        <div class="col-md-6">
+                            <label class="form-label">Tunnel Hops (Length)</label>
+                            <input type="number" class="form-control" asp-for="NewTunnelHops" min="0" max="7">
+                        </div>
+
+                        <div class="col-md-6">
+                            <label class="form-label">Tunnel Quantity</label>
+                            <input type="number" class="form-control" asp-for="NewTunnelQuantity" min="1" max="10">
+                        </div>
+
+                        <div class="col-md-6">
+                            <div class="form-check mt-4">
+                                <input class="form-check-input" type="checkbox" asp-for="NewTunnelStartOnLaunch">
+                                <label class="form-check-label">
+                                    Start on launch
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="col-md-6">
+                            <label class="form-label">Signature Type</label>
+                            <select class="form-select" asp-for="NewTunnelSigningKeyType">
+                                <option value="EdDsaSha512Ed25519">EdDSA-SHA512-Ed25519</option>
+                                <option value="EcdsaSha256P256">ECDSA-SHA256-P256</option>
+                                <option value="RedDsaSha512Ed25519">RedDSA-SHA512-Ed25519</option>
+                                <option value="MlDsa44">ML-DSA-44 (Experimental)</option>
+                            </select>
+                        </div>
+
+                        <div class="col-md-6">
+                            <label class="form-label">Encryption Types</label>
+                            <div class="d-flex flex-wrap gap-3">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="NewTunnelCryptoKeyTypes" value="X25519" id="encX25519" checked>
+                                    <label class="form-check-label" for="encX25519">
+                                        X25519
+                                    </label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="NewTunnelCryptoKeyTypes" value="MLKEM768_X25519" id="encMlkem">
+                                    <label class="form-check-label" for="encMlkem">
+                                        ML-KEM-768
+                                    </label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="NewTunnelCryptoKeyTypes" value="ElGamal2048" id="encElGamal">
+                                    <label class="form-check-label" for="encElGamal">
+                                        ElGamal
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="form-text">Select one or more encryption types to support.</div>
+                        </div>
+
+                        <div class="col-12 mt-4">
+                            <button type="submit" class="btn btn-success">Create Tunnel</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Help</h5>
+            </div>
+            <div class="card-body">
+                <p class="small"><strong>Client Tunnels:</strong> Listen on a local port and forward connections to a remote I2P destination.</p>
+                <p class="small"><strong>Server Tunnels:</strong> Receive connections on an I2P destination and forward them to a local service (like a web server).</p>
+                <p class="small"><strong>Isolation:</strong> Each tunnel created here uses its own dedicated set of I2P tunnels, ensuring traffic is isolated from other clients.</p>
+                <p class="small mb-0"><strong>Hops:</strong> Standard is 3. Increase for more anonymity, decrease for less latency.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        function toggleFields() {
+            var type = document.getElementById('NewTunnelType').value;
+            var isServer = type === 'server' || type === 'httpserver';
+            
+            document.getElementById('hostField').style.display = isServer ? 'block' : 'none';
+            document.getElementById('destField').style.display = isServer ? 'none' : 'block';
+            document.getElementById('portLabel').innerText = isServer ? 'Local Port (Target)' : 'Local Port (Listen)';
+        }
+        
+        // Run on load
+        document.addEventListener('DOMContentLoaded', toggleFields);
+    </script>
+}

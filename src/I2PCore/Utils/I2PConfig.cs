@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 namespace I2PCore.Utils;
 
@@ -262,5 +263,35 @@ public class I2PConfig
     public void SetOption(string key, string value)
     {
         _options[key] = value;
+    }
+
+    public void SetSectionOption(string section, string key, string value)
+    {
+        if (!_sections.ContainsKey(section))
+            _sections[section] = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        _sections[section][key] = value;
+        _options[$"{section}.{key}"] = value;
+    }
+
+    public void RemoveSection(string section)
+    {
+        if (_sections.Remove(section, out var dict))
+            foreach (var key in dict.Keys)
+                _options.Remove($"{section}.{key}");
+    }
+
+    public void SaveConfigFile(string path)
+    {
+        using var writer = new StreamWriter(path);
+        // Global options first
+        foreach (var opt in _options.Where(o => !o.Key.Contains('.')))
+            writer.WriteLine(opt.Key + "=" + opt.Value);
+
+        foreach (var section in _sections)
+        {
+            writer.WriteLine();
+            writer.WriteLine($"[{section.Key}]");
+            foreach (var opt in section.Value) writer.WriteLine($"{opt.Key}={opt.Value}");
+        }
     }
 }

@@ -69,6 +69,13 @@ public partial class ClientDestination : IClient
                                 Logging.LogDebug(
                                     $"{this}: HandleDecryptedGarlic: Delivered Local: {clove.Message}" );
 #endif
+                            if (clove.Message is DatabaseStoreMessage dbsmsgLocal && dbsmsgLocal.LeaseSet != null)
+                            {
+                                MySessions.ConfirmRemoteHash(decr.RemoteHash, dbsmsgLocal.LeaseSet.Destination.IdentHash);
+                                MySessions.RemoteIsActive(dbsmsgLocal.LeaseSet.Destination.IdentHash);
+                                MySessions.LeaseSetReceived(dbsmsgLocal.LeaseSet);
+                                lastSender = dbsmsgLocal.LeaseSet.Destination;
+                            }
                             TunnelProvider.Inst.DistributeIncomingMessage(null, clove.Message.CreateHeader16);
                             break;
 
@@ -105,6 +112,7 @@ public partial class ClientDestination : IClient
                             switch (clove?.Message)
                             {
                                 case DatabaseStoreMessage dbsmsg when dbsmsg?.LeaseSet != null:
+                                    MySessions.ConfirmRemoteHash(decr.RemoteHash, dbsmsg.LeaseSet?.Destination?.IdentHash);
                                     MySessions.RemoteIsActive(dbsmsg.LeaseSet?.Destination?.IdentHash);
 
                                     if (dbsmsg.LeaseSet.Expire > DateTime.UtcNow)

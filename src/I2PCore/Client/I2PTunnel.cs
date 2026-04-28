@@ -11,15 +11,25 @@ using I2PCore.Utils;
 
 namespace I2PCore.Client;
 
+public interface II2PTunnel
+{
+    bool IsRunning { get; }
+    ClientDestination MyDestination { get; }
+    void Start();
+    void Stop();
+}
+
 /// <summary>
 ///     Outbound tunnel client: listens on a local TCP port and forwards all
 ///     connections to a fixed I2P destination via the streaming layer.
 ///     This is the equivalent of "client tunnel" in i2pd/Java I2P.
 /// </summary>
-public class I2PTunnelClient : IDisposable
+public class I2PTunnelClient : II2PTunnel, IDisposable
 {
     public const int ForwardBufferSize = 8192;
     private readonly ClientDestination _clientDestination;
+
+    public ClientDestination MyDestination => _clientDestination;
 
     private readonly int _listenPort;
     private readonly I2PDestination _remoteDestination;
@@ -86,6 +96,8 @@ public class I2PTunnelClient : IDisposable
         try
         {
             _listener?.Stop();
+            _clientDestination.Shutdown();
+            _streamingDestination.Dispose();
         }
         catch (Exception)
         {
@@ -268,10 +280,12 @@ public class I2PTunnelClient : IDisposable
 ///     forwards them to a local TCP host:port. This is the equivalent of
 ///     "server tunnel" in i2pd/Java I2P.
 /// </summary>
-public class I2PTunnelServer : IDisposable
+public class I2PTunnelServer : II2PTunnel, IDisposable
 {
     public const int ForwardBufferSize = 8192;
     private readonly ClientDestination _clientDestination;
+
+    public ClientDestination MyDestination => _clientDestination;
     private readonly StreamingDestination _streamingDestination;
 
     private readonly string _targetHost;
@@ -331,6 +345,9 @@ public class I2PTunnelServer : IDisposable
 
         IsRunning = false;
         _cts?.Cancel();
+
+        _clientDestination.Shutdown();
+        _streamingDestination.Dispose();
 
         Logging.LogInformation("I2PTunnelServer: Stopped");
     }

@@ -90,6 +90,7 @@ public class I2PStream : IDisposable
     private bool _isChoking3;
     private bool _isFirstAck = true;
     private bool _isTimeoutResend;
+    private bool _synSent;
     private double _jitter = 50;
     private double _jitterAccum;
     private int _jitterDiv;
@@ -825,42 +826,10 @@ public class I2PStream : IDisposable
             Payload = payload
         };
 
-        // First packet: SYN with identity and options
-        if (pkt.SequenceNumber == 0 && Status == StreamStatus.New)
+        if (pkt.SequenceNumber == 0)
         {
-            pkt.Flags |= StreamingPacket.FLAG_SYNCHRONIZE;
-            pkt.Flags |= StreamingPacket.FLAG_FROM_INCLUDED;
-            pkt.Flags |= StreamingPacket.FLAG_MAX_PACKET_SIZE_INCLUDED;
-
-            var optStream = new ArrayBufferWriter<byte>();
-            if (_localIdentityBytes != null)
-                optStream.Write(_localIdentityBytes);
-            optStream.Write(BufUtils.Flip16B(STREAMING_MTU));
-
-            if (_signingPrivateKey != null)
-            {
-                pkt.Flags |= StreamingPacket.FLAG_SIGNATURE_INCLUDED;
-                var sigLen = _signingPrivateKey.Certificate.SignatureLength;
-
-                // Write zeroed signature placeholder into options
-                var sigPlaceholder = new byte[sigLen];
-                optStream.Write(sigPlaceholder);
-                pkt.OptionData = optStream.WrittenSpan.ToArray();
-
-                // Serialize the full packet (with zeroed signature) and sign it
-                var packetBytes = pkt.ToByteArray();
-                var signature = I2PSignature.DoSign(
-                    _signingPrivateKey,
-                    new I2PByteBlock(packetBytes));
-
-                // Patch the signature into the option data
-                var sigOffset = pkt.OptionData.Length - sigLen;
-                Array.Copy(signature, 0, pkt.OptionData, sigOffset, sigLen);
-            }
-            else
-            {
-                pkt.OptionData = optStream.WrittenSpan.ToArray();
-            }
+            _synSent = true;
+            SetSynOptions(pkt);
         }
         else if (_sentPackets.Count >= _windowSize / 2)
         {
@@ -919,6 +888,12 @@ public class I2PStream : IDisposable
             Flags = StreamingPacket.FLAG_NO_ACK
         };
 
+        if (!_synSent)
+        {
+            _synSent = true;
+            SetSynOptions(ack);
+        }
+
         // Generate NACKs for gaps in received sequence
         if (_savedPackets.Count > 0)
         {
@@ -954,7 +929,16 @@ public class I2PStream : IDisposable
             Flags = StreamingPacket.FLAG_CLOSE
         };
 
-        SignPacket(pkt);
+        if (!_synSent)
+        {
+            _synSent = true;
+            SetSynOptions(pkt);
+        }
+        else
+        {
+            SignPacket(pkt);
+        }
+
         _sendCallback(pkt.ToByteArray());
     }
 
@@ -969,7 +953,16 @@ public class I2PStream : IDisposable
             Flags = StreamingPacket.FLAG_RESET
         };
 
-        SignPacket(pkt);
+        if (!_synSent)
+        {
+            _synSent = true;
+            SetSynOptions(pkt);
+        }
+        else
+        {
+            SignPacket(pkt);
+        }
+
         _sendCallback(pkt.ToByteArray());
     }
 
@@ -978,6 +971,43 @@ public class I2PStream : IDisposable
     ///     The signature covers the entire serialized packet with the signature
     ///     field zeroed out, matching the i2pd reference behavior.
     /// </summary>
+    private void SetSynOptions(StreamingPacket pkt)
+    {
+        pkt.Flags |= StreamingPacket.FLAG_SYNCHRONIZE;
+        pkt.Flags |= StreamingPacket.FLAG_FROM_INCLUDED;
+        pkt.Flags |= StreamingPacket.FLAG_MAX_PACKET_SIZE_INCLUDED;
+
+        var optStream = new ArrayBufferWriter<byte>();
+        if (_localIdentityBytes != null)
+            optStream.Write(_localIdentityBytes);
+        optStream.Write(BufUtils.Flip16B(STREAMING_MTU));
+
+        if (_signingPrivateKey != null)
+        {
+            pkt.Flags |= StreamingPacket.FLAG_SIGNATURE_INCLUDED;
+            var sigLen = _signingPrivateKey.Certificate.SignatureLength;
+
+            // Write zeroed signature placeholder into options
+            var sigPlaceholder = new byte[sigLen];
+            optStream.Write(sigPlaceholder);
+            pkt.OptionData = optStream.WrittenSpan.ToArray();
+
+            // Serialize the full packet (with zeroed signature) and sign it
+            var packetBytes = pkt.ToByteArray();
+            var signature = I2PSignature.DoSign(
+                _signingPrivateKey,
+                new I2PByteBlock(packetBytes));
+
+            // Patch the signature into the option data
+            var sigOffset = pkt.OptionData.Length - sigLen;
+            Array.Copy(signature, 0, pkt.OptionData, sigOffset, sigLen);
+        }
+        else
+        {
+            pkt.OptionData = optStream.WrittenSpan.ToArray();
+        }
+    }
+
     private void SignPacket(StreamingPacket pkt)
     {
         if (_signingPrivateKey == null) return;

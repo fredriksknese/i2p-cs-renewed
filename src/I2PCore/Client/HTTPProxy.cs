@@ -284,8 +284,10 @@ public class HTTPProxy : IDisposable
                 }
 
                 // Wait for inbound and outbound tunnels to be established
+                var isLocal = Router.GetClientDestination(destination.IdentHash) != null;
                 var tunnelWaitAttempts = 0;
-                while ((ClientDestination.ClientState == ClientDestination.ClientStates.NoTunnels ||
+                while (!isLocal &&
+                       (ClientDestination.ClientState == ClientDestination.ClientStates.NoTunnels ||
                         ClientDestination.SignedLeases == null) && tunnelWaitAttempts < 60)
                 {
                     if (tunnelWaitAttempts == 0)
@@ -295,8 +297,9 @@ public class HTTPProxy : IDisposable
                     tunnelWaitAttempts++;
                 }
 
-                if (ClientDestination.ClientState == ClientDestination.ClientStates.NoTunnels ||
-                    ClientDestination.SignedLeases == null)
+                if (!isLocal &&
+                    (ClientDestination.ClientState == ClientDestination.ClientStates.NoTunnels ||
+                     ClientDestination.SignedLeases == null))
                 {
                     var reason = ClientDestination.SignedLeases == null
                         ? "LeaseSet not ready"
@@ -332,12 +335,8 @@ public class HTTPProxy : IDisposable
                 // Log remote LeaseSet encryption info
                 LogRemoteLeaseSetInfo(method, target, hostname, destination);
 
-                // Send the rewritten HTTP request
-                var requestBytes = Encoding.ASCII.GetBytes(rewrittenHeader);
-                i2pStream.Send(requestBytes);
-
-                // Bidirectional forwarding
-                await ForwardBidirectional(stream, i2pStream, method, target, ct);
+                // Bidirectional forwarding with initial request
+                await ForwardBidirectional(stream, i2pStream, method, target, Encoding.ASCII.GetBytes(rewrittenHeader), ct);
             }
         }
         catch (Exception ex)
@@ -399,7 +398,7 @@ public class HTTPProxy : IDisposable
         await clientStream.WriteAsync(established, 0, established.Length, ct);
 
         // Now forward raw bytes in both directions
-        await ForwardBidirectional(clientStream, i2pStream, "CONNECT", target, ct);
+        await ForwardBidirectional(clientStream, i2pStream, "CONNECT", target, null, ct);
     }
 
     /// <summary>
@@ -652,7 +651,7 @@ public class HTTPProxy : IDisposable
     ///     Forward data bidirectionally between a TCP NetworkStream and an I2PStream.
     /// </summary>
     private static async Task ForwardBidirectional(NetworkStream tcpStream, I2PStream i2pStream, string method,
-        string target, CancellationToken ct)
+        string target, byte[] initialData, CancellationToken ct)
     {
         if (tcpStream == null || i2pStream == null)
         {
@@ -767,6 +766,9 @@ public class HTTPProxy : IDisposable
         i2pStream.PacketSent += packetSentHandler;
         i2pStream.PacketReceived += packetReceivedHandler;
 
+        // Send initial data after subscribing to events to avoid missing immediate responses (loopback)
+        if (initialData != null) i2pStream.Send(initialData);
+
         try
         {
             // Wait for either direction to finish
@@ -875,12 +877,10 @@ public class HTTPProxy : IDisposable
             if (!headerStr.Contains("Connection:", StringComparison.OrdinalIgnoreCase))
                 headerStr = headerStr.TrimEnd('\r', '\n') + "\r\nConnection: close\r\n\r\n";
 
-            i2pStream.Send(Encoding.ASCII.GetBytes(headerStr));
-
             Logging.LogDebug($"HTTPProxy: Forwarding to outproxy {outproxyHost}: {requestLine}");
             HttpProxyLogger.Inst.Log("OUTPROXY", target, "Forwarding", $"Forwarding to outproxy {outproxyHost}");
 
-            await ForwardBidirectional(clientStream, i2pStream, "OUTPROXY", target, ct);
+            await ForwardBidirectional(clientStream, i2pStream, "OUTPROXY", target, Encoding.ASCII.GetBytes(headerStr), ct);
         }
         catch (Exception ex)
         {
@@ -924,7 +924,7 @@ public class HTTPProxy : IDisposable
                 .ToArray() ?? Array.Empty<string>();
 
             // Remote LeaseSet encryption keys
-            var remoteLeaseSet = NetDb.Inst?.FindLeaseSet(destHash);
+            var remoteLeaseSet = ClientDestination.MySessions.GetLeaseSet(destHash);
             string leaseSetInfo;
             if (remoteLeaseSet != null)
             {

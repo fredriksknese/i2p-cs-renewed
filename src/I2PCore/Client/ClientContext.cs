@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using I2PCore.Data;
 using I2PCore.SessionLayer;
 using I2PCore.SessionLayer.Streaming;
@@ -229,10 +230,27 @@ public class ClientContext
     /// <summary>
     ///     Retrieve a registered tunnel by name.
     /// </summary>
-    public object GetTunnel(string name)
+    public II2PTunnel GetTunnel(string name)
     {
-        Tunnels.TryGetValue(name, out var tunnel);
-        return tunnel;
+        if (Tunnels.TryGetValue(name, out var tunnel) && tunnel is II2PTunnel i2pTunnel) return i2pTunnel;
+        return null;
+    }
+
+    public static string GetTunnelsConfigPath()
+    {
+        var searchPaths = new[]
+        {
+            Path.Combine(RouterContext.RouterPath, "tunnels.conf"),
+            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tunnels.conf"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".i2pd", "tunnels.conf"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".i2p-cs", "tunnels.conf")
+        };
+
+        foreach (var path in searchPaths)
+            if (File.Exists(path))
+                return path;
+
+        return Path.Combine(RouterContext.RouterPath, "tunnels.conf");
     }
 
     /// <summary>
@@ -268,12 +286,27 @@ public class ClientContext
                     if (sectionConfig == null || sectionConfig.Count == 0) continue;
 
                     var tunnelType = sectionConfig.GetValueOrDefault("type", "").ToLowerInvariant();
+                    var autostart = sectionConfig.GetValueOrDefault("startOnLaunch", "false").ToLowerInvariant();
 
-                    // Register tunnel config for later use
-                    AddTunnel(section, sectionConfig);
-                    tunnelCount++;
+                    try
+                    {
+                        if (autostart != "true")
+                        {
+                            AddTunnel(section, sectionConfig);
+                            Logging.LogDebug($"ClientContext: Tunnel '{section}' registered (autostart=false)");
+                            continue;
+                        }
 
-                    Logging.LogDebug($"ClientContext: Tunnel '{section}' loaded (type={tunnelType})");
+                        StartGenericTunnel(section, sectionConfig);
+                        tunnelCount++;
+                        Logging.LogDebug($"ClientContext: Tunnel '{section}' started (type={tunnelType})");
+                    }
+                    catch (Exception ex)
+                    {
+                        Logging.LogWarning($"ClientContext: Failed to start tunnel '{section}': {ex.Message}");
+                        // Still register the config so it can be managed
+                        AddTunnel(section, sectionConfig);
+                    }
                 }
 
                 if (tunnelCount > 0)
@@ -290,8 +323,9 @@ public class ClientContext
 
     // --- Private service start/stop helpers ---
 
-    private void StartAddressBook()
+    public void StartAddressBook()
     {
+        if (AddressBook != null) return;
         if (!GetConfigBool(CfgAddressBookEnabled)) return;
 
         var path = GetConfig(CfgAddressBookPath, "hosts.txt");
@@ -309,7 +343,7 @@ public class ClientContext
         Logging.LogInformation("ClientContext: AddressBook started.");
     }
 
-    private void StopAddressBook()
+    public void StopAddressBook()
     {
         AddressBook?.Stop();
         AddressBook = null;
@@ -331,6 +365,8 @@ public class ClientContext
             I2PSigningKey.SigningKeyTypes.EdDsaSha512Ed25519,
             I2PKeyType.KeyTypes.X25519);
         _sharedProxyDestination = Router.CreateDestination(destInfo, false, out _);
+        _sharedProxyDestination.Name = "HTTP Proxy";
+        _sharedProxyDestination.GenerateTemporaryKeys();
 
         var destBytes = destInfo.Destination.ToByteArray();
         _sharedStreamingDestination = new StreamingDestination(
@@ -375,10 +411,12 @@ public class ClientContext
         }
     }
 
-    private void StartSAMBridge()
+    public void StartSAMBridge()
     {
+        if (SAMBridge != null) return;
         if (!GetConfigBool(CfgSamEnabled)) return;
 
+        StartAddressBook();
         var port = GetConfigInt(CfgSamPort, 7656);
 
         try
@@ -393,19 +431,21 @@ public class ClientContext
         }
     }
 
-    private void StopSAMBridge()
+    public void StopSAMBridge()
     {
         SAMBridge?.Dispose();
         SAMBridge = null;
     }
 
-    private void StartHTTPProxy()
+    public void StartHTTPProxy()
     {
+        if (HTTPProxy != null) return;
         if (!GetConfigBool(CfgHttpProxyEnabled)) return;
 
         var port = GetConfigInt(CfgHttpProxyPort, 4444);
         var address = GetConfig(CfgHttpProxyAddress, "127.0.0.1");
 
+        StartAddressBook();
         EnsureSharedProxyDestination();
         if (_sharedProxyDestination == null || _sharedStreamingDestination == null)
         {
@@ -432,19 +472,21 @@ public class ClientContext
         }
     }
 
-    private void StopHTTPProxy()
+    public void StopHTTPProxy()
     {
         HTTPProxy?.Dispose();
         HTTPProxy = null;
     }
 
-    private void StartSOCKSProxy()
+    public void StartSOCKSProxy()
     {
+        if (SOCKSProxy != null) return;
         if (!GetConfigBool(CfgSocksProxyEnabled)) return;
 
         var port = GetConfigInt(CfgSocksProxyPort, 4447);
         var address = GetConfig(CfgSocksProxyAddress, "127.0.0.1");
 
+        StartAddressBook();
         EnsureSharedProxyDestination();
         if (_sharedProxyDestination == null || _sharedStreamingDestination == null)
         {
@@ -471,10 +513,28 @@ public class ClientContext
         }
     }
 
-    private void StopSOCKSProxy()
+    public void StopSOCKSProxy()
     {
         SOCKSProxy?.Dispose();
         SOCKSProxy = null;
+    }
+
+    public void StopTunnel(string name)
+    {
+        if (Tunnels.TryRemove(name, out var tunnel))
+        {
+            if (tunnel is IDisposable disposable)
+            {
+                try
+                {
+                    disposable.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Logging.LogWarning($"ClientContext: Error stopping tunnel '{name}': {ex.Message}");
+                }
+            }
+        }
     }
 
     private void StopTunnels()
@@ -491,5 +551,100 @@ public class ClientContext
                 }
 
         Tunnels.Clear();
+    }
+
+    public void StartGenericTunnel(string name, Dictionary<string, string> config)
+    {
+        var type = config.GetValueOrDefault("type", "").ToLowerInvariant();
+        if (string.IsNullOrEmpty(type)) return;
+
+        // Isolate: each tunnel gets its own destination
+        var keysFile = config.GetValueOrDefault("keys", "");
+        I2PDestinationInfo destInfo = null;
+
+        var sigTypeStr = config.GetValueOrDefault("signaturetype", "");
+        var cryptoTypeStr = config.GetValueOrDefault("cryptotype", "");
+
+        var sigType = Enum.TryParse<I2PSigningKey.SigningKeyTypes>(sigTypeStr, true, out var st) 
+            ? st : I2PSigningKey.SigningKeyTypes.EdDsaSha512Ed25519;
+        var cryptoType = I2PKeyType.Parse(cryptoTypeStr);
+        if (cryptoType == I2PKeyType.KeyTypes.Invalid) cryptoType = I2PKeyType.KeyTypes.X25519;
+
+        if (!string.IsNullOrEmpty(keysFile))
+        {
+            var path = Path.IsPathRooted(keysFile) ? keysFile : Path.Combine(RouterContext.RouterPath, keysFile);
+            if (File.Exists(path))
+            {
+                destInfo = new I2PDestinationInfo(File.ReadAllText(path));
+            }
+            else
+            {
+                destInfo = new I2PDestinationInfo(sigType, cryptoType);
+                File.WriteAllText(path, destInfo.ToBase64());
+            }
+        }
+        else
+        {
+            destInfo = new I2PDestinationInfo(sigType, cryptoType);
+        }
+
+        var publish = type == "server" || type == "httpserver";
+        var dest = Router.CreateDestination(destInfo, publish, out _);
+        dest.Name = name;
+
+        // Apply I2CP options
+        foreach (var kvp in config)
+            if (kvp.Key.StartsWith("i2cp.", StringComparison.OrdinalIgnoreCase))
+                dest.Options[kvp.Key.ToLowerInvariant()] = kvp.Value;
+
+        dest.GenerateTemporaryKeys();
+
+        // Configure hops/quantities
+        if (config.TryGetValue("inbound.length", out var val) && int.TryParse(val, out var hops)) dest.InboundTunnelHopCount = hops;
+        if (config.TryGetValue("outbound.length", out val) && int.TryParse(val, out hops)) dest.OutboundTunnelHopCount = hops;
+        if (config.TryGetValue("inbound.quantity", out val) && int.TryParse(val, out var quant)) dest.TargetInboundTunnelCount = quant;
+        if (config.TryGetValue("outbound.quantity", out val) && int.TryParse(val, out quant)) dest.TargetOutboundTunnelCount = quant;
+
+        var streaming = new StreamingDestination(dest.Destination, destInfo.PrivateSigningKey, destInfo.Destination.ToByteArray());
+        streaming.SetSendCallback((target, data) =>
+        {
+            var result = dest.Send(target, data);
+            if (result != ClientDestination.ClientStates.Established)
+                Logging.LogWarning($"ClientContext: Tunnel '{name}' send to {target.IdentHash.Id32Short} failed: {result}");
+        });
+        streaming.SetLookupCallback(target =>
+        {
+            if (target != null) dest.LookupDestination(target.IdentHash, (hash, ls, tag) => { }, null);
+        });
+
+        dest.DataReceived += (d, data, sender) =>
+        {
+            streaming.HandleDataMessagePayload(data.ToByteArray(), sender);
+        };
+
+        if (type == "client" || type == "httpclient")
+        {
+            var port = int.Parse(config.GetValueOrDefault("port", "0"));
+            var remoteStr = config.GetValueOrDefault("destination", "");
+            if (string.IsNullOrEmpty(remoteStr)) throw new Exception("Client tunnel missing 'destination'");
+
+            var remote = new I2PDestination(new I2PBufferCursor(FreenetBase64.Decode(remoteStr)));
+            var tunnel = new I2PTunnelClient(dest, streaming, remote, port);
+            tunnel.Start();
+            AddTunnel(name, tunnel);
+        }
+        else if (type == "server" || type == "httpserver")
+        {
+            var host = config.GetValueOrDefault("host", "127.0.0.1");
+            var port = int.Parse(config.GetValueOrDefault("port", "0"));
+            var tunnel = new I2PTunnelServer(dest, streaming, host, port);
+            tunnel.Start();
+            AddTunnel(name, tunnel);
+        }
+        else
+        {
+            // Just register the config if type is unknown
+            AddTunnel(name, config);
+        }
     }
 }

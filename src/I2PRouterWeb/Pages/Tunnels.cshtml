@@ -68,7 +68,7 @@
                     <thead>
                     <tr class="table-active">
                         <th>ID</th>
-                        <th>Pool</th>
+                        <th>Client / Pool</th>
                         <th>Hops</th>
                         <th>Chain</th>
                         <th>Status</th>
@@ -84,8 +84,13 @@
                     {
                         <tr>
                             <td><code>@t.TunnelId</code></td>
-                            <td><span
-                                    class="badge @(t.IsExploratory ? "bg-warning text-dark" : "bg-primary")">@t.Pool</span>
+                            <td>
+                                @if (!string.IsNullOrEmpty(t.ClientName))
+                                {
+                                    <span class="text-info fw-bold d-block">@t.ClientName</span>
+                                }
+                                <span
+                                    class="badge @(t.IsExploratory ? "bg-warning text-dark" : (t.Direction.Contains("Inbound") ? "bg-success" : "bg-primary"))">@t.Pool</span>
                             </td>
                             <td>@t.HopCount</td>
                             <td class="tunnel-chain">@Html.Raw(string.Join(" &rarr; ", t.Hops))</td>
@@ -133,7 +138,7 @@
                     <thead>
                     <tr class="table-active">
                         <th>ID</th>
-                        <th>Pool</th>
+                        <th>Client / Pool</th>
                         <th>Hops</th>
                         <th>Chain</th>
                         <th>Status</th>
@@ -149,8 +154,13 @@
                     {
                         <tr>
                             <td><code>@t.TunnelId</code></td>
-                            <td><span
-                                    class="badge @(t.IsExploratory ? "bg-warning text-dark" : "bg-success")">@t.Pool</span>
+                            <td>
+                                @if (!string.IsNullOrEmpty(t.ClientName))
+                                {
+                                    <span class="text-info fw-bold d-block">@t.ClientName</span>
+                                }
+                                <span
+                                    class="badge @(t.IsExploratory ? "bg-warning text-dark" : (t.Direction.Contains("Inbound") ? "bg-success" : "bg-primary"))">@t.Pool</span>
                             </td>
                             <td>@t.HopCount</td>
                             <td class="tunnel-chain">@Html.Raw(string.Join(" &rarr; ", t.Hops))</td>

@@ -87,6 +87,8 @@ public class ECIESOutboundSession
 
     // Session state
     private byte[] _sendKey;
+    private byte[] _cachedHandshakeMessage;
+    private byte[] _cachedHandshakeReplyTag;
 
     public ECIESOutboundSession(
         I2PDestination localDestination,
@@ -104,6 +106,31 @@ public class ECIESOutboundSession
         _kemVariant = kemVariant;
 
         _availableTags = new Queue<(SessionTag tag, TagInfo info)>();
+        Created = DateTime.UtcNow;
+        LastUsed = DateTime.UtcNow;
+    }
+
+    public ECIESOutboundSession(
+        I2PDestination localDestination,
+        I2PIdentHash remoteHash,
+        byte[] sendK,
+        byte[] ck)
+    {
+        _localDestination = localDestination ?? throw new ArgumentNullException(nameof(localDestination));
+        _remoteHash = remoteHash ?? throw new ArgumentNullException(nameof(remoteHash));
+        _sendKey = sendK;
+
+        // Establish tags for Bob to send to Alice
+        lock (_sessionLock)
+        {
+            var tagSet = new ECIESTagSet(ck, _sendKey);
+            for (var i = 0; i < 50; i++)
+            {
+                var (tag, key) = tagSet.ConsumeNext();
+                _availableTags.Enqueue((tag, new TagInfo { Key = key, Index = i }));
+            }
+        }
+
         Created = DateTime.UtcNow;
         LastUsed = DateTime.UtcNow;
     }
@@ -144,6 +171,10 @@ public class ECIESOutboundSession
     /// </summary>
     public bool IsEstablished => _sendKey != null;
 
+    public bool IsHybridWaitingForReply => _kemVariant.HasValue && !IsEstablished;
+
+    public I2PIdentHash RemoteHash => _remoteHash;
+
     /// <summary>
     ///     Create a new session message (Noise IK or IKhfs pattern)
     /// </summary>
@@ -151,6 +182,14 @@ public class ECIESOutboundSession
     {
         if (payload == null)
             throw new ArgumentNullException(nameof(payload));
+
+        lock (_sessionLock)
+        {
+            if (_cachedHandshakeMessage != null)
+            {
+                return (_cachedHandshakeMessage, _cachedHandshakeReplyTag);
+            }
+        }
 
         // Get remote static public key from I2PPublicKey
         var remoteStaticKey = ExtractPublicKey(_remotePublicKey);
@@ -238,15 +277,20 @@ public class ECIESOutboundSession
         var (bTag, _) = handshakeTagSet.ConsumeNext();
         var expectedReplyTag = bTag.ToByteArray().AsSpan(0, 8).ToArray();
 
-        LastUsed = DateTime.UtcNow;
+        lock (_sessionLock)
+        {
+            _cachedHandshakeMessage = message;
+            _cachedHandshakeReplyTag = expectedReplyTag;
+        }
 
+        LastUsed = DateTime.UtcNow;
         return (message, expectedReplyTag);
     }
 
     /// <summary>
     ///     Process New Session Reply
     /// </summary>
-    public byte[] ProcessNewSessionReply(byte[] replyData, List<SessionTag> tags)
+    public byte[] ProcessNewSessionReply(byte[] replyData, List<SessionTag> tags = null)
     {
         if (replyData == null)
             throw new ArgumentNullException(nameof(replyData));
@@ -315,6 +359,12 @@ public class ECIESOutboundSession
         _noiseIK = null;
         _noiseIKhfs?.Dispose();
         _noiseIKhfs = null;
+
+        lock (_sessionLock)
+        {
+            _cachedHandshakeMessage = null;
+            _cachedHandshakeReplyTag = null;
+        }
 
         LastUsed = DateTime.UtcNow;
 
@@ -434,6 +484,7 @@ public class ECIESInboundSession
 
     // Session state
     private byte[] _sendKey;
+    private byte[] _ck;
 
     public ECIESInboundSession(
         I2PDestination localDestination,
@@ -456,6 +507,8 @@ public class ECIESInboundSession
     public DateTime Created { get; }
     public DateTime LastUsed { get; private set; }
 
+    public byte[] RemoteStaticKey => _remoteStaticPublicKey;
+
     public IEnumerable<SessionTag> InboundTags
     {
         get
@@ -473,7 +526,9 @@ public class ECIESInboundSession
     public byte[] CreateNewSessionReply(
         byte[] newSessionData,
         byte[] replyPayload,
-        out List<SessionTag> tags)
+        out List<SessionTag> tags,
+        out byte[] sendK,
+        out byte[] ck)
     {
         if (newSessionData == null)
             throw new ArgumentNullException(nameof(newSessionData));
@@ -494,24 +549,26 @@ public class ECIESInboundSession
             _noiseIKhfs.ReadMessageA(hybridMsg.EphemeralPublicKey, hybridMsg.EncryptedKEMPublicKey,
                 hybridMsg.EncryptedStaticKey, hybridMsg.EncryptedPayload);
 
-            var (sendK, receiveK, ck) = _noiseIKhfs.FinalizeHandshake();
-            _sendKey = sendK;
-            _receiveKey = receiveK;
-
-            // Bob uses deterministic tags derived from handshake shared secret
-            // 1. Handshake tags for Message B
-            var tagsetKey = HKDF.DeriveKey(ck, Array.Empty<byte>(), Encoding.ASCII.GetBytes("SessionReplyTags"), 32);
-            var handshakeTagSet = new ECIESTagSet(ck, tagsetKey);
+            // Bob uses deterministic tags derived from handshake shared secret after Message A
+            var ckAfterA = _noiseIKhfs.GetChainingKey();
+            var tagsetKey = HKDF.DeriveKey(ckAfterA, Array.Empty<byte>(), Encoding.ASCII.GetBytes("SessionReplyTags"), 32);
+            var handshakeTagSet = new ECIESTagSet(ckAfterA, tagsetKey);
             var (bTag, _) = handshakeTagSet.ConsumeNext();
 
             var hybridReply = ECIESHybridNewSessionReplyMessage.Create(bTag.ToByteArray().AsSpan(0, 8).ToArray(),
                 replyPayload, _noiseIKhfs);
             message = hybridReply.ToByteArray();
 
+            // Now finalize the handshake and derive transport keys (after Message B updates Noise state)
+            var (resSendK, resReceiveK, resCk) = _noiseIKhfs.FinalizeHandshake();
+            _sendKey = resSendK;
+            _receiveKey = resReceiveK;
+            _ck = resCk;
+
             // 2. ES tags: rootKey = ck, data = receiveKey (Bob receives Alice's messages)
             lock (_sessionLock)
             {
-                var tagSet = new ECIESTagSet(ck, _receiveKey);
+                var tagSet = new ECIESTagSet(_ck, _receiveKey);
                 for (var i = 0; i < 800; i++)
                 {
                     var (tag, key) = tagSet.ConsumeNext();
@@ -529,23 +586,24 @@ public class ECIESInboundSession
             // Process the incoming new session message to establish shared state
             _noiseIK.ProcessNewSessionMessage(newSessionData);
 
-            // Create reply: <- tag, e, ee, se, payload
-            var (sendK, receiveK, ck) = _noiseIK.FinalizeHandshake();
-            _sendKey = sendK;
-            _receiveKey = receiveK;
-
-            // Bob uses deterministic tags derived from handshake shared secret
-            // 1. Handshake tags for Message B
-            var tagsetKey = HKDF.DeriveKey(ck, Array.Empty<byte>(), Encoding.ASCII.GetBytes("SessionReplyTags"), 32);
-            var handshakeTagSet = new ECIESTagSet(ck, tagsetKey);
+            // Bob uses deterministic tags derived from handshake shared secret after Message A
+            var ckAfterA = _noiseIK.GetChainingKey();
+            var tagsetKey = HKDF.DeriveKey(ckAfterA, Array.Empty<byte>(), Encoding.ASCII.GetBytes("SessionReplyTags"), 32);
+            var handshakeTagSet = new ECIESTagSet(ckAfterA, tagsetKey);
             var (bTag, _) = handshakeTagSet.ConsumeNext();
 
             message = _noiseIK.CreateNewSessionReplyMessage(bTag.ToByteArray().AsSpan(0, 8).ToArray(), replyPayload);
 
+            // Now finalize the handshake and derive transport keys (after Message B updates Noise state)
+            var (resSendK, resReceiveK, resCk) = _noiseIK.FinalizeHandshake();
+            _sendKey = resSendK;
+            _receiveKey = resReceiveK;
+            _ck = resCk;
+
             // 2. ES tags: rootKey = ck, data = receiveKey (Bob receives Alice's messages)
             lock (_sessionLock)
             {
-                var tagSet = new ECIESTagSet(ck, _receiveKey);
+                var tagSet = new ECIESTagSet(_ck, _receiveKey);
                 for (var i = 0; i < 800; i++)
                 {
                     var (tag, key) = tagSet.ConsumeNext();
@@ -565,6 +623,8 @@ public class ECIESInboundSession
 
         LastUsed = DateTime.UtcNow;
         tags = null; // Tags are stored internally in deterministic derivation
+        sendK = _sendKey;
+        ck = _ck;
 
         return message;
     }

@@ -43,6 +43,21 @@ public class ClientTunnelProvider : ITunnelOwner
 
     public int ClientTunnelCount => Destinations.Count;
 
+    public IClient GetClientForTunnel(Tunnel tunnel)
+    {
+        if (Destinations.TryGetValue(tunnel, out var client)) return client;
+        if (PendingTunnels.TryGetValue(tunnel, out client)) return client;
+        return null;
+    }
+
+    public IEnumerable<IClient> GetClients()
+    {
+        lock (Clients)
+        {
+            return Clients.ToArray();
+        }
+    }
+
     internal void AttachClient(IClient client)
     {
         lock (Clients)
@@ -59,6 +74,20 @@ public class ClientTunnelProvider : ITunnelOwner
         }
 
         ConsecutiveOutboundBuildFails.TryRemove(client, out _);
+
+        // Shutdown and remove all tunnels for this client
+        foreach (var t in Destinations.Where(kvp => kvp.Value == client).Select(kvp => kvp.Key).ToArray())
+        {
+            t.Shutdown();
+            Destinations.TryRemove(t, out _);
+            TunnelMgr.RemoveTunnel(t);
+        }
+        foreach (var t in PendingTunnels.Where(kvp => kvp.Value == client).Select(kvp => kvp.Key).ToArray())
+        {
+            t.Shutdown();
+            PendingTunnels.TryRemove(t, out _);
+            TunnelMgr.RemoveTunnel(t);
+        }
     }
 
     private OutboundTunnel CreateOutboundTunnel(IClient client, TunnelInfo prototype)

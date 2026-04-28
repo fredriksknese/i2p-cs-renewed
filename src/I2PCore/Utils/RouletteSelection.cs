@@ -4,6 +4,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("I2PCore.NTests")]
+[assembly: InternalsVisibleTo("I2PRouterWeb")]
 
 namespace I2PCore.Utils;
 

@@ -9,6 +9,7 @@ using I2PCore.TransportLayer;
 using I2PCore.TransportLayer.Log;
 using I2PCore.TunnelLayer;
 using I2PCore.Utils;
+using I2PRouterWeb.Pages;
 
 namespace I2PRouterWeb.Services;
 
@@ -190,9 +191,7 @@ public class RouterService
         var ctx = ClientContext.Inst;
         ctx.SetConfig(ClientContext.CfgHttpProxyPort, HttpProxyPort.ToString());
         ctx.SetConfig(ClientContext.CfgHttpProxyEnabled, "true");
-        ctx.SetConfig(ClientContext.CfgSamEnabled, "false");
-        ctx.SetConfig(ClientContext.CfgSocksProxyEnabled, "false");
-        ctx.Start();
+        ctx.StartHTTPProxy();
 
         LogActivity("HTTP Proxy", $"HTTP proxy started on 127.0.0.1:{HttpProxyPort}");
 
@@ -217,7 +216,7 @@ public class RouterService
             return;
         }
 
-        ClientContext.Inst?.Stop();
+        ClientContext.Inst?.StopHTTPProxy();
 
         LogActivity("HTTP Proxy", "HTTP proxy stopped");
         Logging.LogInformation("HTTP proxy stopped");
@@ -459,6 +458,107 @@ public class RouterService
         {
             Logging.LogWarning($"Failed to save settings: {ex.Message}");
         }
+    }
+
+    public IEnumerable<KeyValuePair<string, Dictionary<string, string>>> GetTunnelsConfig()
+    {
+        var path = ClientContext.GetTunnelsConfigPath();
+        if (!File.Exists(path)) return Enumerable.Empty<KeyValuePair<string, Dictionary<string, string>>>();
+
+        var config = new I2PConfig();
+        config.ParseTunnelsConfig(path);
+
+        var result = new List<KeyValuePair<string, Dictionary<string, string>>>();
+        foreach (var section in config.GetSections()) result.Add(new KeyValuePair<string, Dictionary<string, string>>(section, config.GetSection(section)));
+
+        return result;
+    }
+
+    public void SaveTunnelConfig(string name, Dictionary<string, string> options)
+    {
+        var path = ClientContext.GetTunnelsConfigPath();
+        var config = new I2PConfig();
+        if (File.Exists(path)) config.ParseTunnelsConfig(path);
+
+        foreach (var opt in options) config.SetSectionOption(name, opt.Key, opt.Value);
+
+        config.SaveConfigFile(path);
+        LogActivity("Tunnels", $"Saved configuration for tunnel '{name}'.");
+    }
+
+    public void RemoveTunnelConfig(string name)
+    {
+        var path = ClientContext.GetTunnelsConfigPath();
+        var config = new I2PConfig();
+        if (File.Exists(path)) config.ParseTunnelsConfig(path);
+
+        config.RemoveSection(name);
+        config.SaveConfigFile(path);
+        LogActivity("Tunnels", $"Removed configuration for tunnel '{name}'.");
+    }
+
+    public bool IsTunnelRunning(string name)
+    {
+        return ClientContext.Inst?.GetTunnel(name) != null;
+    }
+
+    public string? GetTunnelB32Address(string name)
+    {
+        // Try to get from running tunnel
+        var activeTunnel = ClientContext.Inst?.GetTunnel(name);
+        if (activeTunnel?.MyDestination != null)
+        {
+            return activeTunnel.MyDestination.Destination.IdentHash.Id32;
+        }
+
+        // Fallback: Read from config and keys file
+        var configs = GetTunnelsConfig().ToDictionary(k => k.Key, v => v.Value);
+        if (configs.TryGetValue(name, out var config))
+        {
+            var keysFile = config.GetValueOrDefault("keys", "");
+            if (!string.IsNullOrEmpty(keysFile))
+            {
+                var path = Path.IsPathRooted(keysFile) ? keysFile : Path.Combine(RouterContext.RouterPath, keysFile);
+                if (File.Exists(path))
+                {
+                    try
+                    {
+                        var destInfo = new I2PDestinationInfo(File.ReadAllText(path));
+                        return destInfo.Destination.IdentHash.Id32;
+                    }
+                    catch { }
+                }
+            }
+        }
+        return null;
+    }
+
+    public void StartTunnel(string name)
+    {
+        var configs = GetTunnelsConfig().ToDictionary(k => k.Key, v => v.Value);
+        if (configs.TryGetValue(name, out var config))
+        {
+            ClientContext.Inst?.StartGenericTunnel(name, config);
+            LogActivity("Tunnels", $"Started tunnel '{name}'.");
+        }
+    }
+
+    public void ToggleTunnelAutostart(string name)
+    {
+        var configs = GetTunnelsConfig().ToDictionary(k => k.Key, v => v.Value);
+        if (configs.TryGetValue(name, out var config))
+        {
+            var current = config.GetValueOrDefault("startOnLaunch", "false").ToLowerInvariant() == "true";
+            config["startOnLaunch"] = (!current).ToString().ToLowerInvariant();
+            SaveTunnelConfig(name, config);
+            LogActivity("Tunnels", $"Tunnel '{name}' autostart set to {!current}.");
+        }
+    }
+
+    public void StopTunnel(string name)
+    {
+        ClientContext.Inst?.StopTunnel(name);
+        LogActivity("Tunnels", $"Stopped tunnel '{name}'.");
     }
 }
 

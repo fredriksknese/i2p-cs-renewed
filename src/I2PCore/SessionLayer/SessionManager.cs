@@ -145,7 +145,19 @@ public class SessionManager
                 HttpProxyLogger.Inst.Log("GARLIC", Context?.Destination?.IdentHash?.Id32Short ?? "?",
                     "Decrypted",
                     $"ECIES garlic decrypted (NewSession={eciesResult.IsNewSession}, Reply={eciesResult.IsHandshakeReply}, len={msgData.Length})");
-                return TranslateEciesGarlic(eciesResult.Payload);
+                if (eciesResult.IsNewSession)
+                {
+                    var session = GetSession(eciesResult.RemoteDestination);
+                    session.SetPendingHandshake(msgData);
+                }
+
+                if (eciesResult.IsHandshakeReply)
+                {
+                    var session = GetSession(eciesResult.RemoteDestination);
+                    session.HandshakeCompleted();
+                }
+
+                return TranslateEciesGarlic(eciesResult.Payload, eciesResult.RemoteDestination);
             }
 
             var (inbound, outbound) = EciesManager.SessionCounts;
@@ -171,7 +183,7 @@ public class SessionManager
     ///     Each GarlicCloveBlock has ECIES delivery instructions (bits 5-6) and
     ///     an I2NP message in NTCP2/short format (type + msgId + expiration + body).
     /// </summary>
-    private Garlic TranslateEciesGarlic(byte[] payload)
+    private Garlic TranslateEciesGarlic(byte[] payload, I2PIdentHash remoteHash)
     {
         try
         {
@@ -215,7 +227,11 @@ public class SessionManager
                 }
             }
 
-            return cloves.Count > 0 ? new Garlic(cloves) : null;
+            if (cloves.Count == 0) return null;
+
+            var garlic = new Garlic(cloves);
+            garlic.RemoteHash = remoteHash;
+            return garlic;
         }
         catch (Exception ex)
         {
@@ -282,6 +298,31 @@ public class SessionManager
 
         if (sess?.RemoteLeaseSet is null)
         {
+            var localDest = Router.GetClientDestination(dest);
+            if (localDest != null)
+            {
+                if (localDest.SignedLeases != null)
+                {
+                    sess.LeaseSetReceived(localDest.SignedLeases);
+                    return localDest.SignedLeases;
+                }
+
+                // Synthetic LeaseSet for local bypass
+                var keys = localDest.MySessions.PublicKeys;
+                if (keys != null && keys.Any())
+                {
+                    Logging.LogDebug($"{Context}: Sessions: Creating synthetic LeaseSet for local {dest.Id32Short}");
+                    var synthetic = new I2PLeaseSet2(
+                        localDest.Destination,
+                        new List<I2PLease2>(),
+                        keys,
+                        localDest.Destination.SigningPublicKey,
+                        null);
+                    sess.LeaseSetReceived(synthetic);
+                    return synthetic;
+                }
+            }
+
             var cachedls = NetDb.Inst.FindLeaseSet(dest);
             if (cachedls != null)
             {
@@ -309,6 +350,18 @@ public class SessionManager
     public void RemoteIsActive(I2PIdentHash dest)
     {
         if (Sessions.TryGetValue(dest, out var sess)) sess.RemoteIsActive(dest);
+    }
+
+    public void ConfirmRemoteHash(I2PIdentHash temporaryHash, I2PIdentHash realHash)
+    {
+        if (temporaryHash == null || realHash == null || temporaryHash == realHash) return;
+
+        if (Sessions.TryRemove(temporaryHash, out var session))
+        {
+            Sessions[realHash] = session;
+            EciesManager?.ConfirmRemoteHash(temporaryHash, realHash);
+            Logging.LogDebug($"{Context}: Sessions: Confirmed remote hash {temporaryHash.Id32Short} -> {realHash.Id32Short}");
+        }
     }
 
     public DatabaseLookupKeyInfo KeyGenerator(I2PIdentHash ffrouterid)
