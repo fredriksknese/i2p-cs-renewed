@@ -362,19 +362,11 @@ public class SessionManager
             }
         }
 
-        if (sess?.RemoteLeaseSet is null)
-        {
-            var cachedls = NetDb.Inst.FindLeaseSet(dest);
-            if (cachedls != null)
-            {
-                LeaseSetReceived(cachedls);
-                return cachedls;
-            }
-
-            return null;
-        }
-
-        return sess.RemoteLeaseSet;
+        // Per-client isolation: do NOT fall back to the global NetDb cache.
+        // Each client destination has its own LeaseSet storage (Session.RemoteLeaseSet).
+        // Using the global cache would leak LeaseSets between client tunnels,
+        // enabling correlation attacks (Java I2P: "context-confusion" attack class).
+        return sess?.RemoteLeaseSet;
     }
 
     public ILease GetTunnelPair(I2PIdentHash dest, OutboundTunnel outtunnel)

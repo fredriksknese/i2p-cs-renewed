@@ -51,6 +51,10 @@
                     <span class="badge bg-secondary ms-2">@ls.LeaseSetType</span>
                     <span class="badge bg-info ms-1">@ls.TypeClassName</span>
                     <span class="badge bg-primary ms-1">@ls.Leases.Count lease(s)</span>
+                    @foreach (var pool in ls.BoundTunnelPools)
+                    {
+                        <span class="badge bg-warning text-dark ms-1" title="Cached in this tunnel pool's session">@pool</span>
+                    }
                 </div>
                 <div>
                     <span class="@ttlClass small fw-bold">

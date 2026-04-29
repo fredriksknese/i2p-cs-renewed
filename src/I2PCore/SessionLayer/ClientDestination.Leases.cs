@@ -105,12 +105,4 @@ public partial class ClientDestination : IClient
 
         return false;
     }
-
-    private void Ext_LeaseSetUpdates(ILeaseSet ls)
-    {
-#if DEBUG
-        Logging.LogTransport($"{this} Ext_LeaseSetUpdates: {ls} {ls.Destination.IdentHash.Id32Short} {ls.Expire}");
-#endif
-        MySessions.LeaseSetReceived(ls);
-    }
 }

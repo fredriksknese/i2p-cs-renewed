@@ -33,17 +33,15 @@
                                    min="1" max="20" value="@Model.ParallelQueries">
                             <div class="form-text">Number of floodfills to query simultaneously</div>
                         </div>
-                        <div class="col-md-6 d-flex align-items-end">
-                            <div class="form-check mb-3">
-                                <input class="form-check-input" type="checkbox" id="directLookup" name="directLookup"
-                                       value="true" @(Model.DirectLookup ? "checked" : "")>
-                                <label class="form-check-label" for="directLookup">
-                                    Direct lookup (bypass tunnels)
-                                </label>
-                                <div class="form-text">Query floodfill routers directly for faster results (compromises
-                                    anonymity)
-                                </div>
-                            </div>
+                        <div class="col-md-6">
+                            <label for="tunnelPool" class="form-label">Tunnel Pool</label>
+                            <select class="form-select" id="tunnelPool" name="tunnelPool">
+                                @foreach (var pool in Model.AvailableTunnelPools)
+                                {
+                                    <option value="@pool.Value" selected="@(pool.Value == Model.TunnelPool)">@pool.Text</option>
+                                }
+                            </select>
+                            <div class="form-text">Which tunnel pool to route the lookup through</div>
                         </div>
                     </div>
 

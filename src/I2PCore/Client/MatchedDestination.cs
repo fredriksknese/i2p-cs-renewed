@@ -131,16 +131,8 @@ public class MatchedDestination : IDisposable
                 }
             }
 
-            // Look up the lease set
-            if (RemoteIdentHash != null)
-            {
-                var ls = NetDb.Inst.FindLeaseSet(RemoteIdentHash);
-                if (ls != null)
-                {
-                    RemoteLeaseSet = ls;
-                    Logging.LogDebug($"MatchedDestination: Resolved {_remoteName} with {ls.Leases?.Count()} leases");
-                }
-            }
+            // Per-client isolation: do NOT look up LeaseSets from the global NetDb.
+            // The streaming layer will trigger a client-scoped lookup when needed.
         }
         catch (Exception ex)
         {

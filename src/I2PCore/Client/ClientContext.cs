@@ -63,6 +63,12 @@ public class ClientContext
     private ClientDestination _sharedProxyDestination;
     private StreamingDestination _sharedStreamingDestination;
 
+    /// <summary>
+    ///     The shared client destination used by the HTTP and SOCKS proxies.
+    ///     Null if proxies haven't been started.
+    /// </summary>
+    public ClientDestination SharedProxyDestination => _sharedProxyDestination;
+
     private volatile bool IsRunning;
 
     private ClientContext()

@@ -53,6 +53,14 @@ public partial class ClientDestination : IClient
 
         if (leaseset is null) return new SendPreconditionState { ClientState = ClientStates.NoLeases };
 
+        // Reject fully expired LeaseSets upfront — don't attempt to send to
+        // dead tunnels.  The caller will trigger a fresh lookup.
+        if (leaseset.Expire < DateTime.UtcNow)
+        {
+            Logging.LogDebug($"{this}: CheckSendPreconditions: LeaseSet for {dest.Id32Short} has expired ({(DateTime.UtcNow - leaseset.Expire).TotalSeconds:F0}s ago). Triggering lookup.");
+            return new SendPreconditionState { ClientState = ClientStates.NoLeases };
+        }
+
         var l = MySessions.GetTunnelPair(dest, outtunnel);
 
         if (l is null) return new SendPreconditionState { ClientState = ClientStates.NoLeases };

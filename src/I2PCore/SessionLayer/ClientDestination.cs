@@ -73,8 +73,11 @@ public partial class ClientDestination : IClient
 
         ReadAppConfig();
 
-        NetDb.Inst.LeaseSetUpdates += Ext_LeaseSetUpdates;
-        NetDb.Inst.IdentHashLookup.LeaseSetReceived += Ext_LeaseSetUpdates;
+        // Per-client isolation: do NOT subscribe to global NetDb LeaseSet events.
+        // Each client receives LeaseSets only through its own garlic messages
+        // (HandleDecryptedGarlic → MySessions.LeaseSetReceived) or through
+        // client-scoped lookups (LookupDestination → HandleDestinationLookupResult).
+        // Subscribing to global events would leak LeaseSets between clients.
         Router.DeliveryStatusReceived += Router_DeliveryStatusReceived;
         AllDestinations.TryAdd(this, 0);
     }
@@ -268,8 +271,6 @@ public partial class ClientDestination : IClient
     public void Shutdown()
     {
         AllDestinations.TryRemove(this, out _);
-        NetDb.Inst.IdentHashLookup.LeaseSetReceived -= Ext_LeaseSetUpdates;
-        NetDb.Inst.LeaseSetUpdates -= Ext_LeaseSetUpdates;
         Router.DeliveryStatusReceived -= Router_DeliveryStatusReceived;
 
         Router.ShutdownClient(this);

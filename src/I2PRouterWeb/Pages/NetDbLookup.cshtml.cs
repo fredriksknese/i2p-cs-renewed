@@ -1,10 +1,13 @@
 using System.Diagnostics;
 using I2PCore;
+using I2PCore.Client;
 using I2PCore.Data;
+using I2PCore.SessionLayer;
 using I2PCore.Utils;
 using I2PRouterWeb.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using Microsoft.AspNetCore.Mvc.Rendering;
 
 namespace I2PRouterWeb.Pages;
 
@@ -21,18 +24,27 @@ public class NetDbLookupModel : PageModel
 
     [BindProperty] public int ParallelQueries { get; set; } = 6;
 
-    [BindProperty] public bool DirectLookup { get; set; } = false;
+    /// <summary>
+    ///     Which tunnel pool to use: "exploratory" (default), "direct", or a tunnel name.
+    /// </summary>
+    [BindProperty] public string TunnelPool { get; set; } = "exploratory";
 
     public bool IsLookupInProgress { get; set; }
     public string? ErrorMessage { get; set; }
     public LeaseSetResult? Result { get; set; }
 
+    /// <summary>Available tunnel pools for the dropdown.</summary>
+    public List<SelectListItem> AvailableTunnelPools { get; set; } = new();
+
     public void OnGet()
     {
+        PopulateTunnelPools();
     }
 
     public async Task<IActionResult> OnPostAsync()
     {
+        PopulateTunnelPools();
+
         if (string.IsNullOrWhiteSpace(B32Address))
         {
             ErrorMessage = "Please enter a b32 address.";
@@ -56,13 +68,42 @@ public class NetDbLookupModel : PageModel
             return Page();
         }
 
+        // Resolve selected tunnel pool to a ClientDestination (null = exploratory)
+        var useDirectQueries = TunnelPool == "direct";
+        ClientDestination clientContext = null;
+
+        if (TunnelPool == "__httpproxy__")
+        {
+            clientContext = ClientContext.Inst?.SharedProxyDestination;
+            if (clientContext == null)
+            {
+                ErrorMessage = "HTTP Proxy destination is not available.";
+                return Page();
+            }
+        }
+        else if (TunnelPool != "exploratory" && TunnelPool != "direct")
+        {
+            var tunnel = ClientContext.Inst?.GetTunnel(TunnelPool);
+            if (tunnel == null || !tunnel.IsRunning)
+            {
+                ErrorMessage = $"Tunnel '{TunnelPool}' is not running.";
+                return Page();
+            }
+            clientContext = tunnel.MyDestination;
+        }
+
         try
         {
             var sw = Stopwatch.StartNew();
             var identHash = new I2PIdentHash(addr);
 
-            // Check cache first
-            var cachedLs = NetDb.Inst?.FindLeaseSet(identHash);
+            // Check cache first (global NetDb for exploratory/direct, client session for tunnel pools)
+            ILeaseSet cachedLs = null;
+            if (clientContext != null)
+                cachedLs = clientContext.MySessions.GetLeaseSet(identHash);
+            else
+                cachedLs = NetDb.Inst?.FindLeaseSet(identHash);
+
             if (cachedLs != null && cachedLs.Expire > DateTime.UtcNow)
             {
                 sw.Stop();
@@ -100,7 +141,7 @@ public class NetDbLookupModel : PageModel
 
             NetDb.Inst.IdentHashLookup.LeaseSetReceivedEx += successHandler;
             NetDb.Inst.IdentHashLookup.LookupFailureEx += failHandler;
-            NetDb.Inst.IdentHashLookup.LookupLeaseSet(identHash, null, ParallelQueries, DirectLookup);
+            NetDb.Inst.IdentHashLookup.LookupLeaseSet(identHash, clientContext, ParallelQueries, useDirectQueries);
 
             // Wait up to 30 seconds
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
@@ -153,6 +194,27 @@ public class NetDbLookupModel : PageModel
         }
 
         return Page();
+    }
+
+    private void PopulateTunnelPools()
+    {
+        AvailableTunnelPools.Clear();
+        AvailableTunnelPools.Add(new SelectListItem("Exploratory (Default)", "exploratory"));
+        AvailableTunnelPools.Add(new SelectListItem("Direct (Insecure)", "direct"));
+
+        if (ClientContext.Inst != null)
+        {
+            // Shared HTTP/SOCKS proxy destination
+            if (ClientContext.Inst.SharedProxyDestination != null)
+                AvailableTunnelPools.Add(new SelectListItem("HTTP Proxy", "__httpproxy__"));
+
+            foreach (var name in ClientContext.Inst.TunnelNames)
+            {
+                var tunnel = ClientContext.Inst.GetTunnel(name);
+                if (tunnel is { IsRunning: true })
+                    AvailableTunnelPools.Add(new SelectListItem(name, name));
+            }
+        }
     }
 
     private static LeaseSetResult BuildResult(ILeaseSet? ls, long lookupMs, I2PIdentHash hash,
