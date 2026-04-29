@@ -563,12 +563,16 @@ public class ClientContext
         I2PDestinationInfo destInfo = null;
 
         var sigTypeStr = config.GetValueOrDefault("signaturetype", "");
-        var cryptoTypeStr = config.GetValueOrDefault("cryptotype", "");
 
-        var sigType = Enum.TryParse<I2PSigningKey.SigningKeyTypes>(sigTypeStr, true, out var st) 
+        var sigType = Enum.TryParse<I2PSigningKey.SigningKeyTypes>(sigTypeStr, true, out var st)
             ? st : I2PSigningKey.SigningKeyTypes.EdDsaSha512Ed25519;
-        var cryptoType = I2PKeyType.Parse(cryptoTypeStr);
-        if (cryptoType == I2PKeyType.KeyTypes.Invalid) cryptoType = I2PKeyType.KeyTypes.X25519;
+
+        // The Destination's own key type is always ElGamal2048. The Java I2P
+        // router rejects any Destination whose KeyCert encryption type is not
+        // ElGamal2048 (Proposal 145 is not yet implemented). ECIES / ML-KEM
+        // keys are advertised only in the LeaseSet2 (via i2cp.leaseSetEncType
+        // and SessionManager.GenerateTemporaryKeys), not in the Destination.
+        const I2PKeyType.KeyTypes destKeyType = I2PKeyType.KeyTypes.ElGamal2048;
 
         if (!string.IsNullOrEmpty(keysFile))
         {
@@ -582,6 +586,13 @@ public class ClientContext
                     // a missing KeyPublicKeyType that caused wrong PrivateKey length)
                     if (destInfo.PrivateSigningKey.Key.Length <= 0)
                         throw new Exception("Signing key has invalid length — keys file was saved with wrong encryption key type");
+
+                    // Destinations must use ElGamal2048 as their cert encryption
+                    // type. Older versions of i2p-cs incorrectly embedded the
+                    // tunnel's ECIES/ML-KEM key type into the Destination cert,
+                    // which Java I2P routers reject. Regenerate if wrong.
+                    if (destInfo.Destination.Certificate.PublicKeyType != I2PKeyType.KeyTypes.ElGamal2048)
+                        throw new Exception($"Destination has non-ElGamal key type {destInfo.Destination.Certificate.PublicKeyType} — incompatible with Java I2P routers");
                 }
                 catch (Exception ex)
                 {
@@ -592,13 +603,13 @@ public class ClientContext
 
             if (destInfo == null)
             {
-                destInfo = new I2PDestinationInfo(sigType, cryptoType);
+                destInfo = new I2PDestinationInfo(sigType, destKeyType);
                 File.WriteAllText(path, destInfo.ToBase64());
             }
         }
         else
         {
-            destInfo = new I2PDestinationInfo(sigType, cryptoType);
+            destInfo = new I2PDestinationInfo(sigType, destKeyType);
         }
 
         var publish = type == "server" || type == "httpserver";

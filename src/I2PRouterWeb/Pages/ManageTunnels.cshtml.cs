@@ -92,7 +92,6 @@ public class ManageTunnelsModel : PageModel
             { "inbound.quantity", NewTunnelQuantity.ToString() },
             { "outbound.quantity", NewTunnelQuantity.ToString() },
             { "signaturetype", NewTunnelSigningKeyType },
-            { "cryptotype", orderedCryptoKeys.FirstOrDefault() ?? "X25519" },
             { "i2cp.leaseSetEncType", cryptoTypes },
             { "startOnLaunch", NewTunnelStartOnLaunch.ToString().ToLowerInvariant() }
         };
