@@ -147,13 +147,33 @@ public class StreamingDestination : IDisposable
                 }
 
                 var remote = sender;
+                Logging.LogDebug(
+                    $"StreamingDestination: Creating incoming stream for SYN from " +
+                    $"{remote?.IdentHash?.Id32Short ?? "?"}, SendStreamId={packet.SendStreamId:X8}, " +
+                    $"payload={packet.Payload.Length} bytes, flags={packet.Flags:X4}");
+
                 var incomingStream = new I2PStream(
                     _localDestination,
                     _localIdentityBytes,
                     packet,
                     data =>
                     {
-                        if (remote != null) _sendCallback?.Invoke(remote, data);
+                        if (remote != null)
+                        {
+                            try
+                            {
+                                _sendCallback?.Invoke(remote, data);
+                            }
+                            catch (Exception ex)
+                            {
+                                Logging.LogWarning(
+                                    $"StreamingDestination: Send callback failed: {ex.GetType().Name}: {ex.Message}");
+                            }
+                        }
+                        else
+                        {
+                            Logging.LogWarning("StreamingDestination: Cannot send — remote destination is null");
+                        }
                     },
                     _signingPrivateKey);
 
@@ -164,7 +184,9 @@ public class StreamingDestination : IDisposable
                 _pendingIncoming.Enqueue(incomingStream);
                 _pendingSignal.Release();
 
-                Logging.LogDebug($"StreamingDestination: New incoming stream {incomingStream.RecvStreamId:X8}");
+                Logging.LogDebug(
+                    $"StreamingDestination: New incoming stream {incomingStream.RecvStreamId:X8}, " +
+                    $"status={incomingStream.Status}, remoteIdentity={incomingStream.RemoteDestination?.IdentHash?.Id32Short ?? "null"}");
                 return;
             }
 
@@ -173,7 +195,9 @@ public class StreamingDestination : IDisposable
         }
         catch (Exception ex)
         {
-            Logging.LogWarning($"StreamingDestination: Error processing packet: {ex.Message}");
+            Logging.LogWarning(
+                $"StreamingDestination: Error processing packet ({payload?.Length ?? 0} bytes): " +
+                $"{ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}");
         }
     }
 

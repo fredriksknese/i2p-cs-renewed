@@ -42,6 +42,10 @@ public class RouterStatistics : I2PType
     public long TunnelBuildTimeMsPerHop;
 
     public long TunnelBuildTimeout;
+
+    // Timestamp of last tunnel build failure (timeout or decline).
+    // Used for 20-second cooldown exclusion matching Java I2P behavior.
+    public TickCounter LastTunnelBuildFailure;
     public bool Updated = false;
 
     public RouterStatistics(I2PIdentHash id)

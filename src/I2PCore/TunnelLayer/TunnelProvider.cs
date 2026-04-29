@@ -55,7 +55,8 @@ public class TunnelProvider
 
     private static readonly PeriodicAction _logTunnelBuildStatistics = new(TickSpan.Minutes(1));
 
-    private readonly PeriodicAction CheckTunnelTimeouts = new(TickSpan.Seconds(5));
+    // No longer gated by PeriodicAction — runs every loop iteration to ensure
+    // timed-out builds are caught promptly regardless of how long ExecuteQueue takes.
 
     private readonly ConcurrentDictionary<InboundTunnel, byte> EstablishedInbound = new();
     private readonly ConcurrentDictionary<OutboundTunnel, byte> EstablishedOutbound = new();
@@ -669,7 +670,7 @@ public class TunnelProvider
                         ));
                     });
 
-                    CheckTunnelTimeouts.Do(CheckForTunnelBuildTimeout);
+                    CheckForTunnelBuildTimeout();
                     CleanupPendingShortLookups();
 
                     ExecuteQueue(
@@ -690,7 +691,10 @@ public class TunnelProvider
                         t => EstablishedInbound.TryRemove((InboundTunnel)t, out _),
                         false);
 
-                    Thread.Sleep(1500); // Give data a chance to batch up
+                    // Check again after established queues — they can take a while
+                    CheckForTunnelBuildTimeout();
+
+                    Thread.Sleep(500);
                 }
                 catch (ThreadAbortException ex)
                 {
@@ -751,7 +755,11 @@ public class TunnelProvider
 #endif
             one.Owner?.TunnelBuildFailed(one, true);
 
-            foreach (var dest in one.TunnelMembers) NetDb.Inst.Statistics.TunnelBuildTimeout(dest.IdentHash);
+            foreach (var dest in one.TunnelMembers)
+            {
+                NetDb.Inst.Statistics.TunnelBuildTimeout(dest.IdentHash);
+                RouterProfileManager.Instance.RecordTunnelBuildTimeout(dest.IdentHash);
+            }
 
             RemoveTunnel(one);
             one.Shutdown();
@@ -1684,20 +1692,13 @@ public class TunnelProvider
 
                 TunnelBuildStatistics(newrec.Reply);
 
-                if (newrec.Reply == BuildResponseRecord.RequestResponse.Accept)
-                {
-                    Logging.LogDebug($"HandleTunnelBuildRecords: {tunnel} {tunnel.TunnelDebugTrace} " +
-                                     $"member: {hop.Peer.IdentHash.Id32Short}. Hop {i}. Reply: {newrec.Reply}");
+                var accepted = newrec.Reply == BuildResponseRecord.RequestResponse.Accept;
+                Logging.LogDebug($"HandleTunnelBuildRecords: {tunnel} {tunnel.TunnelDebugTrace} " +
+                                 $"member: {hop.Peer.IdentHash.Id32Short}. Hop {i}. Reply: {newrec.Reply}");
 
-                    NetDb.Inst.Statistics.SuccessfulTunnelMember(hop.Peer.IdentHash);
-                }
-                else
-                {
-                    Logging.LogDebug($"HandleTunnelBuildRecords: {tunnel} {tunnel.TunnelDebugTrace} " +
-                                     $"member: {hop.Peer.IdentHash.Id32Short}. Hop {i}. Reply: {newrec.Reply}");
-
-                    NetDb.Inst.Statistics.DeclinedTunnelMember(hop.Peer.IdentHash);
-                }
+                if (accepted) NetDb.Inst.Statistics.SuccessfulTunnelMember(hop.Peer.IdentHash);
+                else NetDb.Inst.Statistics.DeclinedTunnelMember(hop.Peer.IdentHash);
+                RouterProfileManager.Instance.RecordTunnelBuild(hop.Peer.IdentHash, accepted);
             }
 
 #if LOG_ALL_TUNNEL_TRANSFER
@@ -1888,6 +1889,7 @@ public class TunnelProvider
             var accept = status == ShortBuildReplyRecord.TunnelBuildReplyStatus.Accept;
             if (accept) NetDb.Inst.Statistics.SuccessfulTunnelMember(hop.Peer.IdentHash);
             else NetDb.Inst.Statistics.DeclinedTunnelMember(hop.Peer.IdentHash);
+            RouterProfileManager.Instance.RecordTunnelBuild(hop.Peer.IdentHash, accept);
             ok &= accept;
         }
 
@@ -1988,6 +1990,7 @@ public class TunnelProvider
             var accept = status == ShortBuildReplyRecord.TunnelBuildReplyStatus.Accept;
             if (accept) NetDb.Inst.Statistics.SuccessfulTunnelMember(hop.Peer.IdentHash);
             else NetDb.Inst.Statistics.DeclinedTunnelMember(hop.Peer.IdentHash);
+            RouterProfileManager.Instance.RecordTunnelBuild(hop.Peer.IdentHash, accept);
             ok &= accept;
         }
 
@@ -2068,10 +2071,9 @@ public class TunnelProvider
             TunnelBuildStatistics(onerecord.Reply);
 
             var accept = onerecord.Reply == BuildResponseRecord.RequestResponse.Accept;
-            if (accept)
-                NetDb.Inst.Statistics.SuccessfulTunnelMember(hop.Peer.IdentHash);
-            else
-                NetDb.Inst.Statistics.DeclinedTunnelMember(hop.Peer.IdentHash);
+            if (accept) NetDb.Inst.Statistics.SuccessfulTunnelMember(hop.Peer.IdentHash);
+            else NetDb.Inst.Statistics.DeclinedTunnelMember(hop.Peer.IdentHash);
+            RouterProfileManager.Instance.RecordTunnelBuild(hop.Peer.IdentHash, accept);
 
             ok &= accept && okhash;
             Logging.LogDebug($"HandleReceivedInboundTunnelBuild: {intunnel.TunnelDebugTrace}: [{ix}] " +
@@ -2092,6 +2094,7 @@ public class TunnelProvider
                 if (one.ReplyProcessing != null)
                 {
                     NetDb.Inst.Statistics.SuccessfulTunnelMember(one.Peer.IdentHash);
+                    RouterProfileManager.Instance.RecordTunnelBuild(one.Peer.IdentHash, true);
                     one.ReplyProcessing = null;
                 }
         }
@@ -2103,6 +2106,7 @@ public class TunnelProvider
                 if (one.ReplyProcessing != null)
                 {
                     NetDb.Inst.Statistics.DeclinedTunnelMember(one.Peer.IdentHash);
+                    RouterProfileManager.Instance.RecordTunnelBuild(one.Peer.IdentHash, false);
                     one.ReplyProcessing = null;
                 }
 
@@ -2150,10 +2154,9 @@ public class TunnelProvider
             TunnelBuildStatistics(onerecord.Reply);
 
             var accept = onerecord.Reply == BuildResponseRecord.RequestResponse.Accept;
-            if (accept)
-                NetDb.Inst.Statistics.SuccessfulTunnelMember(hop.Peer.IdentHash);
-            else
-                NetDb.Inst.Statistics.DeclinedTunnelMember(hop.Peer.IdentHash);
+            if (accept) NetDb.Inst.Statistics.SuccessfulTunnelMember(hop.Peer.IdentHash);
+            else NetDb.Inst.Statistics.DeclinedTunnelMember(hop.Peer.IdentHash);
+            RouterProfileManager.Instance.RecordTunnelBuild(hop.Peer.IdentHash, accept);
 
             ok &= accept && okhash;
             Logging.LogDebug($"HandleReceivedTunnelBuild: {this}: [{ix}] " +
@@ -2167,7 +2170,8 @@ public class TunnelProvider
             foreach (var one in hops)
             {
                 NetDb.Inst.Statistics.SuccessfulTunnelMember(one.Peer.IdentHash);
-                one.ReplyProcessing = null; // We dont need this anymore
+                RouterProfileManager.Instance.RecordTunnelBuild(one.Peer.IdentHash, true);
+                one.ReplyProcessing = null;
             }
         }
         else
@@ -2177,7 +2181,8 @@ public class TunnelProvider
             foreach (var one in hops)
             {
                 NetDb.Inst.Statistics.DeclinedTunnelMember(one.Peer.IdentHash);
-                one.ReplyProcessing = null; // We dont need this anymore
+                RouterProfileManager.Instance.RecordTunnelBuild(one.Peer.IdentHash, false);
+                one.ReplyProcessing = null;
             }
 
             obtunnel.Shutdown();

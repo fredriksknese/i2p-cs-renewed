@@ -632,9 +632,13 @@ public class ClientContext
         var streaming = new StreamingDestination(dest.Destination, destInfo.PrivateSigningKey, destInfo.Destination.ToByteArray());
         streaming.SetSendCallback((target, data) =>
         {
+            dest.Log("Streaming", $"Sending streaming packet ({data.Length} bytes) to {target.IdentHash.Id32Short}", target.IdentHash.Id32Short);
             var result = dest.Send(target, data);
             if (result != ClientDestination.ClientStates.Established)
+            {
+                dest.Log("Error", $"Streaming send FAILED: {result} to {target.IdentHash.Id32Short}", target.IdentHash.Id32Short);
                 Logging.LogWarning($"ClientContext: Tunnel '{name}' send to {target.IdentHash.Id32Short} failed: {result}");
+            }
         });
         streaming.SetLookupCallback(target =>
         {
@@ -643,7 +647,20 @@ public class ClientContext
 
         dest.DataReceived += (d, data, sender) =>
         {
-            streaming.HandleDataMessagePayload(data.ToByteArray(), sender);
+            try
+            {
+                dest.Log("Streaming",
+                    $"DataMessage received ({data.Length} bytes) from {sender?.IdentHash?.Id32Short ?? "?"}",
+                    sender?.IdentHash?.Id32Short);
+                streaming.HandleDataMessagePayload(data.ToByteArray(), sender);
+            }
+            catch (Exception ex)
+            {
+                dest.Log("Error",
+                    $"DataMessage processing FAILED: {ex.GetType().Name}: {ex.Message}",
+                    sender?.IdentHash?.Id32Short);
+                Logging.LogWarning($"ClientContext: Tunnel '{name}' DataMessage processing failed: {ex}");
+            }
         };
 
         if (type == "client" || type == "httpclient")

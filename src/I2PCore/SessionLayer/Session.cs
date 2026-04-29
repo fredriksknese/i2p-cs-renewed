@@ -53,6 +53,7 @@ internal class Session
     }
 
     private byte[] _outboundHandshakePayload;
+    private byte[] _cachedOutboundNS; // Cached encrypted NS message for retransmission
     private readonly object _encryptLock = new();
 
     private readonly ConcurrentQueue<PendingGarlic> _outboundHandshakeQueue = new();
@@ -158,6 +159,7 @@ internal class Session
     internal void HandshakeCompleted()
     {
         _outboundHandshakePayload = null;
+        _cachedOutboundNS = null;
         Logging.LogInformation($"{this}: Handshake completed. Flushing {_outboundHandshakeQueue.Count} queued messages.");
         while (_outboundHandshakeQueue.TryDequeue(out var pending))
         {
@@ -223,22 +225,27 @@ internal class Session
 
             if (!hasSession && _pendingHandshakeData == null && EciesKeys.IsOutboundHandshakeInProgress(RemoteDestination))
             {
-                // Allow retransmission of the handshake message itself
-                if (_outboundHandshakePayload != null && _outboundHandshakePayload.SequenceEqual(payload))
+                // Outbound handshake (NS) already sent, waiting for reply (NSR).
+                // Streaming retransmissions arrive with updated ACK/signature, so
+                // the payload won't match the original.  Instead of queueing (which
+                // silently drops the retransmission until HandshakeCompleted), re-send
+                // the cached NS message.  The remote will see the same NS and either
+                // send a fresh NSR or ignore the duplicate — either way it keeps the
+                // connection attempt alive.
+                if (_cachedOutboundNS != null)
                 {
-                    Logging.LogDebug($"{this}: ECIES handshake retransmission for {RemoteDestination.Id32Short}.");
+                    Logging.LogDebug($"{this}: ECIES handshake in progress for {RemoteDestination.Id32Short}, resending cached NS ({_cachedOutboundNS.Length} bytes).");
+                    return new GarlicMessage(_cachedOutboundNS);
                 }
-                else
+
+                Logging.LogWarning($"{this}: ECIES handshake in progress but no cached NS for {RemoteDestination.Id32Short}. Queuing.");
+                _outboundHandshakeQueue.Enqueue(new PendingGarlic
                 {
-                    Logging.LogInformation($"{this}: ECIES handshake already in progress for {RemoteDestination.Id32Short}. Queuing message.");
-                    _outboundHandshakeQueue.Enqueue(new PendingGarlic
-                    {
-                        PublicKeys = remotepublickeys,
-                        ReplyTunnel = replytunnel,
-                        Cloves = cloves
-                    });
-                    return null;
-                }
+                    PublicKeys = remotepublickeys,
+                    ReplyTunnel = replytunnel,
+                    Cloves = cloves
+                });
+                return null;
             }
 
             byte[] eciesMessage = null;
@@ -250,10 +257,13 @@ internal class Session
                     eciesMessage = EciesKeys.CreateHandshakeReply(RemoteDestination, _pendingHandshakeData, payload);
                     _pendingHandshakeData = null;
 
+                    // Log reply tag (first 8 bytes of NSR) for debugging
+                    var replyTagFp = eciesMessage.Length >= 8
+                        ? BitConverter.ToString(eciesMessage, 0, 8) : "?";
                     Logging.LogInformation(
-                        $"{this}: Encrypted ECIES handshake reply to {RemoteDestination.Id32Short}: {eciesMessage.Length} bytes");
+                        $"{this}: Encrypted ECIES handshake reply to {RemoteDestination.Id32Short}: {eciesMessage.Length} bytes, tag=[{replyTagFp}]");
                     Context.Log("Sent",
-                        $"ECIES Handshake Reply sent: {eciesMessage.Length} bytes, {cloves.Count} clove(s)",
+                        $"ECIES Handshake Reply sent: {eciesMessage.Length} bytes, {cloves.Count} clove(s), replyTag=[{replyTagFp}]",
                         RemoteDestination.Id32Short);
                 }
                 catch (Exception ex)
@@ -281,21 +291,31 @@ internal class Session
 
             if (eciesMessage == null && !hasSession)
             {
-                // Find best hybrid variant from remotepublickeys
+                // Match Java I2P's MuxedPQEngine behavior: prefer plain X25519 (Noise IK)
+                // when the remote supports it, only use hybrid ML-KEM (Noise IKhfs) when
+                // the remote has ONLY hybrid keys.  This ensures interop because:
+                // 1) Plain IK is universally supported and well-tested
+                // 2) Java tries EC before PQ on the receive side too
+                // 3) Hybrid handshake interop can be validated separately
                 NoiseIKhfs.KEMVariant? variant = null;
-                if (remotepublickeys.Any(pk => pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM1024_X25519))
-                    variant = NoiseIKhfs.KEMVariant.MLKEM1024;
-                else if (remotepublickeys.Any(pk => pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM768_X25519))
-                    variant = NoiseIKhfs.KEMVariant.MLKEM768;
-                else if (remotepublickeys.Any(pk => pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM512_X25519))
-                    variant = NoiseIKhfs.KEMVariant.MLKEM512;
-
-                // Create new session with Noise IK or hybrid IKhfs handshake
                 var x25519Key = remotepublickeys.FirstOrDefault(pk =>
-                    pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.X25519 ||
-                    pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM512_X25519 ||
-                    pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM768_X25519 ||
-                    pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM1024_X25519);
+                    pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.X25519);
+
+                if (x25519Key == null)
+                {
+                    // No plain X25519 key — must use hybrid
+                    if (remotepublickeys.Any(pk => pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM1024_X25519))
+                        variant = NoiseIKhfs.KEMVariant.MLKEM1024;
+                    else if (remotepublickeys.Any(pk => pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM768_X25519))
+                        variant = NoiseIKhfs.KEMVariant.MLKEM768;
+                    else if (remotepublickeys.Any(pk => pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM512_X25519))
+                        variant = NoiseIKhfs.KEMVariant.MLKEM512;
+
+                    x25519Key = remotepublickeys.FirstOrDefault(pk =>
+                        pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM512_X25519 ||
+                        pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM768_X25519 ||
+                        pk.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM1024_X25519);
+                }
 
                 if (x25519Key == null) x25519Key = remotepublickeys.FirstOrDefault();
 
@@ -321,6 +341,7 @@ internal class Session
 
                 eciesMessage = EciesKeys.CreateNewSession(RemoteDestination, x25519Key, payload, variant);
                 _outboundHandshakePayload = payload;
+                _cachedOutboundNS = (byte[])eciesMessage.Clone();
 
                 Logging.LogInformation(
                     $"{this}: Encrypted ECIES new session to {RemoteDestination.Id32Short}: {eciesMessage.Length} bytes");

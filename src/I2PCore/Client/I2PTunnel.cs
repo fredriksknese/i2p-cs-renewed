@@ -374,7 +374,8 @@ public class I2PTunnelServer : II2PTunnel, IDisposable
                 if (i2pStream == null)
                     continue;
 
-                _clientDestination.Log("Streaming", $"Accepted incoming stream from {i2pStream.RemoteDestination.IdentHash.Id32Short}", i2pStream.RemoteDestination.IdentHash.Id32Short);
+                var remoteId = i2pStream.RemoteDestination?.IdentHash?.Id32Short ?? "unknown";
+                _clientDestination.Log("Streaming", $"Accepted incoming stream from {remoteId}", remoteId);
                 _ = Task.Run(() => HandleIncoming(i2pStream, ct), ct);
             }
         }
@@ -391,20 +392,29 @@ public class I2PTunnelServer : II2PTunnel, IDisposable
         try
         {
             tcpClient = new TcpClient();
+            var remoteId = i2pStream.RemoteDestination?.IdentHash?.Id32Short ?? "unknown";
+            _clientDestination.Log("Streaming",
+                $"Connecting to local server {_targetHost}:{_targetPort}",
+                remoteId);
             await tcpClient.ConnectAsync(_targetHost, _targetPort);
             tcpClient.NoDelay = true;
 
             var tcpStream = tcpClient.GetStream();
 
-            Logging.LogDebug(
-                $"I2PTunnelServer: Incoming I2P stream -> {_targetHost}:{_targetPort}");
+            _clientDestination.Log("Streaming",
+                $"Connected to {_targetHost}:{_targetPort}, starting bidirectional forward",
+                i2pStream.RemoteDestination?.IdentHash?.Id32Short);
 
             await ForwardBidirectional(tcpStream, i2pStream, ct);
+
+            _clientDestination.Log("Streaming",
+                $"Bidirectional forward ended for {i2pStream.RemoteDestination?.IdentHash?.Id32Short}");
         }
         catch (Exception ex)
         {
-            Logging.LogDebug(
-                $"I2PTunnelServer: Failed to connect to {_targetHost}:{_targetPort}: {ex.Message}");
+            _clientDestination.Log("Error",
+                $"Failed to connect to {_targetHost}:{_targetPort}: {ex.Message}",
+                i2pStream.RemoteDestination?.IdentHash?.Id32Short);
             i2pStream.Close();
         }
         finally

@@ -201,9 +201,12 @@ public class NoiseIK
 
     /// <summary>
     ///     Create New Session Reply message (responder only)
-    ///     <- tag, e, ee, se, payload
-    ///         Returns: replyTag (8) || ephemeralKey (32) || encryptedPayload ( len+16)
-    ///         Note: Reply tag is for the ratchet session lookup
+    ///     Java I2P "hs2" format:
+    ///       tag(8) || elligator2_ephemeral(32) || handshake_MAC(16) || encrypted_payload
+    ///     The handshake MAC is from encrypting empty data after e,ee,se.
+    ///     Then split() derives transport keys, and the payload is encrypted
+    ///     with a key derived via HKDF(k_ba, "AttachPayloadKDF"), using the
+    ///     handshake hash as associated data.
     /// </summary>
     public byte[] CreateNewSessionReplyMessage(byte[] replyTag, byte[] payload)
     {
@@ -230,30 +233,44 @@ public class NoiseIK
         // <- se (static-ephemeral DH)
         state.PerformSE(false);
 
-        // <- payload
-        var encryptedPayload = state.EncryptPayload(payload);
+        // Encrypt empty data to produce handshake MAC (Java writeMessage with ZEROLEN payload)
+        var emptyMac = state.EncryptPayload(Array.Empty<byte>());
 
-        // Combine: replyTag || encodedEphemeralKey || encryptedPayload
-        var message = new byte[8 + 32 + encryptedPayload.Length];
+        // Split to derive transport keys (Java: state.split() after writeMessage)
+        var (key1, key2, ck, handshakeHash) = state.FinalizeHandshake();
+        // Responder: sendKey = key2 = k_ba, receiveKey = key1 = k_ab
+        var k_ba = key2;
+
+        // Derive payload encryption key (Java: INFO_6 = "AttachPayloadKDF")
+        var payloadKey = HKDF.DeriveKey(k_ba, Array.Empty<byte>(),
+            System.Text.Encoding.ASCII.GetBytes("AttachPayloadKDF"), 32);
+
+        // Encrypt payload with derived key, handshake hash as AD
+        var nonce = ChaCha20Poly1305.CreateNonce(0);
+        var encryptedPayload = ChaCha20Poly1305.Encrypt(payloadKey, nonce, payload, handshakeHash);
+
+        // Combine: replyTag || encodedEphemeralKey || emptyMac || encryptedPayload
+        var message = new byte[8 + 32 + emptyMac.Length + encryptedPayload.Length];
         Array.Copy(replyTag, 0, message, 0, 8);
         Array.Copy(encodedEphemeralKey, 0, message, 8, 32);
-        Array.Copy(encryptedPayload, 0, message, 40, encryptedPayload.Length);
+        Array.Copy(emptyMac, 0, message, 40, emptyMac.Length);
+        Array.Copy(encryptedPayload, 0, message, 40 + emptyMac.Length, encryptedPayload.Length);
 
         return message;
     }
 
     /// <summary>
     ///     Process New Session Reply message (initiator only)
-    ///     <- tag, e, ee, se, payload
-    ///         Input: replyTag (8) || ephemeralKey (32) || encryptedPayload
-    ///         Returns: ( decrypted payload, reply tag)
+    ///     Java I2P "hs2" format:
+    ///       tag(8) || elligator2_ephemeral(32) || handshake_MAC(16) || encrypted_payload
+    ///     Returns: (decrypted payload, reply tag)
     /// </summary>
     public (byte[] payload, byte[] replyTag) ProcessNewSessionReplyMessage(byte[] message)
     {
         if (!isInitiator)
             throw new InvalidOperationException("Only initiator can process New Session Reply");
 
-        if (message == null || message.Length < 8 + 32 + 16)
+        if (message == null || message.Length < 8 + 32 + 16 + 16)
             throw new ArgumentException("Message too short");
 
         // Extract reply tag
@@ -264,14 +281,17 @@ public class NoiseIK
         var encodedEphemeralKey = new byte[32];
         Array.Copy(message, 8, encodedEphemeralKey, 0, 32);
 
-        // Extract encrypted payload
-        var encryptedPayload = new byte[message.Length - 40];
-        Array.Copy(message, 40, encryptedPayload, 0, encryptedPayload.Length);
+        // Extract handshake MAC (empty section, 16 bytes)
+        var emptyMac = new byte[16];
+        Array.Copy(message, 40, emptyMac, 0, 16);
+
+        // Extract encrypted payload (after tag + ephemeral + emptyMac)
+        var encryptedPayload = new byte[message.Length - 56];
+        Array.Copy(message, 56, encryptedPayload, 0, encryptedPayload.Length);
 
         // Java I2P: mixHash(tag) before readMessage (ECIESAEADEngine.java:812)
         state.MixHash(replyTag);
 
-        // Java I2P: Elligator2 decode in-place before readMessage (line 811)
         // <- e (with Elligator2 decoding, MixHash decoded key)
         state.ReceiveEphemeralKeyElligator2(encodedEphemeralKey);
 
@@ -281,8 +301,24 @@ public class NoiseIK
         // <- se
         state.PerformSE(true);
 
-        // <- payload
-        var payload = state.DecryptPayload(encryptedPayload);
+        // Decrypt empty section (verify handshake MAC)
+        state.DecryptPayload(emptyMac);
+
+        // Split to derive transport keys
+        var (key1, key2, ck, handshakeHash) = state.FinalizeHandshake();
+        // Initiator: sendKey = key1 = k_ab, receiveKey = key2 = k_ba
+        var k_ba = key2;
+
+        // Derive payload decryption key (Java: INFO_6 = "AttachPayloadKDF")
+        var payloadKey = HKDF.DeriveKey(k_ba, Array.Empty<byte>(),
+            System.Text.Encoding.ASCII.GetBytes("AttachPayloadKDF"), 32);
+
+        // Decrypt payload with derived key, handshake hash as AD
+        var nonce = ChaCha20Poly1305.CreateNonce(0);
+        var payload = ChaCha20Poly1305.Decrypt(payloadKey, nonce, encryptedPayload, handshakeHash);
+
+        if (payload == null)
+            throw new System.Security.Cryptography.CryptographicException("NSR payload decryption failed");
 
         return (payload, replyTag);
     }

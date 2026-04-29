@@ -40,18 +40,9 @@ public class OutboundTunnel : Tunnel
         ReplyTunnelHops = replytunnelhops;
     }
 
-    public override TickSpan TunnelEstablishmentTimeout
-    {
-        get
-        {
-            var hops = ReplyTunnelHops + TunnelMemberHops;
-            var timeperhop = Config.Pool == TunnelConfig.TunnelPool.Exploratory
-                ? ExpectedTunnelBuildTimePerHop * 2.0
-                : ExpectedTunnelBuildTimePerHop;
-
-            return timeperhop * hops;
-        }
-    }
+    // Java I2P: flat 5-10s REQUEST_TIMEOUT regardless of hop count or pool type.
+    // No per-hop multiplication, no exploratory multiplier.
+    public override TickSpan TunnelEstablishmentTimeout => TunnelBuildTimeout;
 
     public override IEnumerable<I2PRouterIdentity> TunnelMembers
     {

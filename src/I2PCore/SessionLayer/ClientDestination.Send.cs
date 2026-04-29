@@ -179,10 +179,12 @@ public partial class ClientDestination : IClient
 
             case ClientStates.NoTunnels:
                 Logging.LogDebug($"{this}: No established tunnels (inbound or outbound) available.");
+                Log("Error", $"Send FAILED: No tunnels available for {destHash.Id32Short}", destHash.Id32Short);
                 return result.ClientState;
 
             case ClientStates.NoLeases:
                 Logging.LogDebug($"{this}: No leases available for {destHash.Id32Short}.");
+                Log("Error", $"Send FAILED: No leases for {destHash.Id32Short}", destHash.Id32Short);
                 LookupDestination(destHash, HandleDestinationLookupResult);
                 return result.ClientState;
         }
@@ -208,6 +210,13 @@ public partial class ClientDestination : IClient
                                (result.OutTunnel?.TunnelDebugTrace ?? "LOCAL") + " to remote lease " +
                                $"GW={result.RemoteLease?.TunnelGw?.Id32Short ?? "LOCAL"} TunnelId={result.RemoteLease?.TunnelId ?? 0}, " +
                                $"msg type={msg.MessageType}, payload={msg.Payload.Length} bytes");
+        Log("Debug",
+            $"Routing garlic: outTunnel={result.OutTunnel?.TunnelDebugTrace ?? "LOCAL"}, " +
+            $"remoteGW={result.RemoteLease?.TunnelGw?.Id32Short ?? "?"}, " +
+            $"remoteTunId={result.RemoteLease?.TunnelId ?? 0}, " +
+            $"leaseExpire={(result.RemoteLeaseSet?.Expire - DateTime.UtcNow)?.TotalSeconds:F0}s, " +
+            $"msgLen={msg.Payload.Length}",
+            destHash.Id32Short);
 
         if (result.OutTunnel != null && result.RemoteLease != null)
         {

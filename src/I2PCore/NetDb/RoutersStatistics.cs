@@ -183,7 +183,11 @@ public class RoutersStatistics
 
     public void DeclinedTunnelMember(I2PIdentHash hash)
     {
-        Update(hash, ds => Interlocked.Increment(ref ds.DeclinedTunnelMember), false);
+        Update(hash, ds =>
+        {
+            Interlocked.Increment(ref ds.DeclinedTunnelMember);
+            ds.LastTunnelBuildFailure = TickCounter.Now;
+        }, false);
     }
 
     public void SuccessfulTunnelTest(I2PIdentHash hash)
@@ -198,7 +202,11 @@ public class RoutersStatistics
 
     public void TunnelBuildTimeout(I2PIdentHash hash)
     {
-        Update(hash, ds => Interlocked.Increment(ref ds.TunnelBuildTimeout), false);
+        Update(hash, ds =>
+        {
+            Interlocked.Increment(ref ds.TunnelBuildTimeout);
+            ds.LastTunnelBuildFailure = TickCounter.Now;
+        }, false);
     }
 
     public void TunnelBuildTimeMsPerHop(I2PIdentHash hash, long ms)

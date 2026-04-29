@@ -273,7 +273,7 @@ public class ECIESSession
 
             var hybridReply = ECIESHybridNewSessionReplyMessage.Parse(replyData, _kemVariant.Value);
             payload = _noiseIKhfs.ReadMessageB(hybridReply.EphemeralPublicKey, hybridReply.EncryptedKEMCiphertext,
-                hybridReply.EmptySectionMac, hybridReply.EncryptedPayload);
+                hybridReply.EmptySectionMac, hybridReply.HandshakeMac, hybridReply.EncryptedPayload);
 
             (sendK, receiveK, ck) = _noiseIKhfs.FinalizeHandshake();
         }

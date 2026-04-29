@@ -46,8 +46,20 @@ public partial class NetDb
                 // include untested routers for exploratory tunnels.
                 .Where(rp =>
                 {
-                    var st = Statistics[rp.Router.Identity.IdentHash];
-                    // Relax filter during bootstrapping (connected count < 10)
+                    var hash = rp.Router.Identity.IdentHash;
+                    var st = Statistics[hash];
+
+                    // 20-second cooldown: skip peers that recently failed a tunnel build
+                    // (matches Java I2P's TunnelPeerSelector exclusion of recently-rejected peers)
+                    if (st.LastTunnelBuildFailure != null &&
+                        st.LastTunnelBuildFailure.DeltaToNow < TickSpan.Seconds(20))
+                        return false;
+
+                    // Skip peers marked as bad by RouterProfile (5+ consecutive failures or <10% success rate)
+                    if (RouterProfileManager.Instance.GetProfile(hash).IsBad)
+                        return false;
+
+                    // Relax further filters during bootstrapping (connected count < 10)
                     // or if we have no exploratory tunnels yet.
                     var established = Router.ExplorationTunnelMgr?.InboundExploratory.EstablishedCount ?? 0;
                     if (TransportProvider.Inst.ConnectedRoutersCount < 10 || established < 2) return true;
@@ -93,6 +105,22 @@ public partial class NetDb
         {
             result = r?.GetWeightedRandom(exclude);
             tryagain = result == me;
+
+            // 20-second cooldown + IsBad check for non-exploratory too
+            if (!tryagain && result != null)
+            {
+                var st = Statistics[result];
+                var coolingDown = st.LastTunnelBuildFailure != null &&
+                                  st.LastTunnelBuildFailure.DeltaToNow < TickSpan.Seconds(20);
+                var isBad = RouterProfileManager.Instance.GetProfile(result).IsBad;
+                if (coolingDown || isBad)
+                {
+                    // Temporarily exclude and retry
+                    exclude ??= new HashSet<I2PIdentHash>();
+                    exclude.Add(result);
+                    tryagain = true;
+                }
+            }
         } while (tryagain && ++retries < 20);
 
         if (result == null)

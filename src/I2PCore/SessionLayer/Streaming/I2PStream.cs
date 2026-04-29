@@ -453,6 +453,8 @@ public class I2PStream : IDisposable
 
     /// <summary>
     ///     Parse options from a SYN packet (identity, max packet size, etc.)
+    ///     Option order must match Java I2P's Packet.writePacket():
+    ///       DELAY_REQUESTED → FROM_INCLUDED → MAX_PACKET_SIZE → OFFLINE_SIGNATURE → SIGNATURE
     /// </summary>
     private void ParseSynOptions(StreamingPacket packet)
     {
@@ -461,6 +463,10 @@ public class I2PStream : IDisposable
         var offset = 0;
         var opts = packet.OptionData;
         var flags = packet.Flags;
+
+        // DELAY_REQUESTED: 2-byte delay value (comes BEFORE FROM in Java I2P)
+        if ((flags & StreamingPacket.FLAG_DELAY_REQUESTED) != 0 && offset + 2 <= opts.Length)
+            offset += 2; // skip the 2-byte delay value; we don't use it
 
         // FROM_INCLUDED: remote identity
         if ((flags & StreamingPacket.FLAG_FROM_INCLUDED) != 0 && offset < opts.Length)
@@ -946,6 +952,10 @@ public class I2PStream : IDisposable
         {
             _synSent = true;
             SetSynOptions(ack);
+            Logging.LogDebug(
+                $"I2PStream {RecvStreamId:X8}: Sending SYN+ACK: Send={ack.SendStreamId:X8}, " +
+                $"Recv={ack.ReceiveStreamId:X8}, AckThrough={ack.AckThrough}, " +
+                $"Flags={ack.Flags:X4}, OptionLen={ack.OptionData?.Length ?? 0}");
         }
         else
         {

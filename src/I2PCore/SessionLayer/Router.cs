@@ -305,6 +305,8 @@ public static class Router
         }
     }
 
+    private static readonly PeriodicAction ProfileCleanup = new(TickSpan.Minutes(10));
+
     private static void Run()
     {
         TunnelProvider.I2NpMessageReceived += HandleI2NpMessageReceived;
@@ -318,6 +320,8 @@ public static class Router
                     ClientTunnelMgr.Execute();
                     ExplorationTunnelMgr.Execute();
                     TransitTunnelMgr.Execute();
+
+                    ProfileCleanup.Do(() => RouterProfileManager.Instance.Cleanup());
 
                     Thread.Sleep(500);
                 }
@@ -605,13 +609,19 @@ public static class Router
             if (TryHandleECIESGarlic(garlicmsg, from))
                 return;
 
-            // Fallback: Try all client destinations
+            // Fallback: Try all client destinations.
+            // Use suppressTunnelPageLog because most messages here are
+            // router-level garlic (build replies, NetDB) that can't be
+            // decrypted by a client SKM — logging every attempt is noise.
             foreach (var dest in AllDestinations.Keys)
                 try
                 {
-                    var decr = dest.DecryptGarlic(garlicmsg);
+                    var decr = dest.MySessions.DecryptMessage(garlicmsg, suppressTunnelPageLog: true);
                     if (decr != null)
                     {
+                        var cloveTypes = string.Join(", ", decr.Cloves.Select(c => c.Message?.GetType().Name ?? "?"));
+                        dest.Log("Decrypted", $"Garlic decrypted: {decr.Cloves.Count} cloves [{cloveTypes}]",
+                            decr.RemoteHash?.Id32Short);
                         Logging.LogDebug(
                             $"Router: Garlic decrypted by client destination {dest.Destination.IdentHash.Id32Short}");
                         dest.HandleDecryptedGarlic(decr, from);

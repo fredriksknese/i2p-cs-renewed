@@ -76,13 +76,12 @@ public abstract class Tunnel
     public abstract TickSpan TunnelEstablishmentTimeout { get; }
     public static TickSpan TunnelRecreationMarginPerHop => ExpectedTunnelBuildTimePerHop * 1.5;
 
-    // Time per hop for "ok" routers
-    // Avg     1223 ms
-    // StdDev  1972 ms
-    public static TickSpan ExpectedTunnelBuildTimePerHop =>
-        RouterContext.Inst.IsFirewalled
-            ? TickSpan.Seconds(15)
-            : TickSpan.Seconds(10);
+    // Java I2P uses a flat REQUEST_TIMEOUT of 5s (fast) or 10s (slow).
+    // Flat 5s regardless of hop count, pool type, or system speed.
+    public static readonly TickSpan TunnelBuildTimeout = TickSpan.Seconds(5);
+
+    // Keep for TunnelRecreationMarginPerHop calculation only
+    public static TickSpan ExpectedTunnelBuildTimePerHop => TickSpan.Seconds(3);
 
     public virtual TickSpan Lifetime => TunnelLifetime;
 

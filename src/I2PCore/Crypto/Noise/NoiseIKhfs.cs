@@ -161,9 +161,11 @@ public class NoiseIKhfs : NoiseHandshakeState
     }
 
     /// <summary>
-    ///     Message 2 (Bob to Alice): <- e, ee, F, FF, se, p
+    ///     Message 2 (Bob to Alice): <- e, ee, F, FF, se, [empty MAC], split, payload
+    ///     Java I2P "hs2" format: handshake tokens produce the ephemeral + encrypted KEM ct +
+    ///     empty MAC sections; then split() + HKDF("AttachPayloadKDF") derives the payload key.
     /// </summary>
-    public (byte[] ephemeralPublic, byte[] encryptedKemCiphertext, byte[] emptySectionMac, byte[] encryptedPayload)
+    public (byte[] ephemeralPublic, byte[] encryptedKemCiphertext, byte[] emptySectionMac, byte[] handshakeMac, byte[] encryptedPayload)
         WriteMessageB(byte[] payload)
     {
         if (isInitiator) throw new InvalidOperationException("Must be responder");
@@ -204,19 +206,37 @@ public class NoiseIKhfs : NoiseHandshakeState
         // <- se
         PerformSE(false);
 
-        // <- p
-        var encryptedPayload = EncryptAndHash(payload);
+        // Handshake MAC (empty data encrypted after all tokens)
+        var handshakeMac = EncryptAndHash(Array.Empty<byte>());
 
-        return (ephemeralEncoded, encryptedKemCiphertext, emptySectionMac, encryptedPayload);
+        // Split to derive transport keys
+        var (k1, k2, splitCk) = Split();
+        // Responder: k2 = k_ba
+        var k_ba = k2;
+
+        // Capture handshake hash BEFORE we modify anything else
+        var handshakeHash = Hash;
+
+        // Derive payload key (Java: INFO_6 = "AttachPayloadKDF")
+        var payloadKey = Crypto.HKDF.DeriveKey(k_ba, Array.Empty<byte>(),
+            System.Text.Encoding.ASCII.GetBytes("AttachPayloadKDF"), 32);
+
+        // Encrypt payload with derived key, handshake hash as AD
+        var nonce = ChaCha20Poly1305.CreateNonce(0);
+        var encryptedPayload = ChaCha20Poly1305.Encrypt(payloadKey, nonce, payload, handshakeHash);
+
+        return (ephemeralEncoded, encryptedKemCiphertext, emptySectionMac, handshakeMac, encryptedPayload);
     }
 
     /// <summary>
-    ///     Message 2 (Alice receiving from Bob): <- e, ee, F, FF, se, p
+    ///     Message 2 (Alice receiving from Bob): <- e, ee, F, FF, se, [empty MAC], split, payload
+    ///     Java I2P "hs2" format: after handshake tokens and empty MAC, split() + HKDF derives payload key.
     /// </summary>
     public byte[] ReadMessageB(
         byte[] ephemeralPublicEncoded,
         byte[] encryptedKemCiphertext,
         byte[] emptySectionMac,
+        byte[] handshakeMac,
         byte[] encryptedPayload)
     {
         if (!isInitiator) throw new InvalidOperationException("Must be initiator");
@@ -254,8 +274,29 @@ public class NoiseIKhfs : NoiseHandshakeState
         // <- se
         PerformSE(true);
 
-        // <- p
-        return DecryptAndHash(encryptedPayload);
+        // Verify handshake MAC (empty data after all tokens)
+        DecryptAndHash(handshakeMac);
+
+        // Split to derive transport keys
+        var (k1, k2, splitCk) = Split();
+        // Initiator: k2 = k_ba
+        var k_ba = k2;
+
+        // Capture handshake hash
+        var handshakeHash = Hash;
+
+        // Derive payload key (Java: INFO_6 = "AttachPayloadKDF")
+        var payloadKey = Crypto.HKDF.DeriveKey(k_ba, Array.Empty<byte>(),
+            System.Text.Encoding.ASCII.GetBytes("AttachPayloadKDF"), 32);
+
+        // Decrypt payload with derived key, handshake hash as AD
+        var nonce = ChaCha20Poly1305.CreateNonce(0);
+        var payload = ChaCha20Poly1305.Decrypt(payloadKey, nonce, encryptedPayload, handshakeHash);
+
+        if (payload == null)
+            throw new System.Security.Cryptography.CryptographicException("Hybrid NSR payload decryption failed");
+
+        return payload;
     }
 
     public (byte[] sendKey, byte[] receiveKey, byte[] ck) FinalizeHandshake()

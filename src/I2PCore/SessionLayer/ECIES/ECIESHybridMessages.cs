@@ -211,7 +211,10 @@ public class ECIESHybridNewSessionReplyMessage
     // Section 2: Empty (for consistency with standard IK pattern)
     public byte[] EmptySectionMac { get; set; } // 16 bytes MAC only
 
-    // Section 3: Encrypted payload after se
+    // Section 3: Handshake MAC (empty data after all tokens, before split)
+    public byte[] HandshakeMac { get; set; } // 16 bytes MAC only
+
+    // Section 4: Encrypted payload (with derived key after split + AttachPayloadKDF)
     public byte[] EncryptedPayload { get; set; } // Variable length
 
     /// <summary>
@@ -222,7 +225,7 @@ public class ECIESHybridNewSessionReplyMessage
         var kemCtSize = ECIESHybridNewSessionMessage.GetKEMCiphertextSize(variant);
         var encryptedKemCtSize = kemCtSize + 16; // +16 for Poly1305 MAC
 
-        var minSize = 8 + 32 + encryptedKemCtSize + 16 + 16; // tag+ephemeral+ekem1+empty_mac+min_payload
+        var minSize = 8 + 32 + encryptedKemCtSize + 16 + 16 + 16; // tag+ephemeral+ekem1+empty_mac+handshake_mac+min_payload
         if (data.Length < minSize)
             throw new ArgumentException($"Hybrid reply message too short: {data.Length} < {minSize}");
 
@@ -233,6 +236,7 @@ public class ECIESHybridNewSessionReplyMessage
         msg.EphemeralPublicKey = reader.ReadBlock(32).ToByteArray();
         msg.EncryptedKEMCiphertext = reader.ReadBlock(encryptedKemCtSize).ToByteArray();
         msg.EmptySectionMac = reader.ReadBlock(16).ToByteArray();
+        msg.HandshakeMac = reader.ReadBlock(16).ToByteArray();
 
         var remaining = data.Length - reader.BaseArrayOffset;
         msg.EncryptedPayload = reader.ReadBlock(remaining).ToByteArray();
@@ -250,6 +254,7 @@ public class ECIESHybridNewSessionReplyMessage
         stream.WriteBytes(EphemeralPublicKey);
         stream.WriteBytes(EncryptedKEMCiphertext);
         stream.WriteBytes(EmptySectionMac);
+        stream.WriteBytes(HandshakeMac);
         stream.WriteBytes(EncryptedPayload);
         return stream.WrittenSpan.ToArray();
     }
@@ -263,7 +268,7 @@ public class ECIESHybridNewSessionReplyMessage
         byte[] payload,
         NoiseIKhfs noise)
     {
-        var (ephemeralPublic, encryptedKemCiphertext, emptySectionMac, encryptedPayload) =
+        var (ephemeralPublic, encryptedKemCiphertext, emptySectionMac, handshakeMac, encryptedPayload) =
             noise.WriteMessageB(payload);
 
         return new ECIESHybridNewSessionReplyMessage
@@ -272,6 +277,7 @@ public class ECIESHybridNewSessionReplyMessage
             EphemeralPublicKey = ephemeralPublic,
             EncryptedKEMCiphertext = encryptedKemCiphertext,
             EmptySectionMac = emptySectionMac,
+            HandshakeMac = handshakeMac,
             EncryptedPayload = encryptedPayload
         };
     }
@@ -286,6 +292,7 @@ public class ECIESHybridNewSessionReplyMessage
             EphemeralPublicKey,
             EncryptedKEMCiphertext,
             EmptySectionMac,
+            HandshakeMac,
             EncryptedPayload);
     }
 }
