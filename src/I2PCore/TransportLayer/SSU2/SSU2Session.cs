@@ -366,9 +366,11 @@ public class SSU2Session : ITransport
         blockData[2] = (byte)(challengeData.Length & 0xFF);
         Array.Copy(challengeData, 0, blockData, 3, challengeData.Length);
 
-        // Send as a data packet through the established session
-        // For now, log that we would send - actual integration depends on Send path
-        Logging.LogDebug($"{DebugId}: PathResponse sent ({challengeData.Length} bytes)");
+        // NOT SENT. blockData is built and dropped; wiring it into the Send path is batch 4-3,
+        // and SSU2Host.ConnectionMigrationSupported stays false until it is. The old message
+        // here read "PathResponse sent", which was false and — since batch 0-1 made debug
+        // logging reachable in Release — would have been actively misleading in the field.
+        Logging.LogDebug($"{DebugId}: PathResponse NOT sent ({challengeData.Length} bytes) - stub, see batch 4-3");
     }
 
     private void ExtractRemoteEndpoint()

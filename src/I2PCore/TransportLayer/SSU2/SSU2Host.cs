@@ -29,7 +29,10 @@ public class SSU2Host : ITransportProtocol
     public static readonly bool RelaySupported = true;
     public static readonly bool PeerTestSupported = true;
     public static readonly bool PathValidationSupported = true;
-    public static readonly bool ConnectionMigrationSupported = true;
+    // Batch 0-4: false until SendPathResponse actually sends. It currently builds the
+    // PathResponse block and then only logs "PathResponse sent" without transmitting it, so
+    // advertising 'm' promises a migration we silently fail to complete. Batch 4-3 owns this.
+    public static readonly bool ConnectionMigrationSupported = false;
     private readonly List<IntroducerInfo> _activeIntroducers = new();
     private readonly object _introducerLock = new();
 

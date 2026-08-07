@@ -92,7 +92,10 @@ public partial class RouterContext
 
     private bool IsFirewalledField = true;
     private I2PRouterInfo MyRouterInfoCache;
-    public HttpProxyEncryptionType ProxyEncryption = HttpProxyEncryptionType.Hybrid;
+    // Batch 0-4: defaults to Ecies, not Hybrid. The ML-KEM hybrid path's own handshake tests
+    // are quarantined (see NTCP2PQHandshakeTest, batch 9-3), so leading with it means leading
+    // with the one encryption type least likely to negotiate. Opt in with --proxy-encryption.
+    public HttpProxyEncryptionType ProxyEncryption = HttpProxyEncryptionType.Ecies;
 
     public RouterContext() : this((I2PCertificate)null)
     {
@@ -187,7 +190,15 @@ public partial class RouterContext
         }
     }
 
-    public bool EnableSSU2 { get; set; } = true;
+    // Batch 0-4: SSU2 is opt-in (--enable-ssu2) until Phase 4. It has no ACK/retransmit path
+    // wired into production code and no Retry/token handling, so advertising an SSU2 address
+    // only earns connect attempts that cannot complete. Phase 4 flips this back (batch 4-5).
+    public bool EnableSSU2 { get; set; } = false;
+
+    // Batch 0-4: post-quantum NTCP2 is opt-in (--experimental-pq). When false the "pq" option
+    // is left off the published NTCP2 address entirely, so peers never negotiate a handshake
+    // whose tests are quarantined. Batch 9-4 revisits this after Prop 169 interop.
+    public bool EnablePqTransport { get; set; } = false;
 
     // I2P
     public I2PDate Published { get; private set; }
