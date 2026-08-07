@@ -1,3 +1,4 @@
+using I2PCore.Utils;
 using System;
 using Org.BouncyCastle.Crypto.Agreement;
 using Org.BouncyCastle.Crypto.Generators;
@@ -19,7 +20,7 @@ public static class X25519
     /// </summary>
     public static (byte[] privateKey, byte[] publicKey) GenerateKeyPair()
     {
-        var random = new SecureRandom();
+        var random = BufUtils.BcRandom;
         var keyPairGenerator = new X25519KeyPairGenerator();
         keyPairGenerator.Init(new X25519KeyGenerationParameters(random));
 

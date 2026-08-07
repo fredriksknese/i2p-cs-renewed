@@ -12,7 +12,7 @@ public static class ElGamalCrypto
     public const int EncryptedShortLength = 512;
     public const int EgBlockLength = 255;
 
-    private static readonly SecureRandom Rnd = new();
+    private static SecureRandom Rnd => BufUtils.BcRandom;
 
     public static byte[] Encrypt(I2PByteBlock data, I2PPublicKey key, bool zeropad)
     {

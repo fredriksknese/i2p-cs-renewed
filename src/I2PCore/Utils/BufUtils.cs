@@ -13,7 +13,9 @@ using Org.BouncyCastle.Crypto;
 using Org.BouncyCastle.Crypto.Engines;
 using Org.BouncyCastle.Crypto.Modes;
 using Org.BouncyCastle.Crypto.Parameters;
+using Org.BouncyCastle.Crypto.Prng;
 using Org.BouncyCastle.Math;
+using Org.BouncyCastle.Security;
 
 namespace I2PCore.Utils;
 
@@ -410,7 +412,29 @@ public static class BufUtils
 
     #region Misc often needed utils
 
-    private static readonly RandomNumberGenerator _rnd = RandomNumberGenerator.Create();
+    // Batch 1-4 (docs/PRODUCTION-PLAN.md): the single seam through which randomness enters
+    // I2PCore. Before this, four independent doors existed -- BufUtils, System.Random (removed in
+    // 1-3), static RandomNumberGenerator.Fill calls, and per-call `new SecureRandom()` -- so no
+    // test could make a handshake reproducible. Everything now draws from RandomSource.
+    //
+    // The setter is internal on purpose: a host application must never be able to substitute the
+    // generator that produces this router's ephemeral keys. It exists so tests can inject a
+    // deterministic stream and diff protocol bytes; the deterministic implementation lives in the
+    // test assembly, not here.
+    private static RandomNumberGenerator _rnd = RandomNumberGenerator.Create();
+
+    internal static RandomNumberGenerator RandomSource
+    {
+        get => _rnd;
+        set => _rnd = value ?? RandomNumberGenerator.Create();
+    }
+
+    /// <summary>
+    ///     BouncyCastle-facing view of <see cref="RandomSource" />. A single instance whose
+    ///     generator reads the seam on every draw, so swapping RandomSource takes effect
+    ///     immediately and callers need not re-create it.
+    /// </summary>
+    internal static readonly SecureRandom BcRandom = new(new RandomSourceGenerator());
 
     public static void Randomize(this byte[] buf, int offset, int length)
     {
