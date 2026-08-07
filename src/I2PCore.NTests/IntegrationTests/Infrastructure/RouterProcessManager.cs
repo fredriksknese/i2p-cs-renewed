@@ -29,17 +29,17 @@ public class RouterProcessManager : IDisposable
     }
 
     /// <summary>
-    ///     Search for i2pd on the system (PATH, common locations, env var).
+    ///     Search for i2pd on the system (env var, PATH, common locations).
     ///     Does NOT trigger a build from source.
     /// </summary>
     public static string FindI2pdOnSystem()
     {
-        // Check environment variable first
+        // I2PD_PATH wins. Probed rather than File.Exists-ed so a bare name resolved via PATH
+        // ("I2PD_PATH=i2pd") works too.
         var envPath = Environment.GetEnvironmentVariable("I2PD_PATH");
-        if (!string.IsNullOrEmpty(envPath) && File.Exists(envPath))
+        if (!string.IsNullOrEmpty(envPath) && GetI2pdVersion(envPath) != null)
             return envPath;
 
-        // Check common locations
         var candidates = new[]
         {
             "i2pd", // On PATH
@@ -51,38 +51,124 @@ public class RouterProcessManager : IDisposable
         };
 
         foreach (var candidate in candidates)
-            try
-            {
-                var proc = Process.Start(new ProcessStartInfo
-                {
-                    FileName = candidate,
-                    Arguments = "--version",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                });
-
-                if (proc != null)
-                {
-                    proc.WaitForExit(5000);
-                    if (proc.ExitCode == 0 || proc.StandardOutput.ReadToEnd().Contains("i2pd")) return candidate;
-                }
-            }
-            catch
-            {
-                // Not found at this location, try next
-            }
+            if (GetI2pdVersion(candidate) != null)
+                return candidate;
 
         return null;
     }
 
     /// <summary>
-    ///     Find i2pd binary: checks system first, then builds from source if needed.
+    ///     Run <c>&lt;path&gt; --version</c> and return its first line, or null if the binary is
+    ///     missing, is not i2pd, or does not answer within 5 s.
+    /// </summary>
+    public static string GetI2pdVersion(string path)
+    {
+        try
+        {
+            using var proc = Process.Start(new ProcessStartInfo
+            {
+                FileName = path,
+                Arguments = "--version",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+
+            if (proc == null) return null;
+
+            // Read before waiting: WaitForExit on a process with redirected output can deadlock
+            // if the pipe buffer fills while we are blocked.
+            var stdout = proc.StandardOutput.ReadToEnd();
+
+            if (!proc.WaitForExit(5000))
+            {
+                try
+                {
+                    proc.Kill(true);
+                }
+                catch
+                {
+                    // Nothing useful to do; the candidate is rejected either way.
+                }
+
+                return null;
+            }
+
+            var firstLine = stdout.Split('\n')[0].Trim();
+
+            // i2pd --version exits 0 and prints "i2pd version X.Y.Z (0.9.NN)". Match on the
+            // banner rather than the exit code alone, so an unrelated binary that happens to
+            // accept --version is not mistaken for i2pd.
+            return firstLine.Contains("i2pd", StringComparison.OrdinalIgnoreCase) ? firstLine : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // Batch 3-1 (docs/PRODUCTION-PLAN.md). This used to be `return I2pdBuilder.GetOrBuild();`,
+    // so FindI2pdOnSystem() -- which honours I2PD_PATH and PATH -- was unreachable, and every
+    // fixture's availability check instead tried to git-clone and cmake i2pd from source. On any
+    // machine without a cached build that fails, returns null, and the entire integration suite
+    // Assert.Ignore()s itself while looking like it passed. An installed i2pd was never even
+    // looked for.
+    //
+    // System binary first; the source build is now opt-in via I2PD_ALLOW_BUILD=1, because it is a
+    // multi-minute clone and compile that has no business running inside an availability check.
+    // The result is cached: five fixtures call this, and resolution spawns up to six probe
+    // processes.
+    private static readonly object ResolveLock = new();
+    private static string _resolvedPath;
+    private static bool _resolutionAttempted;
+
+    /// <summary>
+    ///     Path to an i2pd binary, or null if none is available and building is not permitted.
     /// </summary>
     public static string FindI2pdBinary()
     {
-        return I2pdBuilder.GetOrBuild();
+        lock (ResolveLock)
+        {
+            if (_resolutionAttempted) return _resolvedPath;
+
+            _resolutionAttempted = true;
+            _resolvedPath = ResolveI2pd();
+            return _resolvedPath;
+        }
+    }
+
+    private static string ResolveI2pd()
+    {
+        var system = FindI2pdOnSystem();
+
+        if (system != null)
+        {
+            Logging.LogInformation(
+                $"i2pd: using {system} -- {GetI2pdVersion(system) ?? "version unknown"}");
+            return system;
+        }
+
+        if (Environment.GetEnvironmentVariable("I2PD_ALLOW_BUILD") != "1")
+        {
+            Logging.LogWarning(
+                "i2pd not found; integration tests will be skipped. Install it (apt install i2pd) "
+                + "or point I2PD_PATH at a binary. Set I2PD_ALLOW_BUILD=1 to build from source "
+                + "instead -- that is a git clone plus a cmake build, so it is not done by default.");
+            return null;
+        }
+
+        Logging.LogInformation("i2pd not found on this system; I2PD_ALLOW_BUILD=1, building from source.");
+
+        var built = I2pdBuilder.GetOrBuild();
+
+        if (built == null)
+            Logging.LogWarning("i2pd: source build failed; integration tests will be skipped.");
+        else
+            Logging.LogInformation(
+                $"i2pd: using freshly built {built} -- {GetI2pdVersion(built) ?? "version unknown"}");
+
+        return built;
     }
 
     /// <summary>
