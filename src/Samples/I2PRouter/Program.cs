@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Net;
 using System.Threading;
 using I2P.I2CP;
@@ -126,18 +126,28 @@ internal class Program
 
         Logging.LogInformation("I2P router starting");
 
-        while (true)
+        // Batch 2-3 (docs/PRODUCTION-PLAN.md): DaemonHelper had signal handling implemented and
+        // no caller, so Ctrl+C killed the process and Router.Stop() never ran. Setting
+        // e.Cancel = true lets the process survive the signal and shut down properly.
+        using var daemon = new DaemonHelper();
+        daemon.OnReload(Router.ReloadConfig);
+        daemon.RegisterSignalHandlers();
+
+        while (!daemon.IsShuttingDown)
             try
             {
                 var i2Cp = new I2CpHost();
 
                 _connected = true;
 
-                while (_connected) Thread.Sleep(2000);
+                while (_connected && !daemon.IsShuttingDown) Thread.Sleep(2000);
             }
             catch (Exception ex)
             {
                 Logging.Log(ex);
             }
+
+        Logging.LogInformation("Shutdown requested, stopping router...");
+        Router.Stop();
     }
 }

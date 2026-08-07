@@ -390,14 +390,22 @@ internal class Program
             Task.Run(async () => { await TestEepsite(proxyPort); });
         }
 
-        // Keep the application running until interrupted
+        // Batch 2-3 (docs/PRODUCTION-PLAN.md): make "Press Ctrl+C to stop" true.
+        //
+        // This used to be a bare `while (_isRunning) Thread.Sleep(1000)`. Nothing handled SIGINT,
+        // so the runtime terminated the process outright: the finally below never ran, Router.Stop()
+        // never ran, and peer profiles were never written. DaemonHelper had all of this implemented
+        // and no caller. It sets e.Cancel = true so the process survives the signal, which is what
+        // lets the shutdown sequence actually execute.
+        using var daemon = new DaemonHelper();
+
+        daemon.OnReload(Router.ReloadConfig);
+        daemon.RegisterSignalHandlers();
+
         try
         {
-            while (_isRunning) Thread.Sleep(1000);
-        }
-        catch (ThreadInterruptedException)
-        {
-            // Handle graceful shutdown
+            daemon.WaitForShutdown();
+            Console.WriteLine("Shutdown requested, stopping router...");
         }
         catch (Exception ex)
         {
