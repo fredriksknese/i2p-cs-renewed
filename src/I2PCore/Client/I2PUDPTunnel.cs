@@ -146,7 +146,10 @@ public class I2PUDPServerTunnel : IDisposable
 
     public void Dispose()
     {
+        // Stop() early-returns when the tunnel was never started, so disposing an unstarted
+        // tunnel used to leak the CancellationTokenSource created in the field initialiser.
         Stop();
+        _cts.Dispose();
     }
 
     public void Start()
@@ -173,6 +176,8 @@ public class I2PUDPServerTunnel : IDisposable
         _datagramDest.UnregisterPortHandler(_i2pPort);
         _cleanupTimer?.Dispose();
         _cts.Cancel();
+
+        _lastSession = null;
 
         foreach (var session in _sessions.Values)
             session.Dispose();
@@ -212,13 +217,30 @@ public class I2PUDPServerTunnel : IDisposable
         }
     }
 
-    private UDPSession ObtainSession(I2PIdentHash remoteHash, ushort fromPort, ushort toPort)
+    // Batch 2-5 (docs/PRODUCTION-PLAN.md). The fast path used to be:
+    //
+    //     var last = _lastSession;
+    //     if (last != null && _sessions.ContainsKey(idx)) return last;
+    //
+    // which tests the dictionary for the *requested* key and then returns the *cached* session,
+    // whatever port pair that happens to belong to. With two or more active remotes it forwarded
+    // one peer's datagrams over another peer's session and socket -- a cross-destination traffic
+    // leak in an anonymity tool, not merely a wrong-answer bug. It also had no interlock with
+    // ExpireStale, which disposes sessions without clearing the cache, so the fast path could
+    // hand back a session whose UdpClient was already disposed.
+    //
+    // The cache now has to match the requested ports *and* still be the live dictionary entry,
+    // which rules out both the wrong session and an expired one.
+    internal UDPSession ObtainSession(I2PIdentHash remoteHash, ushort fromPort, ushort toPort)
     {
         var idx = ((uint)fromPort << 16) | toPort;
 
-        // Fast path: check cache
         var last = _lastSession;
-        if (last != null && _sessions.ContainsKey(idx))
+        if (last != null
+            && last.LocalPort == toPort
+            && last.RemotePort == fromPort
+            && _sessions.TryGetValue(idx, out var live)
+            && ReferenceEquals(live, last))
             return last;
 
         return _sessions.GetOrAdd(idx, key =>
@@ -276,6 +298,10 @@ public class I2PUDPServerTunnel : IDisposable
         foreach (var key in expired)
             if (_sessions.TryRemove(key, out var session))
             {
+                // Drop the cache before disposing, or ObtainSession's fast path can hand out a
+                // session whose socket is gone.
+                if (ReferenceEquals(_lastSession, session)) _lastSession = null;
+
                 session.Dispose();
                 Logging.LogDebug($"I2PUDPServerTunnel '{Name}': Expired session");
             }
@@ -300,7 +326,6 @@ public class I2PUDPClientTunnel : IDisposable
     private readonly ushort _remotePort;
     private readonly ConcurrentDictionary<ushort, (IPEndPoint Endpoint, long LastTime)> _sessions = new();
     private Timer _cleanupTimer;
-    private uint _lastReceivedPacketNum;
     private long _lastRepliableTime;
 
     private UdpClient _localSocket;
@@ -336,7 +361,10 @@ public class I2PUDPClientTunnel : IDisposable
 
     public void Dispose()
     {
+        // Stop() early-returns when the tunnel was never started, so disposing an unstarted
+        // tunnel used to leak the CancellationTokenSource created in the field initialiser.
         Stop();
+        _cts.Dispose();
     }
 
     public void Start()
