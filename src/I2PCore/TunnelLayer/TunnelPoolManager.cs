@@ -28,10 +28,16 @@ public class TunnelPoolManager
     {
         _tunnelMgr = tp;
 
-        var ibExplSettings = new TunnelPoolSettings(true);
+        // Read the configured values once, here, rather than having TunnelPoolSettings reach for
+        // a singleton in its constructor (batch 2-6).
+        var ctx = RouterContext.Inst;
+
+        var ibExplSettings = new TunnelPoolSettings(
+            true, ctx.ExploratoryTunnelQuantity, ctx.ExploratoryTunnelLength);
         InboundExploratory = new TunnelPool(tp, ibExplSettings);
 
-        var obExplSettings = new TunnelPoolSettings(false);
+        var obExplSettings = new TunnelPoolSettings(
+            false, ctx.ExploratoryTunnelQuantity, ctx.ExploratoryTunnelLength);
         OutboundExploratory = new TunnelPool(tp, obExplSettings);
     }
 

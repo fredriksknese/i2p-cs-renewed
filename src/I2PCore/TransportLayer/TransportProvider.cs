@@ -153,6 +153,21 @@ public class TransportProvider
 
         inst.Terminated = true;
         Worker?.Join(5000);
+
+        // Batch 2-6: each protocol host owns a listener socket and a worker thread. Nothing used
+        // to shut them down -- Terminate() was implemented on both hosts but absent from
+        // ITransportProtocol -- so every Start/Stop cycle abandoned one live NTCP2 listener.
+        foreach (var protocol in inst.TransportProtocols)
+            try
+            {
+                protocol.Terminate();
+            }
+            catch (Exception ex)
+            {
+                Logging.LogWarning(
+                    $"TransportProvider: Error terminating {protocol.GetType().Name}: {ex.Message}");
+            }
+
         Inst = null;
     }
 

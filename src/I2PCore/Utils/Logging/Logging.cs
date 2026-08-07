@@ -45,6 +45,27 @@ public static class Logging
         LogLevel = level;
     }
 
+    /// <summary>
+    ///     Batch 2-6 (docs/PRODUCTION-PLAN.md). Restore the compiled-in defaults and close any
+    ///     open log store.
+    ///     <para>
+    ///         Logging is process-global mutable state that no Stop() path restores, so a fixture
+    ///         raising the level to Everything or attaching a file store leaves both in place for
+    ///         every fixture that runs after it — a class of order-dependent failure that is
+    ///         painful to diagnose because the symptom appears in an unrelated test.
+    ///     </para>
+    /// </summary>
+    internal static void ResetForTests()
+    {
+        CloseLogFile();
+
+        LogLevel = LogLevels.Information;
+        LogToConsole = false;
+        LogToDebug = false;
+        TimestampFiles = false;
+        MaxLogFileSize = 10 * 1024 * 1024;
+    }
+
     public static void SetLogLevel(string name)
     {
         LogLevel = (LogLevels)Enum.Parse(typeof(LogLevels), name);

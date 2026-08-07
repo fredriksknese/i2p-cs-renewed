@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using I2PCore;
@@ -227,6 +228,56 @@ public class RouterLifecycleTest
             RouterContext.RouterSettingsFile = Path.Combine( _tempDir, "LifecycleTest.bin" );
             RouterContext.Reset();
         }
+    }
+
+    /// <summary>
+    ///     <b>Gate 2</b> (batch 2-6): 10 Start/Stop cycles in one process — no handler growth, no
+    ///     thread growth, clean exit.
+    ///     <para>
+    ///         Thread count is compared against a baseline taken after the first cycle, not before
+    ///         it: the first Start() creates the layer worker threads and warms the thread pool,
+    ///         so measuring from a cold process would report that one-time cost as a leak. The
+    ///         tolerance is for thread-pool breathing, which is not under the router's control;
+    ///         an actual per-cycle leak would be ten threads, far outside it.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public void TenStartStopCyclesLeakNothing()
+    {
+        if ( _skipReason != null ) Assert.Ignore( _skipReason );
+
+        Router.Start();
+        Router.Stop();
+
+        var baselineThreads = ThreadCount();
+
+        for ( var i = 1; i <= 10; i++ )
+        {
+            Router.Start();
+
+            ClassicAssert.AreEqual( 1, TunnelProvider.I2NpMessageReceivedHandlerCount,
+                $"cycle {i}: I2NpMessageReceived handler count" );
+
+            Router.Stop();
+
+            ClassicAssert.AreEqual( 0, TunnelProvider.I2NpMessageReceivedHandlerCount,
+                $"cycle {i}: handlers must be detached while stopped" );
+
+            ClassicAssert.IsFalse( I2PPrivateKey.PrecalculationRunning,
+                $"cycle {i}: Stop() must leave no DH key generator running (batch 2-2)" );
+        }
+
+        var finalThreads = ThreadCount();
+
+        ClassicAssert.LessOrEqual( finalThreads, baselineThreads + 5,
+            $"thread count grew from {baselineThreads} to {finalThreads} over 10 Start/Stop cycles" );
+    }
+
+    private static int ThreadCount()
+    {
+        using var p = Process.GetCurrentProcess();
+        p.Refresh();
+        return p.Threads.Count;
     }
 
     /// <summary>
