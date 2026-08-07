@@ -572,8 +572,7 @@ public class NTCP2Session : ITransport
         // i2pd picks padding based on handshake size.
         // For PQ (ML-KEM-768), Message 1 is ~1264 bytes. 
         // We limit padding to 64 bytes to stay within MTU (1500) and avoid fragmentation.
-        var rng = new Random();
-        var paddingLen = rng.Next(0, 65);
+        var paddingLen = BufUtils.RandomInt(65);
 
         // NTCP2 Spec line 392: limit to 287 bytes total for NTCP style addresses.
         // (32 bytes X + 32 bytes encrypted options/MAC = 64 bytes)
@@ -625,8 +624,7 @@ public class NTCP2Session : ITransport
         }
 
         // Add padding
-        var padding = paddingLen > 0 ? new byte[paddingLen] : Array.Empty<byte>();
-        if (paddingLen > 0) rng.NextBytes(padding);
+        var padding = BufUtils.RandomBytes(paddingLen);
 
         // Per NTCP2 spec line 391: Alice SHOULD buffer and then flush Message 1 together
         var totalMsg1Size = obfuscatedKey.Length + (encryptedPQFrame?.Length ?? 0) + encryptedPayload.Length + paddingLen;
@@ -707,9 +705,8 @@ public class NTCP2Session : ITransport
 
     private void UpdateNextRouterInfoResendTime()
     {
-        var random = new Random();
         NextRouterInfoResendTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds() +
-                                   1500 + random.Next(1500); // 25-50 minutes
+                                   1500 + BufUtils.RandomInt(1500); // 25-50 minutes
     }
 
     public void SendRouterInfo()
@@ -735,8 +732,7 @@ public class NTCP2Session : ITransport
         frame.AddBlock(riBlock);
 
         // Add some padding per i2pd: random length up to 32 bytes
-        var random = new Random();
-        frame.AddBlock(new NTCP2PaddingBlock(random.Next(32)));
+        frame.AddBlock(new NTCP2PaddingBlock(BufUtils.RandomInt(32)));
 
         Logging.LogInformation($"{DebugId}: Sending RouterInfo as data frame");
         SendDataFrame(frame);
@@ -1700,8 +1696,7 @@ public class NTCP2Session : ITransport
     private void SendSessionCreated()
     {
         // Choose a small random padding length (0-64)
-        var rng = new Random();
-        var paddingLen = rng.Next(0, 65);
+        var paddingLen = BufUtils.RandomInt(65);
 
         var payload = BuildSessionCreatedPayload(paddingLen);
 
@@ -1749,8 +1744,7 @@ public class NTCP2Session : ITransport
         }
 
         // Add optional padding - must match paddingLen in options block
-        var padding = paddingLen > 0 ? new byte[paddingLen] : Array.Empty<byte>();
-        if (paddingLen > 0) rng.NextBytes(padding);
+        var padding = BufUtils.RandomBytes(paddingLen);
 
         // Build complete message 2: obfuscated Y + encrypted payload + padding
         // Per NTCP2 spec line 611: Bob MUST buffer and then flush the entire contents
@@ -1887,9 +1881,7 @@ public class NTCP2Session : ITransport
             writer.WriteUInt16BigEndian((ushort)paddingSize);
             if (paddingSize > 0)
             {
-                var padding = new byte[paddingSize];
-                new Random().NextBytes(padding);
-                writer.WriteBytes(padding);
+                writer.WriteBytes(BufUtils.RandomBytes(paddingSize));
             }
         }
 

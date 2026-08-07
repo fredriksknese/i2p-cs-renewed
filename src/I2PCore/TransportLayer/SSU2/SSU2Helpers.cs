@@ -122,8 +122,10 @@ public static class SSU2Helpers
     /// </summary>
     public static uint GenerateRandomPacketNumber()
     {
-        var random = new Random();
-        return (uint)random.Next();
+        // This used to cast System.Random's Next() to uint, which is both predictable and only
+        // 31 bits wide -- Next() never returns a value with the high bit set. The packet number
+        // is visible in the clear, so it must come from the CSPRNG and span the full range.
+        return BufUtils.RandomUint();
     }
 
     /// <summary>

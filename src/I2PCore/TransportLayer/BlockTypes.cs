@@ -181,8 +181,7 @@ public class Block
         if (length < 0 || length > 65535)
             throw new ArgumentException("Invalid padding length", nameof(length));
 
-        var data = new byte[length];
-        new Random().NextBytes(data); // Fill with random data
+        var data = BufUtils.RandomBytes(length);
 
         return new Block
         {
