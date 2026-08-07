@@ -11,6 +11,9 @@ using System.Threading.Tasks;
 using I2PCore.Data;
 using I2PCore.SessionLayer;
 using I2PCore.Utils;
+using Org.BouncyCastle.Crypto.Engines;
+using Org.BouncyCastle.Crypto.Parameters;
+using Org.BouncyCastle.Math;
 
 namespace I2PCore;
 
@@ -32,6 +35,20 @@ namespace I2PCore;
 // Since NetworkBootstrap() walks a shuffled list and stops at the first success,
 // losing the self-signed host does not break cold start. Per-host certificate
 // pinning would recover it and belongs with the SU3 work in batch 1-2.
+//
+// Batch 1-2: SU3 signature verification is fail-closed. Two defects made the old
+// path unable to verify anything, which is why it was left accepting archives
+// whose signature check had failed:
+//
+//   1. The SigType table was shifted. Type 6 is RSA_SHA512_4096, not
+//      RSA-SHA256-2048 as the table claimed, so the only type that occurs in
+//      the wild was hashed with the wrong algorithm.
+//   2. I2P's RSA convention omits the DigestInfo ASN.1 prefix from the PKCS#1
+//      v1.5 block, so RSA.VerifyData(..., Pkcs1) rejects every valid signature.
+//      See VerifyI2PRsaSignature.
+//
+// A failed or missing signature now rejects the archive and NetworkBootstrap()
+// moves to the next host. --insecure-reseed downgrades that to a warning.
 public class Bootstrap
 {
     public static readonly string[] DefaultBootstrapUrls =
@@ -270,11 +287,16 @@ public class Bootstrap
         return importcount;
     }
 
-    private static ZipArchive GetRouterInfoFiles(I2PByteBlock data)
+    /// <summary>
+    ///     Returns the content archive, or null if the SU3 is unverifiable. Internal so tests can
+    ///     assert the fail-closed path without importing fixture routers into the global NetDb.
+    /// </summary>
+    internal static ZipArchive GetRouterInfoFiles(I2PByteBlock data)
     {
         try
         {
             var reader = new I2PBufferCursor(data);
+            var start = reader.Position;
             var header = new I2Psu3Header(reader);
 
             if (header.FileType != I2Psu3Header.Su3FileTypes.Zip)
@@ -283,33 +305,49 @@ public class Bootstrap
             if (header.ContentType != I2Psu3Header.Su3ContentTypes.SeedData)
                 throw new ArgumentException($"Unknown ContentType in SU3: {header.ContentType}");
 
-            // Read content and signature
             var contentData = reader.ReadBlock((int)header.ContentLength);
+
+            // Everything from the magic number through the end of the content is signed.
+            // Derived from the cursor rather than (fileLength - signatureLength) so trailing
+            // bytes after the signature cannot shift what we hash.
+            var signedData = reader.BlockSince(start);
             var signatureData = reader.ReadBlock(header.SignatureLength);
 
-            if (header.SignatureLength > 0)
+            if (header.SignatureLength == 0)
             {
-                Logging.LogDebug($"Bootstrap: SU3 signed by {header.SignerId}, " +
-                                 $"sigType={header.SignatureType}, sigLen={header.SignatureLength}, " +
-                                 $"contentLen={header.ContentLength}");
-
-                // Verify the SU3 signature against the signer's certificate
-                var verified = VerifySu3Signature(data, header, contentData, signatureData);
-                if (verified)
-                    Logging.LogInformation($"Bootstrap: SU3 signature verified for signer '{header.SignerId}'.");
-                else
-                    // Per i2pd Reseed.cpp: SU3 signatures use non-standard RSA padding
-                    // that .NET's RSA.VerifyData doesn't handle. When verification fails
-                    // but we have the correct certificate, log a warning but continue.
-                    // The data integrity is also protected by HTTPS transport.
+                if (!InsecureReseed)
+                {
                     Logging.LogWarning(
-                        $"Bootstrap: SU3 signature verification failed for signer '{header.SignerId}'. " +
-                        "Accepting data anyway (HTTPS transport provides integrity).");
+                        "Bootstrap: rejecting unsigned SU3 file. An unsigned reseed archive can be " +
+                        "supplied by anyone. Use --insecure-reseed to accept it anyway.");
+                    return null;
+                }
+
+                Logging.LogWarning("Bootstrap: SU3 file has no signature, accepted (--insecure-reseed).");
+                return new ZipArchive(new MemoryStream(contentData.ToByteArray()));
             }
-            else
+
+            Logging.LogDebug($"Bootstrap: SU3 signed by {header.SignerId}, " +
+                             $"sigType={header.SignatureType}, sigLen={header.SignatureLength}, " +
+                             $"contentLen={header.ContentLength}");
+
+            if (VerifySu3Signature(header, signedData, signatureData))
             {
-                Logging.LogWarning("Bootstrap: SU3 file has no signature. Accepting with caution.");
+                Logging.LogInformation($"Bootstrap: SU3 signature verified for signer '{header.SignerId}'.");
+                return new ZipArchive(new MemoryStream(contentData.ToByteArray()));
             }
+
+            if (!InsecureReseed)
+            {
+                Logging.LogWarning(
+                    $"Bootstrap: rejecting SU3 archive from signer '{header.SignerId}' — signature " +
+                    "verification failed. Trying the next reseed host.");
+                return null;
+            }
+
+            Logging.LogWarning(
+                $"Bootstrap: SU3 signature verification failed for signer '{header.SignerId}', " +
+                "accepted anyway (--insecure-reseed). This router's view of the network is untrusted.");
 
             return new ZipArchive(new MemoryStream(contentData.ToByteArray()));
         }
@@ -322,82 +360,151 @@ public class Bootstrap
     }
 
     /// <summary>
-    ///     Verify the SU3 file signature using the signer's X.509 certificate.
-    ///     The signed data is everything from the start of the SU3 file up to (but not including) the signature.
+    ///     I2P SigType values as they appear in an SU3 header, with the hash each one signs over
+    ///     and the exact signature length it must carry.
     /// </summary>
-    private static bool VerifySu3Signature(
-        I2PByteBlock fullData,
+    /// <remarks>
+    ///     The previous table was shifted: it read type 6 as RSA-SHA256-2048, so the one type that
+    ///     actually occurs in the wild was hashed with SHA-256 instead of SHA-512 and could never
+    ///     have verified. Measured 2026-08-07: every reachable reseed host signs with type 6, and
+    ///     all 14 certificates in certificates/reseed/ are RSA-4096.
+    /// </remarks>
+    private static readonly Dictionary<ushort, (string Name, HashAlgorithmName Hash, int SigLen)> Su3SigTypes = new()
+    {
+        [0] = ( "DSA_SHA1", HashAlgorithmName.SHA1, 40 ),
+        [1] = ( "ECDSA_SHA256_P256", HashAlgorithmName.SHA256, 64 ),
+        [2] = ( "ECDSA_SHA384_P384", HashAlgorithmName.SHA384, 96 ),
+        [3] = ( "ECDSA_SHA512_P521", HashAlgorithmName.SHA512, 132 ),
+        [4] = ( "RSA_SHA256_2048", HashAlgorithmName.SHA256, 256 ),
+        [5] = ( "RSA_SHA384_3072", HashAlgorithmName.SHA384, 384 ),
+        [6] = ( "RSA_SHA512_4096", HashAlgorithmName.SHA512, 512 ),
+        [7] = ( "EdDSA_SHA512_Ed25519", HashAlgorithmName.SHA512, 64 )
+    };
+
+    /// <summary>
+    ///     Verify an SU3 signature against the signer's pinned reseed certificate.
+    ///     Returns false — never throws — for any unverifiable archive.
+    /// </summary>
+    internal static bool VerifySu3Signature(
         I2Psu3Header header,
-        I2PByteBlock contentData,
+        I2PByteBlock signedData,
         I2PByteBlock signatureData)
     {
         try
         {
-            // Load the signer's certificate
+            if (!Su3SigTypes.TryGetValue(header.SignatureType, out var sigType))
+            {
+                Logging.LogWarning($"Bootstrap: unknown SU3 signature type {header.SignatureType}.");
+                return false;
+            }
+
+            if (header.SignatureLength != sigType.SigLen)
+            {
+                Logging.LogWarning(
+                    $"Bootstrap: SU3 signature length {header.SignatureLength} does not match " +
+                    $"{sigType.Name} (expected {sigType.SigLen}).");
+                return false;
+            }
+
             var cert = LoadReseedCertificate(header.SignerId);
             if (cert == null)
             {
-                Logging.LogWarning($"Bootstrap: No certificate found for signer '{header.SignerId}'. " +
+                Logging.LogWarning($"Bootstrap: no pinned certificate for signer '{header.SignerId}'. " +
                                    "Cannot verify SU3 signature.");
                 return false;
             }
 
-            // The signed data is everything before the signature:
-            // magic(6) + unused(1) + fileVersion(1) + sigType(2) + sigLen(2) + unused(1) +
-            // versionLen(1) + unused(1) + signerLen(1) + contentLen(8) + unused(1) +
-            // fileType(1) + unused(1) + contentType(1) + reserved(12) + version(versionLen) +
-            // signerId(signerLen) + content(contentLen)
-            var signedDataLen = fullData.Length - header.SignatureLength;
-            var signedData = new byte[signedDataLen];
-            Array.Copy(fullData.BaseArray, fullData.BaseArrayOffset, signedData, 0, signedDataLen);
-
-            var sigBytes = signatureData.ToByteArray();
-
-            // Determine hash algorithm from SU3 signature type
-            // SU3 sig types: 0=DSA-SHA1, 3=ECDSA-SHA256-P256, 4=ECDSA-SHA384-P384,
-            // 5=ECDSA-SHA512-P521, 6=RSA-SHA256-2048, 7=RSA-SHA384-3072, 8=RSA-SHA512-4096,
-            // 9=EdDSA-SHA512-Ed25519
-            HashAlgorithmName hashAlgo;
-
-            switch (header.SignatureType)
+            using (cert)
             {
-                case 0: // DSA-SHA1
-                    hashAlgo = HashAlgorithmName.SHA1;
-                    break;
-                case 3: // ECDSA-SHA256-P256
-                case 6: // RSA-SHA256-2048
-                    hashAlgo = HashAlgorithmName.SHA256;
-                    break;
-                case 4: // ECDSA-SHA384-P384
-                case 7: // RSA-SHA384-3072
-                    hashAlgo = HashAlgorithmName.SHA384;
-                    break;
-                case 5: // ECDSA-SHA512-P521
-                case 8: // RSA-SHA512-4096
-                case 9: // EdDSA-SHA512-Ed25519
-                    hashAlgo = HashAlgorithmName.SHA512;
-                    break;
-                default:
-                    Logging.LogWarning($"Bootstrap: Unknown SU3 signature type: {header.SignatureType}");
-                    return false;
+                var signed = signedData.ToByteArray();
+                var signature = signatureData.ToByteArray();
+
+                using var rsa = cert.GetRSAPublicKey();
+                if (rsa != null) return VerifyI2PRsaSignature(rsa, signed, signature, sigType.Hash);
+
+                // Not reached by any current reseed signer; kept because the SigType table allows it.
+                // .NET's ECDsa.VerifyData takes the raw r||s form that I2P uses.
+                using var ecdsa = cert.GetECDsaPublicKey();
+                if (ecdsa != null) return ecdsa.VerifyData(signed, signature, sigType.Hash);
+
+                Logging.LogWarning(
+                    $"Bootstrap: certificate for '{header.SignerId}' holds an unsupported key type " +
+                    $"for {sigType.Name}.");
+                return false;
             }
-
-            // Try RSA verification
-            using var rsa = cert.GetRSAPublicKey();
-            if (rsa != null) return rsa.VerifyData(signedData, sigBytes, hashAlgo, RSASignaturePadding.Pkcs1);
-
-            // Try ECDSA verification
-            using var ecdsa = cert.GetECDsaPublicKey();
-            if (ecdsa != null) return ecdsa.VerifyData(signedData, sigBytes, hashAlgo);
-
-            Logging.LogWarning($"Bootstrap: Unsupported key type in certificate for signer '{header.SignerId}'");
-            return false;
         }
         catch (Exception ex)
         {
             Logging.LogWarning($"Bootstrap: SU3 signature verification error: {ex.Message}");
             return false;
         }
+    }
+
+    /// <summary>
+    ///     I2P signs SU3 files with a raw RSA operation over a PKCS#1 v1.5 padded block that omits
+    ///     the DigestInfo ASN.1 prefix:
+    ///     <code>0x00 0x01 0xFF... 0x00 || H(signedData)</code>
+    ///     .NET's <c>RSA.VerifyData(..., RSASignaturePadding.Pkcs1)</c> requires the DigestInfo and
+    ///     therefore rejects every valid I2P signature — which is why this used to "fail" and get
+    ///     waved through. i2pd's RSAVerifier does the same modular exponentiation and compares the
+    ///     trailing hash bytes; we additionally check the padding is well formed.
+    /// </summary>
+    private static bool VerifyI2PRsaSignature(
+        RSA rsa,
+        byte[] signedData,
+        byte[] signature,
+        HashAlgorithmName hashAlgo)
+    {
+        var parameters = rsa.ExportParameters(false);
+        var modulusLen = parameters.Modulus.Length;
+
+        if (signature.Length != modulusLen)
+        {
+            Logging.LogWarning(
+                $"Bootstrap: SU3 signature is {signature.Length} bytes but the signer's modulus " +
+                $"is {modulusLen}.");
+            return false;
+        }
+
+        var engine = new RsaEngine();
+        engine.Init(false, new RsaKeyParameters(
+            false,
+            new BigInteger(1, parameters.Modulus),
+            new BigInteger(1, parameters.Exponent)));
+
+        // BouncyCastle returns the integer's minimal big-endian encoding, so a block that happens
+        // to start with a zero byte comes back short. Right-align it into a full-width buffer.
+        var produced = engine.ProcessBlock(signature, 0, signature.Length);
+        if (produced.Length > modulusLen) return false;
+
+        var block = new byte[modulusLen];
+        Array.Copy(produced, 0, block, modulusLen - produced.Length, produced.Length);
+
+        var expected = HashData(signedData, hashAlgo);
+
+        // 0x00 0x01, at least 8 bytes of 0xFF, 0x00, then the bare hash.
+        var padEnd = modulusLen - expected.Length - 1;
+        if (padEnd < 10) return false;
+        if (block[0] != 0x00 || block[1] != 0x01) return false;
+        if (block[padEnd] != 0x00) return false;
+
+        for (var i = 2; i < padEnd; i++)
+            if (block[i] != 0xFF)
+                return false;
+
+        return CryptographicOperations.FixedTimeEquals(
+            new ReadOnlySpan<byte>(block, padEnd + 1, expected.Length),
+            expected);
+    }
+
+    private static byte[] HashData(byte[] data, HashAlgorithmName algo)
+    {
+        if (algo == HashAlgorithmName.SHA512) return SHA512.HashData(data);
+        if (algo == HashAlgorithmName.SHA384) return SHA384.HashData(data);
+        if (algo == HashAlgorithmName.SHA256) return SHA256.HashData(data);
+        if (algo == HashAlgorithmName.SHA1) return SHA1.HashData(data);
+
+        throw new NotSupportedException($"Unsupported SU3 hash algorithm {algo.Name}");
     }
 
     /// <summary>
