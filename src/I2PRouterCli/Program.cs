@@ -199,6 +199,30 @@ internal class Program
                     Console.WriteLine("Reseed disabled");
                     break;
 
+                case "--log-level":
+                    if (args.Length > i + 1)
+                    {
+                        var levelName = args[++i];
+
+                        if (!Enum.TryParse<Logging.LogLevels>(levelName, true, out var level))
+                        {
+                            Console.Error.WriteLine(
+                                $"Invalid --log-level '{levelName}'. Valid values: " +
+                                string.Join(", ", Enum.GetNames<Logging.LogLevels>()));
+                            Environment.Exit(2);
+                        }
+
+                        Logging.SetLogLevel(level);
+                        Console.WriteLine($"Log level set to {level}");
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine("--log-level requires a value");
+                        Environment.Exit(2);
+                    }
+
+                    break;
+
                 case "--sam-port":
                     if (args.Length > i + 1)
                     {
@@ -481,6 +505,9 @@ internal class Program
         Console.WriteLine("  --data-dir <path>       Set custom data directory");
         Console.WriteLine("  --netid <N>             Set network ID (default: 2)");
         Console.WriteLine("  --disable-reseed        Disable network bootstrap/reseed");
+        Console.WriteLine("  --log-level <LEVEL>     Set log verbosity: Everything, DebugData,");
+        Console.WriteLine("                          Transport, Debug, Information (default),");
+        Console.WriteLine("                          Warning, Error, Critical, Nothing");
         Console.WriteLine("  --sam-port <PORT>       Enable SAM bridge on specified port");
         Console.WriteLine("  --help, -h              Show this help message");
         Console.WriteLine("");

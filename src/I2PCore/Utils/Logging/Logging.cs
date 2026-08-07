@@ -50,13 +50,24 @@ public static class Logging
         LogLevel = (LogLevels)Enum.Parse(typeof(LogLevels), name);
     }
 
-#if DEBUG
-    public static LogLevels LogLevel = LogLevels.DebugData;
-#elif TRACE
-        public static LogLevels LogLevel = LogLevels.Information;
-#else
-        public static LogLevels LogLevel = LogLevels.Warning;
-#endif
+    /// <summary>
+    ///     The one and only logging filter. There is deliberately no compile-time filtering:
+    ///     debug output must be reachable in a Release build (see IsEnabled below), because a
+    ///     router you cannot observe is a router you cannot debug. Defaults to Information so
+    ///     that enabling this had no practical effect on existing deployments; hosts raise or
+    ///     lower it at runtime (the CLI exposes --log-level).
+    /// </summary>
+    public static LogLevels LogLevel = LogLevels.Information;
+
+    /// <summary>
+    ///     True when <paramref name="level" /> would currently be emitted. Call sites on hot
+    ///     paths can use this to skip building a message, though the Func&lt;string&gt;
+    ///     overloads below already do exactly that.
+    /// </summary>
+    public static bool IsEnabled( LogLevels level )
+    {
+        return level >= LogLevel;
+    }
 
     /// <summary>
     ///     Output debug text to System.Console.
@@ -110,57 +121,53 @@ public static class Logging
         return ex.ToString();
     }
 
-    [Conditional("DEBUG")]
     public static void Log(string txt)
     {
         Log(LogLevels.Debug, txt);
     }
 
-    [Conditional("DEBUG")]
     public static void Log(Func<string> txtgen)
     {
+        if (!IsEnabled(LogLevels.Debug)) return;
         Log(LogLevels.Debug, txtgen());
     }
 
-    [Conditional("DEBUG")]
     public static void LogDebug(string txt)
     {
         Log(LogLevels.Debug, txt);
     }
 
-    [Conditional("DEBUG")]
     public static void LogDebug(LogLevels lvl, Func<string> gen)
     {
+        if (!IsEnabled(lvl)) return;
         Log(lvl, gen());
     }
 
-    [Conditional("DEBUG")]
     public static void LogTransport(string txt)
     {
         Log(LogLevels.Transport, txt);
     }
 
-    [Conditional("DEBUG")]
     public static void LogTransport(Func<string> txtgen)
     {
+        if (!IsEnabled(LogLevels.Transport)) return;
         Log(LogLevels.Transport, txtgen());
     }
 
-    [Conditional("DEBUG")]
     public static void LogDebugData(string txt)
     {
         Log(LogLevels.DebugData, txt);
     }
 
-    [Conditional("DEBUG")]
     public static void LogDebugData(Func<string> txtgen)
     {
+        if (!IsEnabled(LogLevels.DebugData)) return;
         Log(LogLevels.DebugData, txtgen());
     }
 
-    [Conditional("DEBUG")]
     public static void LogDebug(Func<string> txtgen)
     {
+        if (!IsEnabled(LogLevels.Debug)) return;
         Log(LogLevels.Debug, txtgen());
     }
 
@@ -231,15 +238,15 @@ public static class Logging
         LogWarning($"Exception ({module}): {Unwrap(ex)}");
     }
 
-    [Conditional("DEBUG")]
     public static void LogDebug(Exception ex)
     {
+        if (!IsEnabled(LogLevels.Debug)) return;
         LogDebug($"Exception: {Unwrap(ex)}");
     }
 
-    [Conditional("DEBUG")]
     public static void LogDebug(string module, Exception ex)
     {
+        if (!IsEnabled(LogLevels.Debug)) return;
         LogDebug($"Exception ({module}): {Unwrap(ex)}");
     }
 }

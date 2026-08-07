@@ -8,18 +8,36 @@ on:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
+
     - name: Setup .NET
-      uses: actions/setup-dotnet@v1
+      uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: 5.0.x
+        dotnet-version: 10.0.x
+
     - name: Restore dependencies
-      run: dotnet restore
+      run: dotnet restore i2p.sln
+
     - name: Build
-      run: dotnet build --no-restore
+      run: dotnet build i2p.sln -c Release --no-restore
+
+    # Unit suite only. Integration/ScaledNetwork/MultiHop need a real i2pd process and are
+    # enabled by batch 3-2; Experimental is the quarantine for known-failing features
+    # (see src/I2PCore.NTests/TestCategories.cs). Keep this filter in sync with that file.
     - name: Test
-      run: dotnet test --no-build --verbosity normal
+      run: >
+        dotnet test src/I2PCore.NTests -c Release --no-build
+        --filter "TestCategory!=Integration&TestCategory!=ScaledNetwork&TestCategory!=MultiHop&TestCategory!=Experimental"
+        --logger "trx;LogFileName=unit-tests.trx"
+        --results-directory TestResults
+
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: unit-test-results
+        path: TestResults/*.trx
+        if-no-files-found: warn

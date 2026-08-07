@@ -27,14 +27,33 @@ public class I2PStream : IDisposable
         Terminated
     }
 
-    // Constants per i2pd reference (Streaming.h)
+    // Constants per i2pd reference (libi2pd/Streaming.h).
+    //
+    // Batch 0-3 decision: three of these had drifted from the reference they claim to follow,
+    // and TestStreamingConstants only ever reported the first one because NUnit aborts a test
+    // at the first failed assertion. Verified against i2pd (openssl branch, Streaming.h) and
+    // realigned:
+    //
+    //   INITIAL_WINDOW_SIZE  was 64, i2pd uses 10. The old value cited Java I2P's
+    //                        MAX_SLOW_START_WINDOW, which is the ceiling slow start grows
+    //                        *toward*, not the window to open with. Starting at 64 put a
+    //                        64-packet burst into a tunnel before a single RTT was measured.
+    //   INITIAL_RTT          was 50 ms, i2pd uses 1500 ms. 50 ms is not a plausible round trip
+    //                        through two multi-hop tunnels; it made the first RTO fire long
+    //                        before any real reply could arrive.
+    //   INITIAL_RTO          was 1000 ms, i2pd uses 9000 ms. Same failure mode: spurious
+    //                        retransmission storms at connection setup.
+    //
+    // These change retransmission and congestion behaviour. Streaming does not work
+    // end-to-end yet (Phase 5 owns that), so there is no measured regression to weigh here —
+    // but Phase 5 should re-validate them against a live i2pd peer rather than trust this note.
     public const int STREAMING_MTU = 1730;
     public const int STREAMING_MTU_RATCHETS = 1812;
-    public const int INITIAL_WINDOW_SIZE = 64; // Java I2P: MAX_SLOW_START_WINDOW = 64
+    public const int INITIAL_WINDOW_SIZE = 10;
     public const int MIN_WINDOW_SIZE = 3;
     public const int MAX_WINDOW_SIZE = 512;
-    public const int INITIAL_RTT = 50; // ms — conservative estimate, EWMA will measure the real value
-    public const int INITIAL_RTO = 1000; // ms
+    public const int INITIAL_RTT = 1500; // ms
+    public const int INITIAL_RTO = 9000; // ms
     public const int MIN_RTO = 20; // ms
     public const int SYN_TIMEOUT = 200; // ms
     public const int MAX_NUM_RESEND_ATTEMPTS = 10;
