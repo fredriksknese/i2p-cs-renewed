@@ -382,3 +382,51 @@ Three hosts, three signers, three pinned certificates. Tampered-fixture rejectio
 **Still true from session 1:** push access is to the fork `fredriksknese/i2p-cs-renewed` only; branch and PR there. i2pd 2.45.1 at `/usr/sbin/i2pd`, service disabled.
 
 **Next: Phase 2** (`p2/router-lifecycle-idempotent`). The highest-value single change in the plan remains **3-1** (i2pd discovery), which activates the whole integration suite.
+
+### Session 2 (continued) — 2026-08-07 — batches 2-1 … 2-6 — PRs #9–#14, all merged
+
+**Phase 2 is complete and Gate 2 is met.** Unit suite 234 passed / 0 failed / 1 skipped, green in CI on every PR. Build warnings 59 → **58** (batch 2-5 removed a dead field) — later batches should expect 58, not 59.
+
+**Gate 2 evidence.** `RouterLifecycleTest.TenStartStopCyclesLeakNothing`: 10 Start/Stop cycles of a real router on netid 3, asserting the `I2NpMessageReceived` invocation list is 1 while running and 0 while stopped on every cycle, no DH generator survives a Stop, and thread count stable.
+
+**The gate test found a leak the plan did not predict.** On first run: thread count grew **28 → 38, exactly one per cycle**. `NTCP2Host` and `SSU2Host` both implement `Terminate()`, it was absent from `ITransportProtocol`, so `TransportProvider.Stop()` could not call it and abandoned its protocol hosts — every cycle stranded a live NTCP2 listener thread and socket. Fixed in 2-6. **Writing the gate test was what found this; none of 2-1…2-5 would have.**
+
+**A recurring pattern, now three for three.** Phase 2 kept finding *fully implemented, entirely uncalled* shutdown code:
+
+- `DaemonHelper` — complete signal handling, no caller anywhere (2-3).
+- `ITransportProtocol.Terminate` — implemented on both hosts, not on the interface (2-6).
+- `I2PPrivateKey` precalculation — the one case where the shutdown path genuinely did not exist (2-2).
+
+**In this codebase, "the method exists" is not evidence that anything calls it.** Grep for callers before assuming a subsystem has the behaviour its API advertises.
+
+**A second recurring pattern: the obvious form of a lifecycle test proves nothing.** Three separate times the naive test passed against the unfixed code, and only reinstating the defect exposed it:
+
+1. **2-1, ECIES processor** — restart, assert the processor matches `RouterContext.Inst`. Passes with the bug, because `Reset()` reloads the same persisted keys so the identity never changes. Fixed by pointing the restart at a different settings file *and asserting the identity actually differs*.
+2. **2-2, prompt shutdown** — sleep 100 ms then stop. Passes with the wake-up removed, because it caught the generator mid-refill, and the refill loop re-checks the token every iteration. Fixed by polling until the pool is full so the thread is genuinely parked.
+3. **2-5, session identity** — two lookups, assert they differ. Passes with the bug, because the cache is cold on the first call and the second key does not exist yet. Only an interleaved A,B,A,B sequence fails.
+
+**Every new test in Phase 2 was confirmed to fail with its defect reinstated.** Do this for Phases 3–5; it is cheap and it caught three vacuous tests in six batches.
+
+**Where the plan was wrong:**
+
+1. **2-5's stated defect does not exist.** The plan says `I2PUDPClientTunnel.ExpireStale` removes sessions without disposing. That dictionary holds `(IPEndPoint, long)` value tuples — nothing disposable. The file declares **two different `_sessions` fields**, and the one holding `UDPSession` belongs to the *server* tunnel, which already disposes correctly. Auditing for the real defect found a worse one: `ObtainSession`'s fast path tested the dictionary for the *requested* key and returned the *cached* session, so with two active remotes one peer's datagrams went out over another peer's socket — a cross-destination traffic leak.
+2. **2-2's gate was already trivially true.** Nothing in the library calls `GetNewKeyPair()`; only tests do. So the DH generator never starts in a stock router and there was no per-cycle thread growth to fix. The real defect was that the thread could not be stopped *at all*, plus two races in the lazy start.
+3. **2-4's "use a dedicated lock object" was the wrong fix.** The only subscriber enqueues to a `ConcurrentQueue`; serialising the entire inbound path bought nothing. Capturing the delegate into a local fixes the crash *and* removes the bottleneck. The concurrency requirement is now documented on the event.
+4. **`RouterContext.ResetForTests()` was not needed** — `RouterContext.Reset()` already exists and is already documented as the test-isolation seam.
+
+**Decisions recorded in-code:**
+
+- `Router.Subscribe()`/`Unsubscribe()` are adjacent and called from `Start()`/`Stop()`. The original bug was born of asymmetry — subscribe in `Start()`, unsubscribe in `Run()`'s `finally`, on a different thread.
+- `TransportProvider.IncomingMessage` now documents that handlers are invoked **concurrently** and must be non-blocking.
+- `GetEstablishedTransport` coalesces connects with a per-destination `Lazy`, removed in a `finally` because `Lazy` caches thrown exceptions — otherwise one failed connect makes a peer permanently unreachable.
+- `TunnelPoolSettings.DEFAULT_*` are `const`; the configurable values moved to `RouterContext` (per-router, discarded by `Reset()`).
+
+**Findings for later phases (observed, not fixed):**
+
+1. **`TunnelProvider.DistributeIncomingMessage` logs two `[DEBUG_LOG]` lines at Information** for every ShortTunnelBuildReply and VariableTunnelBuildReply, on the inbound hot path. Same class as batch 5-2's ECIES diagnostics.
+2. **`UnknownRouterQueue` subscribes to `NetDb.Inst.IdentHashLookup` in its constructor and never unsubscribes.** Not currently a leak — `NetDb.Stop()` nulls `Inst`, so each cycle gets a fresh resolver — but it makes the resolver's handler count not Router's alone, and it breaks the moment NetDb outlives a TransportProvider.
+3. **2-4's tests do not prove the throughput property.** They prove the new path is deadlock- and exception-free; proving a slow connect no longer blocks other sends needs an injectable transport, i.e. batch 3-3's loopback fixture.
+
+**Test-suite growth this phase:** 211 → 234 (`RouterLifecycleTest` 4, `KeyPrecalculationTest` 5, `DaemonHelperTest` 5, `TransportConcurrencyTest` 4, `UdpTunnelSessionTest` 5). Three fixtures start real routers or transport layers on netid 3 with reseed disabled, using ports 29090-29095 (new block in `PortAllocator.WellKnown`). Each self-skips if another fixture already owns the singleton. The unit suite is now ~1m50s, up from ~21s — almost entirely the lifecycle fixtures.
+
+**Next: Phase 3**, starting with **3-1** (`p3/i2pd-discovery`), still the plan's highest-value single change. i2pd 2.45.1 is at `/usr/sbin/i2pd`, service disabled, `I2PD_PATH` works.
