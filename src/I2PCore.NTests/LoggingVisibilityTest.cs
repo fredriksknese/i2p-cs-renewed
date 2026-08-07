@@ -108,6 +108,58 @@ public class LoggingVisibilityTest
             "the message generator must not run when the threshold excludes the level" );
     }
 
+    /// <summary>
+    ///     Records whether anything asked it to render itself.
+    /// </summary>
+    private sealed class FormatProbe
+    {
+        public bool WasFormatted { get; private set; }
+
+        public override string ToString()
+        {
+            WasFormatted = true;
+            return "rendered";
+        }
+    }
+
+    /// <summary>
+    ///     A suppressed LogDebug($"...") must not build its string. Before batch 0-6 the
+    ///     interpolation ran at the call site and the result was thrown away inside Log(),
+    ///     so every one of the 338 interpolated debug call sites paid full formatting cost on
+    ///     every call at the default Information level.
+    /// </summary>
+    [Test]
+    public void InterpolatedLogDebugDoesNotFormatWhenSuppressed()
+    {
+        var probe = new FormatProbe();
+
+        Capture( Logging.LogLevels.Warning, () => Logging.LogDebug( $"probe says {probe}" ) );
+
+        ClassicAssert.IsFalse( probe.WasFormatted,
+            "interpolation must be skipped entirely when the level is suppressed" );
+    }
+
+    [Test]
+    public void InterpolatedLogDebugStillFormatsWhenEnabled()
+    {
+        var probe = new FormatProbe();
+
+        var captured = Capture( Logging.LogLevels.Debug, () => Logging.LogDebug( $"probe says {probe}" ) );
+
+        ClassicAssert.IsTrue( probe.WasFormatted, "interpolation must still run when enabled" );
+        StringAssert.Contains( "probe says rendered", captured );
+    }
+
+    [Test]
+    public void InterpolatedLogTransportDoesNotFormatWhenSuppressed()
+    {
+        var probe = new FormatProbe();
+
+        Capture( Logging.LogLevels.Information, () => Logging.LogTransport( $"probe says {probe}" ) );
+
+        ClassicAssert.IsFalse( probe.WasFormatted );
+    }
+
     [Test]
     public void LazyOverloadIsEmittedWhenThresholdAllows()
     {
