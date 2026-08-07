@@ -135,6 +135,14 @@ public class TunnelProvider
     public static event Action<Ii2NpHeader, InboundTunnel> I2NpMessageReceived;
 
     /// <summary>
+    ///     Batch 2-1 (docs/PRODUCTION-PLAN.md). A field-like event exposes only add/remove outside
+    ///     its declaring type, so the Gate 2 lifecycle tests cannot otherwise see that a Start/Stop
+    ///     cycle left a handler attached. Test seam only — nothing in the library reads it.
+    /// </summary>
+    internal static int I2NpMessageReceivedHandlerCount =>
+        I2NpMessageReceived?.GetInvocationList().Length ?? 0;
+
+    /// <summary>
     ///     Register a garlic tag for an outbound tunnel build.
     ///     When a Garlic message arrives with this tag, it will be decrypted and processed as a build reply.
     /// </summary>

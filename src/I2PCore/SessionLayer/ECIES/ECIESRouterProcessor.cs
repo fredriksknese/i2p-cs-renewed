@@ -16,6 +16,13 @@ public class ECIESRouterProcessor
     private readonly byte[] _localStaticPrivateKey;
     private readonly byte[] _localStaticPublicKey;
 
+    /// <summary>
+    ///     The identity this processor was built for. Batch 2-1 test seam: Router caches the
+    ///     processor lazily and used to keep it across a restart, where it would silently fail to
+    ///     decrypt everything addressed to the router's new identity.
+    /// </summary>
+    internal I2PIdentHash LocalRouterHash => _localRouterHash;
+
     public ECIESRouterProcessor(
         I2PIdentHash localRouterHash,
         byte[] localStaticPrivateKey,

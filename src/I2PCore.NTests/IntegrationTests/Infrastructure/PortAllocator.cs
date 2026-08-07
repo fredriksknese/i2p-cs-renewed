@@ -115,6 +115,12 @@ public class PortAllocator
         public const int I2pdBI2cp = 29033;
         public const int I2pdBSam = 29035;
         public const int I2pdBHttp = 29036;
+
+        // Router lifecycle tests (batch 2-1) — 29090-29099.
+        // Deliberately at the top of the range, clear of the router blocks above, so a lifecycle
+        // test running in the same process as the integration suite cannot collide with one.
+        public const int LifecycleNtcp2 = 29090;
+        public const int LifecycleSsu2 = 29091;
     }
 
     /// <summary>
