@@ -131,13 +131,15 @@ public static class Router
                 };
                 _worker.Start();
 
-                NetDb.Inst.IdentHashLookup.LeaseSetReceived += IdentHashLookup_LeaseSetReceived;
-                NetDb.Inst.IdentHashLookup.LookupFailure += IdentHashLookup_LookupFailure;
+                Subscribe();
 
                 Started = true;
             }
             catch (Exception ex)
             {
+                // Start() is not atomic. If it threw after Subscribe(), leaving the handlers
+                // attached would grow the invocation list on the next attempt.
+                Unsubscribe();
                 Logging.Log(ex);
             }
         }
@@ -248,6 +250,9 @@ public static class Router
                 // 6. Wait for worker thread
                 _worker?.Join(10000);
 
+                // 6b. Detach event handlers while NetDb.Inst is still alive to detach from.
+                Unsubscribe();
+
                 // 7. Stop transport layer
                 try
                 {
@@ -293,6 +298,22 @@ public static class Router
                 ExplorationTunnelMgr = null;
                 TransitTunnelMgr = null;
                 FloodfillServer = null;
+
+                // Step 10 called RouterContext.Reset(), so this router has a new identity and new
+                // keys. The ECIES processor is built lazily from RouterContext and cached forever;
+                // left alone it survives the restart still bound to the *previous* identity, and
+                // silently fails to decrypt every router-level garlic message addressed to the new
+                // one. Dropping it makes the next access rebuild against the current context.
+                _eciesRouterProcessor = null;
+
+                // Callbacks registered against the old NetDb will never fire now that its lookup
+                // handlers are detached; keeping them leaks one entry per unresolved lookup per
+                // restart, and would deliver a stale destination if a new lookup reused the hash.
+                lock (UnresolvedDestinations)
+                {
+                    UnresolvedDestinations.Clear();
+                }
+
                 _terminated = false;
 
                 Started = false;
@@ -307,9 +328,40 @@ public static class Router
 
     private static readonly PeriodicAction ProfileCleanup = new(TickSpan.Minutes(10));
 
-    private static void Run()
+    // Batch 2-1 (docs/PRODUCTION-PLAN.md): every event this class subscribes to is attached here
+    // and detached in Unsubscribe(), so the pairing can be checked by reading two adjacent
+    // methods. Previously the subscriptions were split -- I2NpMessageReceived was attached in
+    // Run() and never detached at all, while the NetDb handlers were attached in Start() and
+    // detached in Run()'s finally. Router is static, so the leaked handler survived Stop() and
+    // the invocation list grew by one per Start/Stop cycle, delivering every I2NP message to as
+    // many stale handlers as there had been restarts.
+    private static void Subscribe()
     {
         TunnelProvider.I2NpMessageReceived += HandleI2NpMessageReceived;
+
+        var lookup = NetDb.Inst?.IdentHashLookup;
+        if (lookup == null) return;
+
+        lookup.LeaseSetReceived += IdentHashLookup_LeaseSetReceived;
+        lookup.LookupFailure += IdentHashLookup_LookupFailure;
+    }
+
+    /// <summary>
+    ///     Safe to call when nothing is subscribed: removing an absent delegate is a no-op.
+    /// </summary>
+    private static void Unsubscribe()
+    {
+        TunnelProvider.I2NpMessageReceived -= HandleI2NpMessageReceived;
+
+        var lookup = NetDb.Inst?.IdentHashLookup;
+        if (lookup == null) return;
+
+        lookup.LeaseSetReceived -= IdentHashLookup_LeaseSetReceived;
+        lookup.LookupFailure -= IdentHashLookup_LookupFailure;
+    }
+
+    private static void Run()
+    {
         try
         {
             Thread.Sleep(2000);
@@ -337,9 +389,6 @@ public static class Router
         finally
         {
             _terminated = true;
-
-            NetDb.Inst.IdentHashLookup.LeaseSetReceived -= IdentHashLookup_LeaseSetReceived;
-            NetDb.Inst.IdentHashLookup.LookupFailure -= IdentHashLookup_LookupFailure;
         }
     }
 

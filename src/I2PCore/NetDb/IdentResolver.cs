@@ -72,6 +72,16 @@ public class IdentResolver
     public event IdentResolverResultRouterInfoEx RouterInfoReceivedEx;
     public event IdentResolverResultLeaseSetEx LeaseSetReceivedEx;
 
+    /// <summary>
+    ///     Batch 2-1 (docs/PRODUCTION-PLAN.md). Test seam for the Gate 2 lifecycle checks; a
+    ///     field-like event exposes only add/remove outside its declaring type.
+    /// </summary>
+    internal int LeaseSetReceivedHandlerCount =>
+        LeaseSetReceived?.GetInvocationList().Length ?? 0;
+
+    internal int LookupFailureHandlerCount =>
+        LookupFailure?.GetInvocationList().Length ?? 0;
+
     public IdentUpdateRequestInfo GetQueryInfo(I2PIdentHash key)
     {
         if (OutstandingQueries.TryGetValue(key, out var info)) return info;
