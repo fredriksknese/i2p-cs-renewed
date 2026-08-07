@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -37,16 +37,19 @@ public class RoutersStatistics
         }
     }
 
-    private static Store GetStore()
+    // Batch 2-7 (docs/PRODUCTION-PLAN.md). This used to read NetDb.Inst.GetFullPath(...).
+    // Load() runs on the NetDb worker thread, and NetDb.Stop() sets Inst = null, so a Stop
+    // arriving while the worker was still loading dereferenced null on a thread with no
+    // exception handler -- taking the whole process down. The store path is now passed in by
+    // the NetDb that owns these statistics, so there is no singleton to race with.
+    private static Store GetStore(string storePath)
     {
-        return BufUtils.GetStore(
-            NetDb.Inst.GetFullPath("statistics.sto"),
-            -1);
+        return BufUtils.GetStore(storePath, -1);
     }
 
-    public void Load()
+    public void Load(string storePath)
     {
-        using (var s = GetStore())
+        using (var s = GetStore(storePath))
         {
             var readsw = new Stopwatch();
             var constrsw = new Stopwatch();
@@ -91,14 +94,14 @@ public class RoutersStatistics
         }
     }
 
-    public void Save()
+    public void Save(string storePath)
     {
         var sw2 = new Stopwatch();
         sw2.Start();
         var deleted = 0;
         var updated = 0;
         var created = 0;
-        using (var s = GetStore())
+        using (var s = GetStore(storePath))
         {
             if (!Routers.Any()) return;
 
@@ -348,7 +351,7 @@ public class RoutersStatistics
         return result;
     }
 
-    internal void RemoveOldStatistics(ICollection<I2PIdentHash> keep)
+    internal void RemoveOldStatistics(ICollection<I2PIdentHash> keep, string storePath)
     {
         var now = DateTime.UtcNow;
 
@@ -359,7 +362,7 @@ public class RoutersStatistics
 
         foreach (var one in toremove) one.Value.Deleted = true;
 
-        Save();
+        Save(storePath);
     }
 
     public void Remove(I2PIdentHash hash)
