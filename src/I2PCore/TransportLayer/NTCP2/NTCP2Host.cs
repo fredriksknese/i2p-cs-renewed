@@ -444,8 +444,12 @@ public class NTCP2Host : ITransportProtocol
         // v = version: MUST be "2" per i2pd RouterInfo.cpp line 310
         // i2pd marks the address as invalid if v != "2"
         addr.Options["v"] = "2";
-        // Post-quantum is indicated via separate "pq" option, not "v"
-        addr.Options["pq"] = "4";
+        // Post-quantum is indicated via separate "pq" option, not "v".
+        // Batch 0-4: only advertised when explicitly enabled (--experimental-pq). This was
+        // published unconditionally, so every router advertised a hybrid handshake whose own
+        // tests are quarantined (batch 9-3). Omitting the option is how a peer knows not to
+        // attempt it — there is no "pq=0".
+        if (RouterContext.Inst.EnablePqTransport) addr.Options["pq"] = "4";
 
         // Publish to RouterContext
         var addresses = new List<I2PRouterAddress> { addr };

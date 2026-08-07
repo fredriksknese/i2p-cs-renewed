@@ -35,6 +35,7 @@ internal class Program
         var useIPv6 = false;
         var disableIPv6 = false; // inverse of useIPv6 for CLI flag
         var enableSSU2 = false;
+        var enablePqTransport = false;
         var floodfill = false;
         var testEepsite = false;
         var httpProxyPort = 4445; // Default to 4445 (4444 might be in use)
@@ -142,6 +143,12 @@ internal class Program
                 case "--enable-ssu2":
                     enableSSU2 = true;
                     Console.WriteLine("SSU2: enabled");
+                    break;
+
+                case "--experimental-pq":
+                    enablePqTransport = true;
+                    Console.WriteLine(
+                        "Post-quantum NTCP2: enabled (experimental - handshake tests are quarantined, see batch 9-3)");
                     break;
 
                 case "--is-firewalled":
@@ -282,6 +289,8 @@ internal class Program
         RouterContext.Inst.IsFirewalled = isFirewalled;
         RouterContext.UseIpV6 = useIPv6 && !disableIPv6;
         RouterContext.Inst.EnableSSU2 = enableSSU2;
+        // Must be set before Router.Start(): NTCP2Host reads it when it publishes its address.
+        RouterContext.Inst.EnablePqTransport = enablePqTransport;
         RouterContext.Inst.FloodfillEnabled = floodfill;
 
         TunnelPoolSettings.DEFAULT_IB_EXPL_LENGTH = exploratoryLength;
@@ -499,7 +508,11 @@ internal class Program
         Console.WriteLine("  --not-firewalled        Run in non-firewalled mode");
         Console.WriteLine("  --disable-ipv6          Disable IPv6 support");
         Console.WriteLine("  --enable-ipv6           Enable IPv6 support");
-        Console.WriteLine("  --disable-ssu2          Disable SSU2 transport");
+        Console.WriteLine("  --enable-ssu2           Enable SSU2 transport (off by default: no ACK/");
+        Console.WriteLine("                          retransmit or Retry handling yet)");
+        Console.WriteLine("  --disable-ssu2          Disable SSU2 transport (default)");
+        Console.WriteLine("  --experimental-pq       Advertise post-quantum NTCP2 (off by default:");
+        Console.WriteLine("                          hybrid handshake tests are quarantined)");
         Console.WriteLine("  --floodfill             Enable floodfill mode");
         Console.WriteLine("  --proxy-encryption <mode> Set HTTP proxy encryption (ecies, mlkem, hybrid)");
         Console.WriteLine("  --data-dir <path>       Set custom data directory");

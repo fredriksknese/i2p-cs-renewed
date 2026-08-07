@@ -22,16 +22,33 @@ This is an experimental project. Some components could be useful for a less-slop
  - emissary: https://github.com/eepnet/emissary/
 
 # Current Status
+
+There is an active plan to make this production-ready: [`docs/PRODUCTION-PLAN.md`](docs/PRODUCTION-PLAN.md).
+Percentages below are the original author's estimates and are mostly unmeasured; phase 6-3 of
+that plan replaces them with measured results.
+
+**What a default router now does (as of batch 0-4).** Anything known-broken is off by default,
+so a stock router does not advertise capabilities it cannot honour. Opt back in with the flags
+shown. Until Gate 6, do not run this on the live network (netid 2) — use `--netid 3`.
+
+| Feature | Default | Opt-in |
+|---|---|---|
+| NTCP2 | **on** | — |
+| NTCP2-PQ (`pq` option in RouterInfo) | **off** | `--experimental-pq` |
+| SSU2 | **off** | `--enable-ssu2` |
+| SSU2 connection migration (`m` cap) | **off** | none — stub, see batch 4-3 |
+| Destination encryption | **ECIES-X25519** | `--proxy-encryption mlkem\|hybrid` |
+
 * NTCP2: 
   * Inbound: 90% working
   * Outbound: 80%? working
-* NTCP2-PQ:
+* NTCP2-PQ: *(off by default — handshake tests are quarantined, see batch 9-3)*
   * Inbound: 50%? working
   * Outbound: 50%? working
-* SSU2:
+* SSU2: *(off by default — no ACK/retransmit or Retry/token handling wired up)*
   * Inbound: Totally broken
   * Outbound: Totally broken
-* SSU2-PQ: 
+* SSU2-PQ: *(off by default)*
   * Inbound: Totally broken
   * Outbound: Totally broken
 * Transit Tunnels:
@@ -46,8 +63,8 @@ This is an experimental project. Some components could be useful for a less-slop
     * Via tunnels: RI store and lookup working
   * Working NetDb isolation for different client destinations/named tunnel pools
 * Session layer encryption (the e2ee through tunnels between clients or client <-> server) / "TCP" Streaming
-  * ECIES-X25519: 70%? Doesn't work properly
-  * MLKEM768-X25519: 70%? Doesn't work properly
+  * ECIES-X25519: 70%? Doesn't work properly *(the default)*
+  * MLKEM768-X25519: 70%? Doesn't work properly *(off by default)*
   * LS2 included in garlic for session start, stored by server in isolated netdb
 * HTTP Proxy Client:
   * 60%? working, needs working session encryption/streaming
