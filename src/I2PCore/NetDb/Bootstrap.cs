@@ -5,7 +5,6 @@ using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
-using System.Net.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading.Tasks;
@@ -15,6 +14,24 @@ using I2PCore.Utils;
 
 namespace I2PCore;
 
+// Batch 1-1 (docs/PRODUCTION-PLAN.md): reseed TLS certificate validation.
+//
+// Both reseed download paths used to install
+// `ServerCertificateCustomValidationCallback = (_,_,_,_) => true`, disabling TLS
+// validation unconditionally, justified by a comment saying the SU3 content
+// signature is verified separately. It is not: GetRouterInfoFiles() accepted
+// archives whose signature check failed. Reseed is the router's entire initial
+// view of the network, so an unauthenticated bootstrap lets a network attacker
+// choose every peer we will ever talk to.
+//
+// Default is now ordinary TLS validation against the system trust store, with
+// `--insecure-reseed` (Bootstrap.InsecureReseed) restoring the old behaviour for
+// operators who need it, loudly. Measured 2026-08-07 against the 9 default
+// hosts: 3 served a valid chain, 1 (i2pseed.creativecowpat.net:8443) is
+// genuinely self-signed and now fails, the rest were unreachable from here.
+// Since NetworkBootstrap() walks a shuffled list and stops at the first success,
+// losing the self-signed host does not break cold start. Per-host certificate
+// pinning would recover it and belongs with the SU3 work in batch 1-2.
 public class Bootstrap
 {
     public static readonly string[] DefaultBootstrapUrls =
@@ -57,13 +74,43 @@ public class Bootstrap
     /// </summary>
     public static string CertificatesDirectory { get; set; } = "certificates/reseed";
 
-    private static bool NoCheckServerCert(
-        object sender,
-        X509Certificate certificate,
-        X509Chain chain,
-        SslPolicyErrors sslPolicyErrors)
+    /// <summary>
+    ///     When true, reseed HTTPS connections accept any server certificate.
+    ///     Off by default; set by the CLI's <c>--insecure-reseed</c>. Enabling it
+    ///     means a network attacker can supply this router's entire initial view
+    ///     of the network, so it logs at Critical every time it is turned on.
+    /// </summary>
+    public static bool InsecureReseed
     {
-        return true;
+        get => _insecureReseed;
+        set
+        {
+            _insecureReseed = value;
+
+            if (value)
+                Logging.LogCritical(
+                    "Bootstrap: INSECURE RESEED ENABLED. TLS server certificates will not be " +
+                    "validated. Anyone able to intercept the reseed connection can choose every " +
+                    "router this instance learns about. Do not use this on an untrusted network.");
+        }
+    }
+
+    private static bool _insecureReseed;
+
+    /// <summary>
+    ///     Build the HTTP handler used for reseed downloads. Validates the server
+    ///     certificate against the system trust store unless <see cref="InsecureReseed" />
+    ///     is set.
+    /// </summary>
+    internal static HttpClientHandler CreateReseedHandler()
+    {
+        var handler = new HttpClientHandler();
+
+        if (InsecureReseed)
+            handler.ServerCertificateCustomValidationCallback =
+                HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
+
+        return handler;
     }
 
     public static async Task<int> NetworkBootstrap()
@@ -147,12 +194,7 @@ public class Bootstrap
     /// </summary>
     private static async Task<byte[]> DownloadSu3(string url)
     {
-        var handler = new HttpClientHandler
-        {
-            ServerCertificateCustomValidationCallback = (_, _, _, _) => true
-        };
-
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(CreateReseedHandler());
         client.Timeout = TimeSpan.FromSeconds(30);
         client.DefaultRequestHeaders.ConnectionClose = true;
         client.DefaultRequestHeaders.Add("User-Agent", "Wget/1.11.4");
@@ -441,13 +483,7 @@ public class Bootstrap
                 HttpClient client;
                 var proxyAddress = Environment.GetEnvironmentVariable("I2P_RESEED_PROXY") ?? "";
 
-                // Reseed servers often use self-signed TLS certs (like i2pd does).
-                // We verify the SU3 content signature separately, so TLS cert
-                // validation is secondary. Accept all server certs for reseed.
-                var handler = new HttpClientHandler
-                {
-                    ServerCertificateCustomValidationCallback = (_, _, _, _) => true
-                };
+                var handler = CreateReseedHandler();
 
                 if (!string.IsNullOrWhiteSpace(proxyAddress))
                 {

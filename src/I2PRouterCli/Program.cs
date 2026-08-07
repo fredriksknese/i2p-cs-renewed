@@ -44,6 +44,7 @@ internal class Program
         string dataDir = null;
         var netId = 0; // 0 = use default (2)
         var disableReseed = false;
+        var insecureReseed = false;
         var samPort = 0; // 0 = use default
         var exploratoryLength = 2;
         var exploratoryQuantity = 3;
@@ -211,6 +212,11 @@ internal class Program
                     Console.WriteLine("Reseed disabled");
                     break;
 
+                case "--insecure-reseed":
+                    insecureReseed = true;
+                    Console.WriteLine("WARNING: reseed TLS certificate validation disabled");
+                    break;
+
                 case "--log-level":
                     if (args.Length > i + 1)
                     {
@@ -283,6 +289,9 @@ internal class Program
         if (netId > 0) I2PConstants.I2PNetworkId = netId;
 
         if (disableReseed) Bootstrap.Disabled = true;
+
+        // Logs at Critical from the property setter, so the operator sees it at any log level.
+        if (insecureReseed) Bootstrap.InsecureReseed = true;
 
         // Apply configuration to router context
         RouterContext.RouterSettingsFile = "I2PRouterCli.bin";
@@ -525,6 +534,9 @@ internal class Program
         Console.WriteLine("  --data-dir <path>       Set custom data directory");
         Console.WriteLine("  --netid <N>             Set network ID (default: 2)");
         Console.WriteLine("  --disable-reseed        Disable network bootstrap/reseed");
+        Console.WriteLine("  --insecure-reseed       Skip TLS certificate validation when reseeding.");
+        Console.WriteLine("                          Lets anyone on the path choose every router this");
+        Console.WriteLine("                          instance learns about. Do not use casually.");
         Console.WriteLine("  --log-level <LEVEL>     Set log verbosity: Everything, DebugData,");
         Console.WriteLine("                          Transport, Debug, Information (default),");
         Console.WriteLine("                          Warning, Error, Critical, Nothing");
