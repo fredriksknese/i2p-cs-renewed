@@ -91,6 +91,18 @@ public interface ITransportProtocol
     event Action<ITransport, I2PIdentHash> ConnectionCreated;
 
     /// <summary>
+    ///     Stop listening, terminate all sessions and let the protocol's worker thread exit.
+    ///     <para>
+    ///         Batch 2-6 (docs/PRODUCTION-PLAN.md): NTCP2Host and SSU2Host both implemented this
+    ///         and neither was on the interface, so TransportProvider.Stop() had no way to call it
+    ///         and simply abandoned its protocol hosts. Their worker threads and listening sockets
+    ///         outlived the router — one leaked thread per Start/Stop cycle, which is what the
+    ///         Gate 2 test caught.
+    ///     </para>
+    /// </summary>
+    void Terminate();
+
+    /// <summary>
     ///     Returns what features the transport supports for the specific router based on the router info.
     /// </summary>
     /// <returns>The capability.</returns>

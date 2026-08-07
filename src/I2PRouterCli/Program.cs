@@ -307,9 +307,8 @@ internal class Program
         RouterContext.Inst.EnablePqTransport = enablePqTransport;
         RouterContext.Inst.FloodfillEnabled = floodfill;
 
-        TunnelPoolSettings.DEFAULT_IB_EXPL_LENGTH = exploratoryLength;
-        TunnelPoolSettings.DEFAULT_OB_EXPL_LENGTH = exploratoryLength;
-        TunnelPoolSettings.DEFAULT_QUANTITY = exploratoryQuantity;
+        RouterContext.Inst.ExploratoryTunnelLength = exploratoryLength;
+        RouterContext.Inst.ExploratoryTunnelQuantity = exploratoryQuantity;
 
         // Auto-enable hidden mode when firewalled (matches Java I2P behavior)
         if (isFirewalled || hiddenMode)

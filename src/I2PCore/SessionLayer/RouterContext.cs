@@ -8,6 +8,7 @@ using System.Net;
 using System.Net.Sockets;
 using I2PCore.Data;
 using I2PCore.TransportLayer;
+using I2PCore.TunnelLayer;
 using I2PCore.Utils;
 
 // Todo list for all of I2PCore
@@ -86,6 +87,14 @@ public partial class RouterContext
     public int DefaultUdpPort = 12123;
 
     public bool FloodfillEnabled = false;
+
+    // Batch 2-6 (docs/PRODUCTION-PLAN.md): these were mutable statics on TunnelPoolSettings, so
+    // the CLI's --exploratory-length reconfigured the whole process permanently and nothing
+    // restored them across a Stop/Start or between tests. They belong to a router instance, and
+    // are discarded with it by RouterContext.Reset().
+    public int ExploratoryTunnelLength = TunnelPoolSettings.DEFAULT_IB_EXPL_LENGTH;
+
+    public int ExploratoryTunnelQuantity = TunnelPoolSettings.DEFAULT_QUANTITY;
 
     // SSU
     public I2PByteBlock IntroKey = new(new byte[32]);
