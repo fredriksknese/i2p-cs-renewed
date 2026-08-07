@@ -378,14 +378,22 @@ public class TunnelProvider
             }
     }
 
+    /// <summary>
+    ///     Run the Noise N self-loopback diagnostic during Start(). Off by default (batch 0-5):
+    ///     it wrote 17 LogCritical lines into every router's startup log — visible at every log
+    ///     level, since Critical passes any threshold — while being unable to fail anything,
+    ///     because it only logs and swallows exceptions. Its assertions now live in
+    ///     NoiseNSelfTest. Enable with --self-test when diagnosing tunnel build crypto in situ.
+    /// </summary>
+    public static bool SelfTestEnabled = false;
+
     public static void Start()
     {
         if (Inst != null) return;
         Inst = new TunnelProvider();
 
-        // Run self-loopback test to verify our Noise N encryption
-        // is compatible with our own decryption
-        RunNoiseNSelfTest();
+        // Self-loopback check that our Noise N encryption is decryptable by our own decryption.
+        if (SelfTestEnabled) RunNoiseNSelfTest();
     }
 
     /// <summary>

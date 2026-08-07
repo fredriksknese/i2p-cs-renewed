@@ -145,6 +145,11 @@ internal class Program
                     Console.WriteLine("SSU2: enabled");
                     break;
 
+                case "--self-test":
+                    TunnelProvider.SelfTestEnabled = true;
+                    Console.WriteLine("Noise N self-test: enabled");
+                    break;
+
                 case "--experimental-pq":
                     enablePqTransport = true;
                     Console.WriteLine(
@@ -513,6 +518,8 @@ internal class Program
         Console.WriteLine("  --disable-ssu2          Disable SSU2 transport (default)");
         Console.WriteLine("  --experimental-pq       Advertise post-quantum NTCP2 (off by default:");
         Console.WriteLine("                          hybrid handshake tests are quarantined)");
+        Console.WriteLine("  --self-test             Run the Noise N tunnel-build self-check at");
+        Console.WriteLine("                          startup and log the result");
         Console.WriteLine("  --floodfill             Enable floodfill mode");
         Console.WriteLine("  --proxy-encryption <mode> Set HTTP proxy encryption (ecies, mlkem, hybrid)");
         Console.WriteLine("  --data-dir <path>       Set custom data directory");
