@@ -338,3 +338,47 @@ The single most informative check at any point: does `--filter TestCategory=Inte
 **Phase 0 scoreboard:** 0-1 ✅ 0-2 ✅ 0-3 ✅ 0-4 ✅ 0-5 ✅ 0-6 ✅
 
 **Next session starts at Phase 1** (`p1/reseed-tls-verification`, then SU3 fail-closed, then CSPRNG). Note R3: ship 1-1 before 1-2 tightens anything, so `--insecure-reseed` exists as an escape hatch first.
+
+### Session 2 — 2026-08-07 — batches 1-1, 1-2, 1-3, 1-4 — PRs #5, #6, #7, #8, all merged
+
+**Phase 1 is complete and Gate 1 is met.** Unit suite 211 passed / 0 failed / 1 skipped, green in CI on every PR. Release build 0 errors / 59 warnings throughout — the warning count never moved, which is a useful tripwire.
+
+**Gate 1 evidence.** Cold data dir, `--netid 3`, TLS *and* SU3 verification on:
+
+```
+Bootstrap: SU3 signature verified for signer 'lazygravy@mail.i2p'.
+Bootstrap: SU3 signature verified for signer 'r4sas-reseed@mail.i2p'.
+Bootstrap: SU3 signature verified for signer 'igor@novg.net'.
+NetworkBootstrap: Completed with 213 routers from 3 servers.
+```
+
+Three hosts, three signers, three pinned certificates. Tampered-fixture rejection is covered by `Su3SignatureTest`; `grep -rn "new Random(" src/I2PCore` returns 0.
+
+**R3 did not materialise.** The plan rated fail-closed SU3 verification as likely to break reseed entirely ("the RSA convention is genuinely non-standard, which is why it was abandoned"). It broke nothing, because the convention is *documented* non-standard, not unknowable — 20 minutes with Python and a real archive settled it before any code was written. Retired.
+
+**Where the plan was wrong:**
+
+1. **The SU3 problem was two bugs, not one.** The plan named the padding convention. It missed that the SigType table was **shifted by two** — type 6 read as `RSA-SHA256-2048` when it is `RSA_SHA512_4096`. Every reachable host signs with type 6, so even correct padding handling would still have hashed with the wrong algorithm. Fixing either alone leaves verification failing, which is presumably how it came to be abandoned.
+2. **1-3 listed 10 `new Random(` sites; there were 12.** The two missed are the handshake padding *fills* in `BuildMessage1`/`BuildMessage2` — the most exposed of the set. They reuse an `rng` declared earlier in the method, so a grep for `new Random(` cannot see them; only the compiler did, after the declaration was removed. **Treat every line-number list in this plan as a grep result, not an inventory.**
+3. **1-4 is much larger than "add a property to `BufUtils`".** Randomness entered through four doors: `BufUtils`, `System.Random`, static `RandomNumberGenerator.Fill` (Elligator2), and per-call `new SecureRandom()` (X25519, ML-KEM ×3, I2PSignature, ElGamalCrypto). The BouncyCastle door is the one the gate depends on — `CreateMessage1` → `X25519.GenerateKeyPair` → `new SecureRandom()` — so seeding `BufUtils` alone would have left the first 32 bytes of msg1 random and the gate unmeetable.
+4. **`GenerateRandomPacketNumber` had a range bug on top of the RNG bug.** It cast `Random.Next()` to `uint`, so the high bit was always clear and half the SSU2 packet number space was unreachable regardless of generator quality.
+
+**Decisions recorded in-code:**
+
+- `Bootstrap.cs` — header comment covering both 1-1 and 1-2, including the measured host survey.
+- `VerifyI2PRsaSignature` is **stricter than i2pd's `RSAVerifier`**, which compares the trailing hash bytes and ignores the padding entirely; we validate the full `00 01 FF..FF 00` structure.
+- Signed data derives from the cursor position, not `fileLength - signatureLength`, so trailing bytes after the signature cannot shift what is hashed.
+- `BufUtils.RandomSource` setter is **internal**, and the deterministic implementation lives in the test assembly. Shipping a `SeededRandomSource` inside `I2PCore` would put a class that makes a real router's keys predictable one `using` away from production code.
+
+**Findings for later phases (observed, not fixed):**
+
+1. **`NetDb` does not filter imports by netId.** A `--netid 3` run stored 213 live-network RouterInfos without complaint. Our own netId is published in caps and written into the NTCP2 handshake, so peers should reject us — but the reseeded NetDb is junk for private-network testing, and Phase 3's integration work should not assume `--netid 3` gives an isolated NetDb.
+2. **Inbound NTCP2 never validates the peer's netId.** `NTCP2Session.cs` reads `RemoteNetworkId` and nothing checks it; SSU2 does validate (`SSU2SecurityValidator.cs:87`). A netid-3 router would accept an inbound netid-2 peer. Relevant to **R8** — consider it part of making the netid rule enforceable.
+3. **`i2pseed.creativecowpat.net:8443` is genuinely self-signed** and is now skipped. Per-host certificate pinning would recover it. Low priority: 3 of 9 hosts served valid chains and cold start needs one.
+4. **`BufUtils.RandomInt` has modulo bias** (`Math.Abs(int % max)`) and throws on `max == 0` where `Random.Next(0)` returned 0. Neither bites at any current call site — all use small constant bounds or a guarded count — but it is now the only integer RNG in the library.
+
+**Test-suite growth:** 188 → 211 across the four batches (`ReseedTlsTest` 4, `Su3SignatureTest` 10, `CsprngGuardTest` 3, `RngSeamTest` 6). One binary fixture added: `src/I2PCore.NTests/TestData/igor_at_novg.net.su3`, 63 KB, a real archive fetched 2026-08-07. It cannot go stale — verification uses only the pinned public key, with no chain or expiry check, same as i2pd.
+
+**Still true from session 1:** push access is to the fork `fredriksknese/i2p-cs-renewed` only; branch and PR there. i2pd 2.45.1 at `/usr/sbin/i2pd`, service disabled.
+
+**Next: Phase 2** (`p2/router-lifecycle-idempotent`). The highest-value single change in the plan remains **3-1** (i2pd discovery), which activates the whole integration suite.

@@ -38,6 +38,8 @@ shown. Until Gate 6, do not run this on the live network (netid 2) — use `--ne
 | SSU2 | **off** | `--enable-ssu2` |
 | SSU2 connection migration (`m` cap) | **off** | none — stub, see batch 4-3 |
 | Destination encryption | **ECIES-X25519** | `--proxy-encryption mlkem\|hybrid` |
+| Reseed TLS certificate validation | **on** | `--insecure-reseed` |
+| Reseed SU3 signature verification | **enforced, fail-closed** | `--insecure-reseed` |
 
 * NTCP2: 
   * Inbound: 90% working
@@ -55,6 +57,12 @@ shown. Until Gate 6, do not run this on the live network (netid 2) — use `--ne
   * 'middle hop': 70%? working? maybe fully working?
   * Outbound Endpoint: Broken
   * Inbound Gateway: Broken
+* Reseed / bootstrap: **working and authenticated** (measured, batches 1-1 and 1-2)
+  * TLS certificates validated against the system trust store
+  * SU3 signatures verified against the 14 pinned reseed certificates; a failed or
+    missing signature rejects the archive and the next host is tried
+  * One default host (`i2pseed.creativecowpat.net:8443`) is self-signed and is now
+    skipped; cold start still succeeds from the remaining hosts
 * NetDB:
   * Floodfill:
     * Direct: LS2 store and lookup working
