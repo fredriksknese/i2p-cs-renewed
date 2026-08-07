@@ -2,7 +2,34 @@
 
     <PropertyGroup>
         <TargetFramework>net10.0</TargetFramework>
-        <DefineConstants>NOLOG_ALL_TUNNEL_TRANSFER;NOLOG_ALL_IDENT_LOOKUPS;NOLOG_MUCH_TRANSPORT;NOLOG_ALL_LEASE_MGMT,NOLOG_TUNNEL_SELECTION,NOLOG_ROUTER_SELECTION_HISTORY</DefineConstants>
+    </PropertyGroup>
+
+    <!--
+        Verbose logging category switches.
+
+        The code is guarded by #if LOG_X, so these NOLOG_ names are inert placeholders that
+        read as "category X is off". Drop the NO prefix on one to switch that category on.
+        Converting this prefix scheme into a proper per-configuration property is batch 6-1;
+        it is deliberately left alone here.
+
+        Two things were fixed in batch 0-1:
+          - These are now appended to $(DefineConstants) instead of replacing it wholesale.
+          - The last three used ',' rather than ';' as the separator, so they were being
+            defined as one run-together symbol. Harmless (nothing tests for NOLOG_ names)
+            but wrong, and it would have bitten 6-1.
+
+        Debug and Release carry the same set today; the split exists so they can diverge.
+    -->
+    <PropertyGroup>
+        <I2PLoggingConstants>NOLOG_ALL_TUNNEL_TRANSFER;NOLOG_ALL_IDENT_LOOKUPS;NOLOG_MUCH_TRANSPORT;NOLOG_ALL_LEASE_MGMT;NOLOG_TUNNEL_SELECTION;NOLOG_ROUTER_SELECTION_HISTORY</I2PLoggingConstants>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+        <DefineConstants>$(DefineConstants);$(I2PLoggingConstants)</DefineConstants>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+        <DefineConstants>$(DefineConstants);$(I2PLoggingConstants)</DefineConstants>
     </PropertyGroup>
 
     <ItemGroup>
