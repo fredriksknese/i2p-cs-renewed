@@ -16,4 +16,10 @@
         <ProjectReference Include="..\I2PCore\I2PCore.csproj"/>
         <ProjectReference Include="..\I2CP\I2CP.csproj"/>
     </ItemGroup>
+
+    <ItemGroup>
+        <None Include="TestData\**">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </None>
+    </ItemGroup>
 </Project>
