@@ -116,7 +116,7 @@ public partial class NetDb
             DoBootstrap();
         }
 
-        Statistics.Load();
+        Statistics.Load(GetFullPath("statistics.sto"));
 
         UpdateSelectionProbabilities();
         ShowDebugDatabaseInfo();
@@ -223,7 +223,7 @@ public partial class NetDb
     {
         var inactive = Statistics.GetInactive();
         RemoveRouterInfo(inactive);
-        Statistics.RemoveOldStatistics(RouterInfos.Keys);
+        Statistics.RemoveOldStatistics(RouterInfos.Keys, GetFullPath("statistics.sto"));
     }
 
     private void ImportNetDbFiles()

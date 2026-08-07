@@ -161,7 +161,12 @@ public partial class NetDb
             Logging.Log($"Done reading NetDb. {sw1.Elapsed}. {RouterInfos.Count} entries.");
 
             LoadFinished.Set();
-            while (TransportProvider.Inst == null) Thread.Sleep(500);
+
+            // Batch 2-7: this used to be `while (TransportProvider.Inst == null)` with no
+            // Terminated check. A Stop() arriving before the transport layer came up left this
+            // thread spinning forever: Stop()'s Join(5000) timed out and the thread outlived the
+            // NetDb it belonged to.
+            while (!Terminated && TransportProvider.Inst == null) Thread.Sleep(500);
 
             var periodicSave = new PeriodicAction(TickSpan.Minutes(2));
             var periodicUpdateRoulette = new PeriodicAction(TickSpan.Minutes(1));
@@ -187,6 +192,16 @@ public partial class NetDb
                 {
                     Logging.Log(ex);
                 }
+        }
+        // Batch 2-7 (docs/PRODUCTION-PLAN.md): the inner loop caught everything, but the code
+        // before it -- Load(), which reads the whole NetDb off disk -- did not. An exception
+        // there escaped to the top of a background thread, and an unhandled exception on any
+        // thread kills the process. That is exactly how a NetDb.Stop() racing a load took the
+        // test host down with a NullReferenceException. A worker thread must never be able to
+        // do that: log it and let the thread end.
+        catch (Exception ex)
+        {
+            Logging.Log("NetDb: worker thread terminating on unhandled exception", ex);
         }
         finally
         {
