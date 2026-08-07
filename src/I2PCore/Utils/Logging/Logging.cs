@@ -126,6 +126,12 @@ public static class Logging
         Log(LogLevels.Debug, txt);
     }
 
+    /// <summary>Log(...) without a level is Debug, so it gets the Debug handler.</summary>
+    public static void Log(ref DebugLogInterpolatedStringHandler handler)
+    {
+        if (handler.Enabled) Log(LogLevels.Debug, handler.GetTextAndClear());
+    }
+
     public static void Log(Func<string> txtgen)
     {
         if (!IsEnabled(LogLevels.Debug)) return;
@@ -135,6 +141,15 @@ public static class Logging
     public static void LogDebug(string txt)
     {
         Log(LogLevels.Debug, txt);
+    }
+
+    // Batch 0-6: the interpolated-string overloads. The compiler binds LogDebug($"...") to
+    // these in preference to the string overloads, and the handler's constructor decides
+    // whether the interpolation runs at all — so a suppressed debug message costs a threshold
+    // comparison instead of a full format. Call sites did not change.
+    public static void LogDebug(ref DebugLogInterpolatedStringHandler handler)
+    {
+        if (handler.Enabled) Log(LogLevels.Debug, handler.GetTextAndClear());
     }
 
     public static void LogDebug(LogLevels lvl, Func<string> gen)
@@ -148,6 +163,11 @@ public static class Logging
         Log(LogLevels.Transport, txt);
     }
 
+    public static void LogTransport(ref TransportLogInterpolatedStringHandler handler)
+    {
+        if (handler.Enabled) Log(LogLevels.Transport, handler.GetTextAndClear());
+    }
+
     public static void LogTransport(Func<string> txtgen)
     {
         if (!IsEnabled(LogLevels.Transport)) return;
@@ -157,6 +177,11 @@ public static class Logging
     public static void LogDebugData(string txt)
     {
         Log(LogLevels.DebugData, txt);
+    }
+
+    public static void LogDebugData(ref DebugDataLogInterpolatedStringHandler handler)
+    {
+        if (handler.Enabled) Log(LogLevels.DebugData, handler.GetTextAndClear());
     }
 
     public static void LogDebugData(Func<string> txtgen)

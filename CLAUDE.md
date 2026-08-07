@@ -41,7 +41,9 @@ The unit suite is **green on `github-master`** as of batch 0-3: 176 pass, 0 fail
 **Logging is runtime-filtered only.** `Logging.LogLevel` is the single filter; there is no compile-time gating. Debug output is therefore reachable in a Release build, which is the whole point — the router used to strip `Log`/`LogDebug`/`LogTransport`/`LogDebugData` from every non-DEBUG build via `[Conditional("DEBUG")]`, making a Release router undiagnosable. Do not reintroduce that; `LoggingVisibilityTest` fails if you do.
 
 - Default level is `Information`. The CLI exposes `--log-level <LEVEL>` (`Everything`, `DebugData`, `Transport`, `Debug`, `Information`, `Warning`, `Error`, `Critical`, `Nothing`).
-- Prefer the `Func<string>` overloads (`Logging.LogDebug(() => $"...")`) on hot paths — they check the threshold *before* invoking the generator, so a suppressed message costs nothing but a lambda. `Logging.IsEnabled(level)` is available for larger guarded blocks.
+- **Just write `Logging.LogDebug($"...")`.** `LogDebug`, `LogTransport`, `LogDebugData` and `Log` bind interpolated strings to an `[InterpolatedStringHandler]` (`Utils/Logging/LogInterpolatedStringHandlers.cs`), which checks the threshold *before* the interpolation runs. A suppressed message costs a comparison — nothing is formatted, boxed, or allocated. This is why hot paths did not need rewriting.
+- The `Func<string>` overloads still exist and also short-circuit; they are only worth reaching for when building the message needs statements rather than an expression. `Logging.IsEnabled(level)` guards larger blocks.
+- The saving is lost if you format eagerly yourself — `LogDebug("x " + Expensive())` or `LogDebug(string.Format(...))` build their argument before the call. Keep it an interpolated literal.
 
 ```bash
 dotnet run -c Release --project src/I2PRouterCli -- --netid 3 --log-level debug
