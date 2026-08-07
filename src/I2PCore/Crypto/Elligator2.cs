@@ -32,7 +32,7 @@ public static class Elligator2
 
         for (var i = 0; i < maxAttempts; i++)
         {
-            RandomNumberGenerator.Fill(privateKey);
+            privateKey.Randomize();
             X25519.ClampPrivateKey(privateKey);
 
             var publicKey = X25519.GetPublicKey(privateKey);
@@ -185,8 +185,7 @@ public static class Elligator2
 
     public static byte[] GenerateRandomRepresentative()
     {
-        var representative = new byte[32];
-        RandomNumberGenerator.Fill(representative);
+        var representative = BufUtils.RandomBytes(32);
         representative[31] &= 0x7F; // Clear top bit
         return representative;
     }

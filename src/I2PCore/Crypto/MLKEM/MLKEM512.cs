@@ -1,3 +1,4 @@
+using I2PCore.Utils;
 using System;
 using Org.BouncyCastle.Crypto.Generators;
 using Org.BouncyCastle.Crypto.Kems;
@@ -25,7 +26,7 @@ public class MLKEM512
     /// </summary>
     public static (byte[] publicKey, byte[] secretKey) GenerateKeyPair()
     {
-        var random = new SecureRandom();
+        var random = BufUtils.BcRandom;
         var keyGenParams = new MLKemKeyGenerationParameters(random, MLKemParameters.ml_kem_512);
         var keyPairGenerator = new MLKemKeyPairGenerator();
         keyPairGenerator.Init(keyGenParams);

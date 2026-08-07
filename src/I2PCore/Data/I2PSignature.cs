@@ -614,7 +614,7 @@ public class I2PSignature : I2PType
     /// </summary>
     public static (byte[] publicKey, byte[] privateKey) CreateMlDsa44RandomKeys()
     {
-        var random = new SecureRandom();
+        var random = BufUtils.BcRandom;
         var keyGenParams = new MLDsaKeyGenerationParameters(random, MLDsaParameters.ml_dsa_44);
         var keyPairGenerator = new MLDsaKeyPairGenerator();
         keyPairGenerator.Init(keyGenParams);
