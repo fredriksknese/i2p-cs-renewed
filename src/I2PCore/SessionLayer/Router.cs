@@ -283,6 +283,18 @@ public static class Router
                     Logging.LogWarning($"Router: Error stopping NetDb: {ex.Message}");
                 }
 
+                // 9b. Stop the DH key pair precalculation thread. It is started lazily on first
+                // use and used to run until process exit, so a host that embeds I2PCore could not
+                // get the thread back after Stop().
+                try
+                {
+                    I2PPrivateKey.StopPrecalculation();
+                }
+                catch (Exception ex)
+                {
+                    Logging.LogWarning($"Router: Error stopping key precalculation: {ex.Message}");
+                }
+
                 // 10. Reset router context for re-startability
                 try
                 {
