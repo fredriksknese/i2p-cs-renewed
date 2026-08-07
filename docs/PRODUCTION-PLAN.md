@@ -430,3 +430,35 @@ Three hosts, three signers, three pinned certificates. Tampered-fixture rejectio
 **Test-suite growth this phase:** 211 → 234 (`RouterLifecycleTest` 4, `KeyPrecalculationTest` 5, `DaemonHelperTest` 5, `TransportConcurrencyTest` 4, `UdpTunnelSessionTest` 5). Three fixtures start real routers or transport layers on netid 3 with reseed disabled, using ports 29090-29095 (new block in `PortAllocator.WellKnown`). Each self-skips if another fixture already owns the singleton. The unit suite is now ~1m50s, up from ~21s — almost entirely the lifecycle fixtures.
 
 **Next: Phase 3**, starting with **3-1** (`p3/i2pd-discovery`), still the plan's highest-value single change. i2pd 2.45.1 is at `/usr/sbin/i2pd`, service disabled, `I2PD_PATH` works.
+
+### Session 2 (continued) — 2026-08-08 — batches 2-7, 3-1 — PRs #16, #15, both merged
+
+**The integration suite is alive.** Batch 3-1 was worth its billing.
+
+| | integration tests |
+|---|---|
+| before 3-1 | **0 run** — 51 `Assert.Ignore`d |
+| after 3-1 | **51 run in 23m31s** — 25 passed, 23 failed, 3 skipped |
+
+Against i2pd **2.45.1 (0.9.57)** at `/usr/sbin/i2pd`, on **netid 99** (`I2pdConfigGenerator.TestNetworkId`) — stricter than the `--netid 3` rule and confirmed in the spawned `i2pd.conf`.
+
+**The 23 failures are the deliverable, not a regression.** They are the first real measurements against a reference peer and the input to Phases 4–5. Unit suite 239 (238 passed / 1 skipped), green in CI.
+
+**Why 3-1 mattered so much.** `FindI2pdBinary()` was `return I2pdBuilder.GetOrBuild();`, so `FindI2pdOnSystem()` — which honours `I2PD_PATH`, checks `PATH`, and lists `/usr/sbin/i2pd` — was dead code. Every availability check tried to git-clone and cmake i2pd instead of looking for the copy already installed. `~/.cache/i2p-cs-tests` has never existed on this machine, confirming no build ever completed. Three defects in the probe itself were fixed too: reading stdout after `WaitForExit` (deadlock), touching `ExitCode` without checking the process exited, and accepting any binary that exits 0 on `--strong`.
+
+**Batch 2-7 was unplanned and blocking.** 3-1's first CI run aborted with `Test host process crashed` — a `NullReferenceException` in `RoutersStatistics.GetStore()` on the NetDb worker thread. **Not caused by 3-1** (which touches integration-only infrastructure); a pre-existing race that the Phase 2 lifecycle fixtures made reachable, and intermittent — #14 ran all 235 green, #15 got to 129 and died.
+
+**Watch this failure mode.** A crashed host makes `dotnet test` print **`Passed!`** next to a non-zero exit and a total of 129 instead of 235. The 106 tests that never ran leave no failure, no skip, no trace. **Always check the test total, not just the pass/fail line** — a suite that quietly stops covering half of itself looks exactly like a green one.
+
+Fixes: `RoutersStatistics` no longer reads `NetDb.Inst` (path passed in by its owner — also a Phase 8 obstacle removed); `NetDb.Run()` gained the missing top-level `catch`, because an unhandled exception on any thread kills the process; and the `while (TransportProvider.Inst == null)` wait now honours `Terminated`, a window reachable in normal shutdown since `Router.Stop()` stops transports before NetDb.
+
+**Test honesty, again.** The 2-7 cycling tests **do not** reproduce the CI race — verified by reinstating the defect and watching them pass. The window needs `Stop()`'s 5 s join to time out, which an empty temp NetDb never causes. Rather than claim the coverage, the tests say so in their doc comments and are scoped to what they do guard. `StatisticsLoadDoesNotDependOnTheNetDbSingleton` is the real regression test and does fail against the unfixed code.
+
+**Findings for the rest of Phase 3:**
+
+1. **The integration suite takes ~23 minutes** and must run **serially** — fixtures share the `Router`/`TransportProvider` singletons and fixed ports 29000-29039. Batch 3-2 needs a job timeout and probably sharding before this can gate anything.
+2. **Spawned i2pd survives a killed test host.** `StopI2pd()` is correct but only runs via `Dispose()`, so a CI job that times out leaks i2pd into the runner. Wants a kill-on-close job object.
+3. **`NetDb.Load()` calls `DoBootstrap()` when it has too few routers.** Any fixture starting NetDb without `Bootstrap.Disabled = true` will attempt a live reseed from CI. Worth asserting in the harness.
+4. **`dotnet test` console output is unreliable for capture** — it uses `\r` progress rewriting, and a redirect can leave only a mangled tail. Use `--logger trx` with `--results-directory` for anything you intend to quote.
+
+**Next: 3-2** (`p3/i2pd-in-ci`), then 3-3/3-4 (the paired-object fixtures), 3-5 (golden vectors), 3-6 (catch audit).
