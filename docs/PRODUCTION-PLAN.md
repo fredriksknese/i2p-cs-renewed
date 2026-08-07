@@ -318,3 +318,23 @@ The single most informative check at any point: does `--filter TestCategory=Inte
 **Operational note.** `apt-get install i2pd` **auto-starts i2pd on the live network** (binds 4444/7656). Disabled with `sudo systemctl disable --now i2pd`. Check this on any new machine.
 
 **Next:** 0-4 (safe defaults) → 0-5 (self-test opt-out) → 0-6 (hot-path lazy logging), then Phase 1. The highest-value single change remains **3-1** (i2pd discovery), which activates the whole integration suite; i2pd is installed and `I2PD_PATH=/usr/sbin/i2pd` works.
+
+### Session 1 (continued) — batches 0-4, 0-5, 0-6 — PRs #2, #3, #4, all merged
+
+**Phase 0 is complete and Gate 0 is met.** Unit suite 188 passed / 0 failed / 1 skipped, green in CI on every PR.
+
+**0-4 (PR #2).** `EnableSSU2` → false, `ProxyEncryption` → `Ecies`, `ConnectionMigrationSupported` → false, and the `pq` RouterInfo option gated behind a new `RouterContext.EnablePqTransport` (`--experimental-pq`). Verified both directions with a RouterInfo dump: default has no `(pq:...)` and no SSU2 address; `--experimental-pq` brings `(pq:4)` back. `EnablePqTransport` must be assigned before `Router.Start()` — `NTCP2Host` reads it while publishing.
+
+**0-5 (PR #3).** The Noise N self-test now runs only with `--self-test` (`TunnelProvider.SelfTestEnabled`). It was writing 17 `LogCritical` lines into every startup — visible at *every* level, since Critical passes any threshold — while being structurally unable to fail: each check logged a bool, and the body swallowed exceptions. Assertions ported to `NoiseNSelfTest`.
+
+**0-6 (PR #4).** Deviated from the plan's stated approach, deliberately. Instead of converting 338 interpolated `LogDebug($"...")` sites to `Func<string>` lambdas — a ~340-line diff through the protocol files R6 warns about — added `[InterpolatedStringHandler]` types so the threshold is checked *before* the interpolation runs. Fixes all 338 with zero call-site changes and keeps fixing code not yet written. R2 is retired.
+
+**Findings for later phases:**
+
+1. **`ECIESTunnelDecrypt` is not unit-testable (Phase 8).** It takes decryption keys as constructor arguments but selects our record by reading `RouterContext.Inst` directly (`ECIESTunnelDecrypt.cs:56-57`). The two can disagree — driven from a standalone `RouterContext` it returns `Success=false`, while reporting success at runtime only because the singleton is the identity that built the record. The old self-test could never have caught this class of bug; it only tested the singleton against itself. `p8/instance-routercontext` should pick this up.
+2. **`SendPathResponse` never sent anything** (`SSU2Session.cs:360-372`) and logged "PathResponse sent". Batch 0-1 made that line reachable in Release, so it would have been actively misleading in the field. Message corrected; batch 4-3 still owns the implementation. **General lesson: as later batches make more logging visible, read the strings for truthfulness — some of them lie.**
+3. **`GarlicTest.TestEncodeDecodeLoop` flaked once** and did not recur in 4 full-suite and 10 fixture runs. Not attributed to 0-6 — no log interpolation calls a cursor-advancing method, and the test does no logging-dependent parsing — but **not proven pre-existing either**. The test is randomized; if it returns, it is a candidate for the deterministic RNG seam in batch 1-4.
+
+**Phase 0 scoreboard:** 0-1 ✅ 0-2 ✅ 0-3 ✅ 0-4 ✅ 0-5 ✅ 0-6 ✅
+
+**Next session starts at Phase 1** (`p1/reseed-tls-verification`, then SU3 fail-closed, then CSPRNG). Note R3: ship 1-1 before 1-2 tightens anything, so `--insecure-reseed` exists as an escape hatch first.
