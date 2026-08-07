@@ -347,8 +347,7 @@ public class PaddingBlock : SSU2Block
         result[1] = (byte)(Length >> 8);
         result[2] = (byte)(Length & 0xFF);
         // Padding data is random or zeros
-        var random = new Random();
-        random.NextBytes(new Span<byte>(result, 3, Length));
+        result.Randomize(3, Length);
         return result;
     }
 

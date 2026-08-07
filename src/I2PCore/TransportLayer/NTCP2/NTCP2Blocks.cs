@@ -297,11 +297,9 @@ public class NTCP2PaddingBlock : NTCP2Block
 
     public override byte[] Serialize()
     {
-        var result = new byte[Length];
-        // Padding data is random or zeros
-        var random = new Random();
-        random.NextBytes(result);
-        return result;
+        // Padding must be unpredictable: it is the only variable-length field an observer can
+        // use to fingerprint us, and Random is a public-state PRNG.
+        return BufUtils.RandomBytes(Length);
     }
 
     public override void Parse(I2PBufferCursor data)

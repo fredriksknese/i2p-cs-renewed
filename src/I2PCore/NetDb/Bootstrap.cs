@@ -149,13 +149,12 @@ public class Bootstrap
         var servers = new List<string>(DefaultBootstrapUrls);
         servers.AddRange(YggdrasilBootstrapUrls);
 
-        var rng = new Random();
         var totalImported = 0;
         var serversUsed = 0;
 
         while (servers.Count > 0 && serversUsed < MAX_RESEED_SERVERS)
         {
-            var idx = rng.Next(servers.Count);
+            var idx = BufUtils.RandomInt(servers.Count);
             var url = servers[idx];
             servers.RemoveAt(idx);
 
