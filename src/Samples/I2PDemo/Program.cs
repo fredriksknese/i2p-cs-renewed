@@ -189,14 +189,21 @@ internal class Program
         Logging.LogInformation(
             $"MyDestination: {_publishedDestination.Destination.IdentHash} {_myDestinationInfo.Destination.Certificate}");
 
-        while (true)
+        // Batch 2-3 (docs/PRODUCTION-PLAN.md): DaemonHelper had signal handling implemented and
+        // no caller, so Ctrl+C killed the process and Router.Stop() never ran. Setting
+        // e.Cancel = true lets the process survive the signal and shut down properly.
+        using var daemon = new DaemonHelper();
+        daemon.OnReload(Router.ReloadConfig);
+        daemon.RegisterSignalHandlers();
+
+        while (!daemon.IsShuttingDown)
             try
             {
                 _connected = true;
 
                 var sendevents = 0;
 
-                while (_connected)
+                while (_connected && !daemon.IsShuttingDown)
                 {
                     Thread.Sleep(2000);
 
@@ -242,6 +249,9 @@ internal class Program
             {
                 Logging.Log(ex);
             }
+
+        Logging.LogInformation("Shutdown requested, stopping router...");
+        Router.Stop();
     }
 
     private static void MyOrigin_ClientStateChanged(ClientDestination dest, ClientDestination.ClientStates state)
