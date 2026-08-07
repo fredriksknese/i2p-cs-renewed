@@ -121,6 +121,10 @@ public class PortAllocator
         // test running in the same process as the integration suite cannot collide with one.
         public const int LifecycleNtcp2 = 29090;
         public const int LifecycleSsu2 = 29091;
+
+        // Transport concurrency tests (batch 2-4) — same block.
+        public const int TransportConcurrencyNtcp2 = 29092;
+        public const int TransportConcurrencySsu2 = 29093;
     }
 
     /// <summary>

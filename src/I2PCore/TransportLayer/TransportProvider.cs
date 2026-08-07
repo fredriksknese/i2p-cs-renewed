@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -35,7 +35,6 @@ public class TransportProvider
 
     private readonly ITransportProtocol[] TransportProtocols;
 
-    private readonly object TsSearchLock = new();
 
     public ConcurrentDictionary<I2PIdentHash, EstablishedTransportInfo> EstablishedTransports = new();
 
@@ -127,6 +126,14 @@ public class TransportProvider
         }
     }
 
+    /// <summary>
+    ///     Raised for every I2NP message arriving on any transport.
+    ///     <para>
+    ///         Handlers must be thread-safe and non-blocking: they are invoked concurrently from
+    ///         whichever transport receive thread took the message, and anything slow here stalls
+    ///         that peer's receive loop. Queue and return.
+    ///     </para>
+    /// </summary>
     public event Action<ITransport, Ii2NpHeader> IncomingMessage;
 
     public static void Start()
@@ -327,40 +334,65 @@ public class TransportProvider
         t.Terminate("Manual disconnect");
     }
 
+    // Batch 2-4 (docs/PRODUCTION-PLAN.md). This method used to hold one instance-wide lock
+    // (TsSearchLock) across CreateTransport(), which connects a socket and starts a handshake.
+    // Every send goes through here for its cache lookup, so a single slow or unreachable peer
+    // -- a TCP connect to a dead address, a DNS lookup -- blocked *all* outbound traffic for the
+    // duration, including sends to peers already connected.
+    //
+    // The cache lookup now takes no lock at all: EstablishedTransports is a ConcurrentDictionary.
+    // The lock's only other job was stopping two threads from opening two connections to the same
+    // peer, which a per-destination Lazy does better -- concurrent callers for one destination
+    // share a single connect, and callers for different destinations no longer wait on each other.
+    private readonly ConcurrentDictionary<I2PIdentHash, Lazy<ITransport>> PendingConnects = new();
+
     protected ITransport GetEstablishedTransport(I2PIdentHash dest, bool create)
     {
-        lock (TsSearchLock)
+        if (EstablishedTransports.TryGetValue(dest, out var result))
         {
-            if (EstablishedTransports.TryGetValue(dest, out var result))
+            if (result == null)
             {
-                if (result == null)
-                    Logging.LogTransport(
-                        $"TransportProvider: GetEstablishedTransport: WARNING! " +
-                        $"EstablishedTransports contains null ref for {dest.Id32Short}!");
-                return result.Transport;
+                Logging.LogTransport(
+                    $"TransportProvider: GetEstablishedTransport: WARNING! " +
+                    $"EstablishedTransports contains null ref for {dest.Id32Short}!");
+                return null;
             }
 
-            if (create)
-            {
-                var ri = NetDb.Inst[dest];
-                if (ri == null) return null;
-                if (ri.Identity.IdentHash != dest)
-                    throw new ArgumentException($"NetDb mismatch. Search for " +
-                                                $"{dest.Id32} returns {ri?.Identity?.IdentHash.Id32}");
-
-                var transp = CreateTransport(ri);
-                if (transp != null)
-                {
-                    // AddTransport already added it to EstablishedTransports
-                    // We just need to ensure the events are hooked up (if not already)
-                    // Actually, AddTransport already hooks them up.
-                }
-
-                return transp;
-            }
+            return result.Transport;
         }
 
-        return null;
+        if (!create) return null;
+
+        // ExecutionAndPublication: exactly one thread runs the factory, the rest block on its
+        // result rather than starting connects of their own.
+        var pending = PendingConnects.GetOrAdd(
+            dest,
+            d => new Lazy<ITransport>(() => Connect(d), LazyThreadSafetyMode.ExecutionAndPublication));
+
+        try
+        {
+            return pending.Value;
+        }
+        finally
+        {
+            // Lazy caches a thrown exception forever, so the entry must go either way or the
+            // peer would be permanently unreachable after one failed connect.
+            PendingConnects.TryRemove(dest, out _);
+        }
+    }
+
+    private ITransport Connect(I2PIdentHash dest)
+    {
+        var ri = NetDb.Inst[dest];
+        if (ri == null) return null;
+
+        if (ri.Identity.IdentHash != dest)
+            throw new ArgumentException($"NetDb mismatch. Search for " +
+                                        $"{dest.Id32} returns {ri.Identity.IdentHash.Id32}");
+
+        // CreateTransport -> AddTransport puts the result in EstablishedTransports and hooks its
+        // events, so nothing further is needed here.
+        return CreateTransport(ri);
     }
 
     public ITransport GetTransport(I2PIdentHash dest)
@@ -747,13 +779,27 @@ public class TransportProvider
         Remove(instance);
     }
 
+    // Batch 2-4 (docs/PRODUCTION-PLAN.md). This was:
+    //
+    //     if (IncomingMessage != null)
+    //         lock (IncomingMessage) { IncomingMessage(instance, msg); }
+    //
+    // which is broken three ways. Delegates are immutable, so every += or -= replaces the field
+    // with a *different* object: two threads locking "it" across a subscription change lock two
+    // different objects and exclude nothing. The field is also read three times -- null check,
+    // lock, invoke -- so an unsubscribe racing the check gives lock(null) (ArgumentNullException)
+    // or a null invoke (NullReferenceException). And it serialised every inbound message from
+    // every peer through one monitor on the hottest path in the router.
+    //
+    // Capturing once into a local is the standard idiom and fixes all three. It does mean
+    // handlers are now invoked concurrently, which is why IncomingMessage documents that
+    // requirement. Today's only subscriber, TunnelProvider.DistributeIncomingMessage, enqueues
+    // to a ConcurrentQueue and sets an event -- thread-safe by construction, and it never
+    // needed the serialisation.
     internal void DistributeIncomingMessage(ITransport instance, Ii2NpHeader msg)
     {
-        if (IncomingMessage != null)
-            lock (IncomingMessage)
-            {
-                IncomingMessage(instance, msg);
-            }
+        var handlers = IncomingMessage;
+        handlers?.Invoke(instance, msg);
     }
 
     #endregion
