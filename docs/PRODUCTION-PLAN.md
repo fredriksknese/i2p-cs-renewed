@@ -292,3 +292,29 @@ The single most informative check at any point: does `--filter TestCategory=Inte
 ## Session log
 
 *(Appended by each executing session: batch ID, PR number, result, surprises.)*
+
+### Session 1 — 2026-08-07 — batches 0-1, 0-2, 0-3 — PR #1, merged
+
+**Result:** Phase 0 observability and CI done. Unit suite **176 passed / 0 failed / 1 skipped**, green in CI on .NET 10 (run 31186089798, 1m6s). Gate 0 met except the RouterInfo default-advertisement check, which is batch 0-4.
+
+**Baseline, measured before any change.** Debug full rebuild 59 warnings / 0 errors; Release the same; unit filter 169 passed / 4 failed / 1 skipped; 11 `[Conditional("DEBUG")]` at exactly the line numbers the plan lists. i2pd **2.45.1 (0.9.57)** at `/usr/sbin/i2pd` from apt.
+
+**Where the plan was wrong, and what to trust less because of it:**
+
+1. **`Logging.LogDebug` call sites: 530, not 543.** Immaterial, but it means the audit's counts are approximate — don't treat any other stated count as a precondition.
+2. **Push access does not exist.** The plan says remote `samueldaaaarling/i2p-cs-renewed`, `gh` authed. The authenticated account (`fredriksknese`) has **pull-only** on it, and that repo has **pull requests disabled** (its `/pulls` API 404s while other endpoints work). Work now goes through the fork `fredriksknese/i2p-cs-renewed`, which is where PR #1 landed. **Later sessions: branch and PR against the fork.** The upstream needs an owner-side change before the plan's stated workflow is possible.
+3. **`TestStreamingConstants` hid two extra defects.** NUnit aborts at the first failed assertion, so "one failing constant" was really three. Expect this pattern elsewhere in this repo's tests — a single reported failure is a lower bound.
+4. **The `[SELF-TEST]` startup spam logs at Information**, so 0-1 did not quiet it. That is batch 0-5, and it is noisier than the plan implies.
+
+**Decisions recorded in-code:**
+
+- `I2PStream.cs` — `INITIAL_WINDOW_SIZE` 64→10, `INITIAL_RTT` 50→1500 ms, `INITIAL_RTO` 1000→9000 ms, verified against i2pd `openssl`/`libi2pd/Streaming.h`. **Phase 5 must re-validate these against a live i2pd peer** rather than trust the change; they alter congestion and retransmit behaviour and nothing end-to-end exercises them yet.
+- `Logging.cs` — runtime-only filtering, default `Information`, threshold checked before `Func<string>` generators run. `LoggingVisibilityTest` locks this in.
+- `I2PCore.csproj` — `DefineConstants` now appends rather than replaces; fixed a `,`/`;` typo that collapsed three `NOLOG_` names into one symbol. Inert today, would have bitten 6-1.
+- `NTCP2PQHandshakeTest` — quarantined `[Category("Experimental")]` for 9-3. **R9 is lower than feared:** it fails with `InvalidOperationException: Must call GenerateBobEphemeralKeys first` and the test never makes that call, so it looks test-side, not a `NoiseXK` defect shared with the classical path.
+
+**Deviation from the batch rules.** Three batches in one PR (0-1 + 0-3 + 0-2). The plan already sanctions folding 0-2 into 0-1; 0-3 had to join because the moment CI runs the unit suite the 4 pre-existing failures make it red, and "merge only when green" and "don't end session 1 red" are otherwise unsatisfiable. Kept as separate commits. Code+tests 321 lines, under the 400 limit; the rest is docs.
+
+**Operational note.** `apt-get install i2pd` **auto-starts i2pd on the live network** (binds 4444/7656). Disabled with `sudo systemctl disable --now i2pd`. Check this on any new machine.
+
+**Next:** 0-4 (safe defaults) → 0-5 (self-test opt-out) → 0-6 (hot-path lazy logging), then Phase 1. The highest-value single change remains **3-1** (i2pd discovery), which activates the whole integration suite; i2pd is installed and `I2PD_PATH=/usr/sbin/i2pd` works.
