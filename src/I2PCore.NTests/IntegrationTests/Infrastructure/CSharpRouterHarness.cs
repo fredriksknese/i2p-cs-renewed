@@ -137,6 +137,22 @@ public class CSharpRouterHarness : IDisposable
             $"netId={I2PConstants.I2PNetworkId}, " +
             $"identity={ctx.MyRouterIdentity.IdentHash.Id32Short:x8}");
 
+        // Batch 4-0e: configure the client services BEFORE Router.Start(), because
+        // Router.Start() starts ClientContext itself. This block used to sit after it, so the
+        // SAM bridge came up on its default 7656 and every test connecting to SamPort found
+        // nothing listening. ClientContext.Start() now reconciles rather than discarding, so
+        // this ordering is belt-and-braces — but it is also the honest order: settings before
+        // the thing that reads them.
+        ClientContext.Inst.SetConfig(
+            ClientContext.CfgSamEnabled, "true");
+        ClientContext.Inst.SetConfig(
+            ClientContext.CfgSamPort, SamPort.ToString());
+        // Disable other services to avoid port conflicts with a live router on this machine
+        ClientContext.Inst.SetConfig(
+            ClientContext.CfgHttpProxyEnabled, "false");
+        ClientContext.Inst.SetConfig(
+            ClientContext.CfgSocksProxyEnabled, "false");
+
         // Track if router was already running before we call Start().
         // Router.Start() is a no-op if already running, but we must not stop it
         // in that case — stopping would kill the shared singleton for other test fixtures.
@@ -146,20 +162,14 @@ public class CSharpRouterHarness : IDisposable
         Router.Start();
         _started = true;
 
-        // Start SAM bridge for data transfer tests
         try
         {
-            ClientContext.Inst.SetConfig(
-                ClientContext.CfgSamEnabled, "true");
-            ClientContext.Inst.SetConfig(
-                ClientContext.CfgSamPort, SamPort.ToString());
-            // Disable other services to avoid port conflicts with live router
-            ClientContext.Inst.SetConfig(
-                ClientContext.CfgHttpProxyEnabled, "false");
-            ClientContext.Inst.SetConfig(
-                ClientContext.CfgSocksProxyEnabled, "false");
             ClientContext.Inst.Start();
-            Logging.LogInformation($"SAM bridge started on port {SamPort}");
+
+            // Report what is bound, not what was asked for. The old message printed SamPort
+            // unconditionally and so claimed a bridge on 29002 while one was running on 7656.
+            var bound = ClientContext.Inst.SAMBridge is null ? "nothing" : $"port {SamPort}";
+            Logging.LogInformation($"C# test router SAM bridge: {bound}");
         }
         catch (Exception ex)
         {

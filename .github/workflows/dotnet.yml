@@ -147,11 +147,17 @@ jobs:
     # and C# routers with --netid 99 --disable-reseed, so nothing here reaches the
     # live network. ScaledNetwork and MultiHop tests carrying [Category("Integration")]
     # are included by this filter, exactly as in the local command in the plan.
+    #
+    # Batch 4-0e added the Experimental exclusion, which the unit filter above has always
+    # had. Quarantine has to mean quarantined *everywhere*, or a test marked Experimental
+    # for Phase 5 still runs here — and a quarantined integration test is quarantined
+    # precisely because of how it fails. TestSend5MB_ECIES_X25519 hangs and then takes the
+    # test host down with it, which erased the eleven ScaledNetwork tests that run after it.
     - name: Integration tests
       continue-on-error: true
       run: >
         dotnet test src/I2PCore.NTests -c Release --no-build
-        --filter "TestCategory=Integration"
+        --filter "TestCategory=Integration&TestCategory!=Experimental"
         --logger "trx;LogFileName=integration-tests.trx"
         --results-directory TestResults
 

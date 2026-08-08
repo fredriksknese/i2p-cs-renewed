@@ -71,6 +71,13 @@ public class ClientContext
 
     private volatile bool IsRunning;
 
+    // Batch 4-0e: the port each listener is actually bound to, as opposed to the port the
+    // configuration currently asks for. The two used to be assumed equal, which is precisely
+    // the bug — see Start(). 0 means "not running".
+    private int _samPortInUse;
+    private int _httpProxyPortInUse;
+    private int _socksProxyPortInUse;
+
     private ClientContext()
     {
         // Seed with defaults
@@ -141,29 +148,81 @@ public class ClientContext
     // --- Lifecycle ---
 
     /// <summary>
-    ///     Start all enabled services based on current configuration.
+    ///     Start all enabled services based on current configuration, and bring already-running
+    ///     services into line with it.
+    ///
+    ///     <para>
+    ///         <b>Batch 4-0e (docs/PRODUCTION-PLAN.md). This used to begin with
+    ///         <c>if (IsRunning) return;</c>, which silently discarded configuration.</b>
+    ///         <see cref="Router.Start" /> calls this before any host application has had a
+    ///         chance to configure it, so the services came up on their defaults — SAM 7656,
+    ///         HTTP proxy 4444, SOCKS 4447 — and every <see cref="SetConfig" /> a host made
+    ///         afterwards was applied to an object that had already started and then ignored.
+    ///     </para>
+    ///     <para>
+    ///         The visible consequences were that <c>--sam-port</c> and
+    ///         <c>--http-proxy-port</c> did nothing, <c>--sam-port 0</c> did not disable SAM,
+    ///         and the CLI printed ports it had never bound. The integration suite lost 13 tests
+    ///         to it, all reported as "failed to connect to the SAM bridge" on a port nothing
+    ///         was listening on.
+    ///     </para>
+    ///     <para>
+    ///         So this is now <b>reconciling rather than one-shot</b>: calling it again applies
+    ///         whatever the configuration currently says, restarting any listener whose port or
+    ///         enabled-state no longer matches. Fixing only the call order in the two hosts in
+    ///         this repository would have left the same trap set for the next one — a Start()
+    ///         that ignores configuration is the defect, not the order it happens to be called
+    ///         in.
+    ///     </para>
     /// </summary>
     public void Start()
     {
         lock (LifecycleLock)
         {
-            if (IsRunning)
-            {
-                Logging.LogWarning("ClientContext: Already running.");
-                return;
-            }
+            var firstStart = !IsRunning;
 
-            Logging.LogInformation("ClientContext: Starting services...");
+            Logging.LogInformation(firstStart
+                ? "ClientContext: Starting services..."
+                : "ClientContext: Reapplying configuration to running services...");
 
             StartAddressBook();
             StartSAMBridge();
             StartHTTPProxy();
             StartSOCKSProxy();
-            LoadTunnelsConfig();
+
+            // Tunnels are keyed by name and started from a file; re-reading it on a
+            // reconfigure would re-add every tunnel already running.
+            if (firstStart) LoadTunnelsConfig();
 
             IsRunning = true;
             Logging.LogInformation("ClientContext: All enabled services started.");
         }
+    }
+
+    /// <summary>
+    ///     Decide what a running listener should do about the current configuration: keep it as
+    ///     it is, or stop so the caller can bring it back up on the new settings.
+    ///
+    ///     <para>
+    ///         Batch 4-0e. This sits at the top of each <c>StartX</c> rather than in
+    ///         <see cref="Start" />, because hosts call the individual starters too —
+    ///         <c>I2PRouterWeb</c>'s <c>RouterService.StartHttpProxy</c> sets a port and calls
+    ///         <see cref="StartHTTPProxy" /> directly. Reconciling only inside <c>Start()</c>
+    ///         would have fixed the CLI and left the web console still unable to move a port.
+    ///     </para>
+    /// </summary>
+    /// <returns>true if the caller should go on to start the service.</returns>
+    private bool ShouldRestart(string label, bool running, bool enabled, int wantedPort, int boundPort)
+    {
+        if (!running) return true;
+
+        if (enabled && wantedPort == boundPort) return false;
+
+        Logging.LogInformation(
+            $"ClientContext: {label} is bound to port {boundPort} but configuration now says "
+            + $"enabled={enabled} port={wantedPort}; restarting it.");
+
+        return true;
     }
 
     /// <summary>
@@ -419,7 +478,10 @@ public class ClientContext
 
     public void StartSAMBridge()
     {
-        if (SAMBridge != null) return;
+        if (!ShouldRestart("SAM bridge", SAMBridge != null, GetConfigBool(CfgSamEnabled),
+                GetConfigInt(CfgSamPort, 7656), _samPortInUse)) return;
+
+        if (SAMBridge != null) StopSAMBridge();
         if (!GetConfigBool(CfgSamEnabled)) return;
 
         StartAddressBook();
@@ -429,6 +491,7 @@ public class ClientContext
         {
             SAMBridge = new SAMBridge(listenPort: port, addressBook: AddressBook);
             SAMBridge.Start();
+            _samPortInUse = port;
             Logging.LogInformation($"ClientContext: SAM bridge started on port {port}.");
         }
         catch (Exception ex)
@@ -441,11 +504,15 @@ public class ClientContext
     {
         SAMBridge?.Dispose();
         SAMBridge = null;
+        _samPortInUse = 0;
     }
 
     public void StartHTTPProxy()
     {
-        if (HTTPProxy != null) return;
+        if (!ShouldRestart("HTTP proxy", HTTPProxy != null, GetConfigBool(CfgHttpProxyEnabled),
+                GetConfigInt(CfgHttpProxyPort, 4444), _httpProxyPortInUse)) return;
+
+        if (HTTPProxy != null) StopHTTPProxy();
         if (!GetConfigBool(CfgHttpProxyEnabled)) return;
 
         var port = GetConfigInt(CfgHttpProxyPort, 4444);
@@ -470,6 +537,7 @@ public class ClientContext
             if (!string.IsNullOrWhiteSpace(outproxy)) HTTPProxy.OutproxyUrl = outproxy;
 
             HTTPProxy.Start();
+            _httpProxyPortInUse = port;
             Logging.LogInformation($"ClientContext: HTTP proxy started on {address}:{port}.");
         }
         catch (Exception ex)
@@ -482,11 +550,15 @@ public class ClientContext
     {
         HTTPProxy?.Dispose();
         HTTPProxy = null;
+        _httpProxyPortInUse = 0;
     }
 
     public void StartSOCKSProxy()
     {
-        if (SOCKSProxy != null) return;
+        if (!ShouldRestart("SOCKS proxy", SOCKSProxy != null, GetConfigBool(CfgSocksProxyEnabled),
+                GetConfigInt(CfgSocksProxyPort, 4447), _socksProxyPortInUse)) return;
+
+        if (SOCKSProxy != null) StopSOCKSProxy();
         if (!GetConfigBool(CfgSocksProxyEnabled)) return;
 
         var port = GetConfigInt(CfgSocksProxyPort, 4447);
@@ -511,6 +583,7 @@ public class ClientContext
             SOCKSProxy.ResolveHostname = hostname => { return AddressBook?.Lookup(hostname); };
 
             SOCKSProxy.Start();
+            _socksProxyPortInUse = port;
             Logging.LogInformation($"ClientContext: SOCKS proxy started on {address}:{port}.");
         }
         catch (Exception ex)
@@ -523,6 +596,7 @@ public class ClientContext
     {
         SOCKSProxy?.Dispose();
         SOCKSProxy = null;
+        _socksProxyPortInUse = 0;
     }
 
     public void StopTunnel(string name)

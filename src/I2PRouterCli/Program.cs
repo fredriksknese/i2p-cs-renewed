@@ -320,6 +320,33 @@ internal class Program
         // Apply the new settings
         RouterContext.Inst.ApplyNewSettings();
 
+        // Batch 4-0e: client-service configuration must be set before Router.Start(), which
+        // starts ClientContext itself. It used to be set afterwards, so --sam-port and
+        // --http-proxy-port were applied to services already listening on their defaults
+        // (7656/4444/4447) and were silently ignored — including --sam-port 0, which is meant
+        // to disable SAM and did not.
+        ClientContext.Inst.SetConfig(
+            ClientContext.CfgHttpProxyPort, httpProxyPort.ToString());
+        ClientContext.Inst.SetConfig(
+            ClientContext.CfgHttpProxyEnabled, "true");
+
+        if (samPort > 0)
+        {
+            ClientContext.Inst.SetConfig(
+                ClientContext.CfgSamEnabled, "true");
+            ClientContext.Inst.SetConfig(
+                ClientContext.CfgSamPort, samPort.ToString());
+        }
+        else
+        {
+            ClientContext.Inst.SetConfig(
+                ClientContext.CfgSamEnabled, "false");
+        }
+
+        // Disable SOCKS to avoid port conflicts
+        ClientContext.Inst.SetConfig(
+            ClientContext.CfgSocksProxyEnabled, "false");
+
         // Start the router
         Router.Start();
 
@@ -348,37 +375,26 @@ internal class Program
             Logging.LogWarning($"Failed to export RouterInfo: {ex.Message}");
         }
 
-        // Start HTTP proxy
+        // Start client services. Configuration was applied before Router.Start() above;
+        // this call is what brings up anything Router.Start() did not.
         try
         {
-            ClientContext.Inst.SetConfig(
-                ClientContext.CfgHttpProxyPort, httpProxyPort.ToString());
-            ClientContext.Inst.SetConfig(
-                ClientContext.CfgHttpProxyEnabled, "true");
-            // Configure SAM bridge
-            if (samPort > 0)
-            {
-                ClientContext.Inst.SetConfig(
-                    ClientContext.CfgSamEnabled, "true");
-                ClientContext.Inst.SetConfig(
-                    ClientContext.CfgSamPort, samPort.ToString());
-                Console.WriteLine($"SAM bridge enabled on port {samPort}");
-            }
-            else
-            {
-                ClientContext.Inst.SetConfig(
-                    ClientContext.CfgSamEnabled, "false");
-            }
-
-            // Disable SOCKS to avoid port conflicts
-            ClientContext.Inst.SetConfig(
-                ClientContext.CfgSocksProxyEnabled, "false");
             ClientContext.Inst.Start();
-            Console.WriteLine($"HTTP proxy started on 127.0.0.1:{httpProxyPort}");
+
+            // Batch 4-0e: report what is listening, not what was requested. These lines used to
+            // print the requested ports unconditionally, after a Start() that had discarded
+            // them — so the CLI announced a SAM bridge on --sam-port while one was running on
+            // 7656, and announced an HTTP proxy that was on 4444.
+            Console.WriteLine(ClientContext.Inst.SAMBridge is null
+                ? "SAM bridge: not running"
+                : $"SAM bridge listening on 127.0.0.1:{samPort}");
+            Console.WriteLine(ClientContext.Inst.HTTPProxy is null
+                ? "HTTP proxy: not running"
+                : $"HTTP proxy listening on 127.0.0.1:{httpProxyPort}");
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Failed to start HTTP proxy: {ex.Message}");
+            Console.WriteLine($"Failed to start client services: {ex.Message}");
             Logging.Log(ex);
         }
 
