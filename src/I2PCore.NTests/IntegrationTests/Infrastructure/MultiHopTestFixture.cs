@@ -88,7 +88,13 @@ public class MultiHopTestFixture
 
         // 2. Reuse C# Router A from TestNetworkFixture if already running;
         //    otherwise start a fresh in-process router.
-        if (TestNetworkFixture.CSharpRouter != null)
+        //
+        // Batch 4-0c: "if already running" is what this comment always claimed and what the
+        // code did not do — it tested the reference for null, which stays non-null after
+        // TestNetworkFixture disposes the router. Reusing a stopped router here takes its
+        // SAM bridge down with it, which is what "Failed to connect to SAM bridge at
+        // 127.0.0.1:29002" meant in the MultiHop tests.
+        if (TestNetworkFixture.CSharpRouter?.IsRunning == true)
         {
             CSharpA = TestNetworkFixture.CSharpRouter;
             _ownsCSharpA = false;

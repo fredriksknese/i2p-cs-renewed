@@ -52,6 +52,27 @@ public class CSharpRouterHarness : IDisposable
     public int SamPort { get; }
     public int I2cpPort { get; }
 
+    /// <summary>
+    ///     Whether this harness has a router that is actually usable right now.
+    ///
+    ///     <para>
+    ///         Batch 4-0c (docs/PRODUCTION-PLAN.md). <b>A harness object outliving its router
+    ///         is what broke 11 integration tests.</b> The router's state lives in process-wide
+    ///         singletons, and <see cref="I2PCore.NetDb.NetDb.Stop" /> sets <c>NetDb.Inst</c> to
+    ///         null — so once any fixture disposes a harness, every other harness object in the
+    ///         process is a live C# reference to a dead router. <c>ScaledNetworkFixture</c>
+    ///         tested <c>TestNetworkFixture.CSharpRouter != null</c>, which stayed true after
+    ///         teardown, and went on to call <see cref="InjectPeerRouterInfo" /> —
+    ///         <c>NetDb.Inst.AddRouterInfo</c> on a null <c>Inst</c>.
+    ///     </para>
+    ///     <para>
+    ///         So <b>never branch on a harness reference being non-null</b>; branch on this.
+    ///         It asks the singletons themselves, because they, not this object, are the router.
+    ///     </para>
+    /// </summary>
+    public bool IsRunning =>
+        _started && !_disposed && NetDb.Inst != null && TransportProvider.Inst != null;
+
     public void Dispose()
     {
         if (_disposed) return;
@@ -254,9 +275,21 @@ public class CSharpRouterHarness : IDisposable
                 Logging.LogWarning($"Error stopping C# router: {ex.Message}");
             }
 
-            // Restore defaults only when we own the router
-            I2PConstants.I2PNetworkId = 0x02;
-            Bootstrap.Disabled = false;
+            // Batch 4-0c: this used to restore I2PConstants.I2PNetworkId = 0x02 and
+            // Bootstrap.Disabled = false here, under the comment "restore defaults".
+            //
+            // Netid 2 is the live I2P network and that second line switches reseed back
+            // on, so the "default" being restored was: talk to the real network, and
+            // fetch peers from it. These are process-wide statics in a host that runs
+            // many fixtures in sequence, and any router started afterwards that does not
+            // go through Start() — ScaledNetworkFixture's reuse path, for one — inherits
+            // them. CLAUDE.md and docs/PRODUCTION-PLAN.md rule 5 both forbid netid 2
+            // outright until Gate 6.
+            //
+            // There is no correct value to restore. A test process has no legitimate
+            // non-test consumer of these globals, so the safe thing is to leave the test
+            // network id in place and leave reseed disabled. NetworkIdIsNeverRestoredToLive
+            // in CSharpRouterHarnessTest fails if either line comes back.
             StreamUtils.AppPathOverride = null;
         }
     }
