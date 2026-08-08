@@ -925,3 +925,21 @@ Session 4 recorded, as evidence, that `ScaledNetworkFixture` "never logged a lin
 #### Still open: the other crash cause
 
 `[CancelAfter(n)]` cancels a `CancellationToken` NUnit passes **as a test-method parameter**, and none of the 23 tests carrying the attribute declares one — so a timeout marks the test failed while its thread runs on, and the orphans can take the host down. Two of the three crashed runs had exactly that signature. It is independent of the port sweep, unfixed, and it will resurface as Phase 5 lets more tests reach a real transfer. Give those tests a `CancellationToken` parameter and thread it through `SAMHelper`.
+
+### Session 4 (continued) — 2026-08-08 — batch 4-1a — PR #28, merged
+
+**Unit suite 279 passed / 0 failed / 1 skipped** (was 274), both CI jobs green, integration **52 / 49 / 29 passed / 20 failed / 3 skipped** — unchanged, and expected to be: 4-1a repairs data-phase framing, and SSU2 still cannot complete a handshake, so no data phase runs.
+
+The SSU2 data phase carried its own self-agreeing convention error. Three defects, one cause — nothing had ever built *and* parsed a data packet in anger:
+
+1. **The header was invented.** `BuildEncryptedPacket` wrote 2 bytes of connection ID at 0-1, the packet number at **4**, and a type byte at **2**, while every reader takes the type from **12**. `Parse` mirrored the same layout, so build/parse round-tripped perfectly. **Truncating the 64-bit connection ID to its top 16 bits was the worse half** — two sessions agreeing in those bits were indistinguishable. `SSU2Header.ToByteArray`/`ParseShortHeader` already emit and read the correct form and the long-header path has always used them; both sides now use that one definition.
+2. **`BuildWithBlock` encrypted nothing** — it took `dataKey` and `headerKey2` and used neither, returning the bare block list. Every relay-tag request and peer test `SendBlock` has ever sent went out unframed and in the clear.
+3. **The type peek dropped every data packet** — it handed the whole packet to `DecryptShortHeader`, which throws unless the array is exactly 16 bytes.
+
+**The tests deliberately do not assert against `SSU2DataPacket`'s own round trip**, because that round trip is exactly what passed throughout the defect's life. They assert against `SSU2Header` and hand-computed offsets, and check that the block's plaintext bytes do not appear in the packet. 4 of 5 confirmed red with the defects reinstated.
+
+**Not verified against i2pd, and the plan should not record otherwise.** A Data golden vector needs a completed handshake, blocked on 4-0b and 4-2. What is proven is internal consistency with the single definition of the wire format.
+
+**A pattern worth naming, now that it has appeared four times.** 4-0 (header keystream block), 4-0b (48-byte pass), 4-1a (data header), and the `SSU2DataPacket` build/parse pair are all the same failure: *two halves of this codebase agreeing with each other on a convention the network does not use*. Every one was invisible to a round-trip test and every one needed either a reference implementation or an independent re-derivation to see. **When reviewing SSU2 code, a passing round-trip test is not evidence of anything — ask what the peer does.**
+
+**Next: 4-2a** (`p4/ssu2-retry-token`, responder half) — answer an inbound TokenRequest with a Retry. It touches no `SSU2Session` code, so it collides with nothing, and it produces the captured i2pd Session Request that 4-0b has been blocked on since 3-5.
