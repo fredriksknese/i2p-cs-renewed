@@ -121,7 +121,7 @@ Order is driven by one question: what must exist before SSU2/ECIES repair is eve
 | 3-3b | `p3/ntcp2-loopback-fixture` | *Optional, low priority.* Pair two `NTCP2Session` objects over a real `TcpListener` pair on 127.0.0.1 — framing and handshake only, no loss injection. Deferred from 3-3 because `NTCP2Session` reaches for `TcpClient.GetStream()` in ~10 places across 2019 lines, so a socket-free version needs a `Stream` seam through a file Phases 4 and 9 rewrite (R6), and TCP makes a lossy channel meaningless. Do this only if an NTCP2 defect actually needs it. | Handshake completes; frames round-trip |
 | 3-4 | `p3/ecies-pump-fixture` | Pair two `ECIESSessionKeyManager` instances over a direct message pump | N=5001 currently throws "No available outbound tags" (`ECIESSessions.cs:428-429`) — the 5-3 defect, documented |
 | 3-5 | `p3/i2pd-golden-vectors` | ✅ **Done** (PR #21), one SSU2 vector. Reusable capture harness + a checked-in i2pd **TokenRequest**. SessionRequest/Retry/Data and the ECIES vectors are blocked, not skipped — see session 3. | Gate met: the byte diff is the deliverable. Found the ChaCha20 block-counter divergence and that i2pd opens with TokenRequest. |
-| 3-6 | `p3/catch-audit-protocol-scope` | Every `catch` in `TransportLayer/SSU2/` and `SessionLayer/ECIES/` must log at Warning+ with the exception, or carry a justifying comment. (102 silent catches exist repo-wide; this narrows to the ~20 files Phase 4–5 depend on.) | Zero bare `catch {}` / `catch (Exception) {}` in those two directories |
+| 3-6 | `p3/catch-audit-protocol-scope` | ✅ **Done** (PR #22). All 31 catch sites audited; rule recorded on `ProtocolCatchAuditTest` and enforced there. Also added `Logging.LogError` — the level existed and was selectable but no helper emitted at it. | ✅ Zero bare catches in those two directories, guarded by a test confirmed to fail with the defect reinstated |
 
 3-6 runs last in Phase 3. It is the difference between debugging SSU2 and debugging it blindfolded.
 
@@ -630,3 +630,44 @@ The batch also lists SessionRequest, Retry, Data-with-ACK and ECIES NS/NSR/ES. R
 `SSU2HeaderEncryption` cites "SSU2 spec lines 761-798" of a document **not in this repository**. Re-derive from the published spec and i2pd's source; do not trust those line references. Batch 9-1 already carries the same problem with its "ntcp2-hybrid.md line 363" citations — this is a repo-wide habit, and a citation to a file nobody has is worse than none.
 
 **Next: 3-6** (`p3/catch-audit-protocol-scope`), last in the phase, and then Gate 3. Phase 4 starts at the new **4-0**, then the fixture NRE and SAM-bridge startup that 3-2 flagged (19 of 23 integration failures are downstream of those two), then 4-1.
+
+### Session 3 (continued) — 2026-08-08 — batch 3-6 — PR #22, merged — **Phase 3 complete**
+
+**Unit suite 254 passed / 0 failed / 1 skipped** (was 251), Release build 0 errors / 58 warnings, both CI jobs green, integration unchanged at 52/49/26/23/3.
+
+All 31 catch sites in `TransportLayer/SSU2/` and `SessionLayer/ECIES/` audited against one rule, which is written out on `ProtocolCatchAuditTest` rather than left implicit in the diff: a catch must **log at Warning+ passing the whole exception**, **propagate to a caller that logs it** (with the exception type in the propagated string and a comment naming that caller), or **be an expected outcome** — Debug, still carrying the exception, with a comment saying why it is expected and what recovers.
+
+**Two catches were silent by construction, and both sit on defects this plan already tracks.**
+
+1. `ECIESRouterProcessor.SendMessage` swallowed `InvalidOperationException` under the comment "No tags available or session expired". That is batch **5-3**'s tag exhaustion — the thing 3-4 measured as `delivered 5000 of 100000`. Swallowed, it presents as nothing worse than "this peer re-handshakes a lot", which is a plausible-looking symptom nobody would chase.
+2. `ECIESRouterProcessor.ProcessMessage` returned `Success = false, Error = ex.Message`, and its only caller (`Router.HandleGarlic:771`) checks `Payload == null` and **never reads `Error`**. The exception had nowhere to go at all.
+
+**Checking the caller is what made the difference.** Six catches in ECIES return a structured error instead of logging, and that is a legitimate pattern — but only if someone reads it. Four of them are read (by `SessionManager.DecryptMessage`) and two were not. The two are indistinguishable from the four by looking at the catch alone. **Verify propagation by reading the consumer; do not accept "it returns an error object" as evidence that the error surfaces.**
+
+**Other changes worth naming:**
+
+- `ECIESRouterSKM.ExtractTag` logged at Debug and then silently used the **unparsed bytes as the payload**, so a parse failure produced garbage one layer further on with the cause already gone. Now Warning with the exception.
+- `SessionConfirmed.ParsePart2Payload` logged at Debug, leaving `RouterInfo` null and the handshake proceeding without ever learning who the peer is. Downstream that reads as "the peer sent none" rather than "we could not read the one it sent" — the exact ambiguity behind the integration suite's `i2pd RouterInfo should be in our NetDb` failure.
+- `SSU2Host.ProcessIncomingPackets`'s `catch (SocketException)` → "ignore" sits **outside** the receive loop, so it abandons every pending datagram. Now Debug when `Terminated` (shutdown closes the socket, which is routine) and Warning otherwise.
+- `SSU2Host.Run` logged "Fatal error" at **Warning**. Reaching it ends SSU2 for the life of the process and nothing restarts it. "Fatal" was accurate; the level was not.
+
+**Unplanned: `Logging.LogError` did not exist.** `LogLevels.Error` has been in the enum throughout and is selectable as `--log-level error`, but no helper ever emitted at it — so the level was unreachable from library code and that setting showed Critical only. Added, because Warning understates "this transport is now dead" and Critical passes *every* threshold including `Nothing`. **Worth checking whether other advertised levels are equally unreachable.**
+
+**`ECIESGarlicProcessor` is confirmed dead** — the type name appears nowhere outside its own file, in library or tests. Its two catches breach the rule and were left alone with a header note saying so, because 5-1 deletes the file and tidying an unreachable path only makes it look maintained. **If 5-1 decides to keep the class, its error handling has to be brought up to the directory standard first.**
+
+**Test honesty.** Both guards were confirmed to fail with the defect reinstated (a bare catch → `SSU2Session.cs:297`; a bound-but-unused `ex` → `SSU2Session.cs:212`). The second guard exists because `EveryCaughtExceptionIsUsed` is the loophole the first one pushes people towards. A third, `TheAuditActuallyScansSomething`, asserts the scan finds >15 files and >20 catch sites — without it, a moved directory would make both checks pass by scanning nothing, which is batch 2-7's "green suite that covers half of itself" at fixture scale.
+
+#### Gate 3 — met, with one part of batch 3-2's promise deferred
+
+| Gate 3 clause | status |
+|---|---|
+| `TestCategory=Integration` *runs* in CI against real i2pd | ✅ 3-1 + 3-2 — 49 of 52 executing, ~23 min, pinned i2pd 2.61.0 |
+| Fixtures reproduce the SSU2/ECIES defects as red tests | ✅ 3-3 (4 red SSU2), 3-4 (ECIES tag exhaustion), 3-5 (1 red header-encryption) |
+
+**What is *not* done, and should not be done yet.** `.github/workflows/dotnet.yml:57` says "Gate 3 removes the continue-on-error and starts gating on results too". **Do not do that now.** 23 integration tests still fail, so removing that line makes `github-master` permanently red and breaks the plan's own "merge only when green" rule for every subsequent batch. Gating on results becomes possible when Phase 4 has fixed the fixture NRE and the SAM-bridge cluster — i.e. after **4-1**, not before. The comment in the workflow now overstates what Gate 3 can deliver; treat that line as belonging to Phase 4.
+
+**Phase 3 scoreboard:** 3-1 ✅ 3-2 ✅ 3-3 ✅ (3-3b deferred, optional) 3-4 ✅ 3-5 ✅ 3-6 ✅
+
+**Next: Phase 4, starting at 4-0** (`p4/ssu2-header-chacha-block`) — the ChaCha20 block-counter fix from 3-5, which blocks every SSU2 interop measurement. Then the fixture NRE and SAM-bridge startup (19 of 23 integration failures are downstream of those two, and until they are fixed the suite cannot report on SSU2 or ECIES at all), then 4-1's ACK wiring — which per 3-3 must also **add the per-session tick it is written against**, because `SSU2Host.ProcessSessions` only reaps terminated sessions today.
+
+Two independent SSU2 defects are on the table for Phase 4 and neither explains the other: the **header block counter** (3-5, C#-to-i2pd) and the **SessionRequest AEAD failure** (3-3, C#-to-C#). Also still open from 3-3: `SSU2Session.cs:488` and `:1369` build headers with a literal `NetId = 2`, so SSU2 cannot establish on netid 3 or 99 at all.
