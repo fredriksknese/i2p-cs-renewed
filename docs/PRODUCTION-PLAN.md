@@ -120,7 +120,7 @@ Order is driven by one question: what must exist before SSU2/ECIES repair is eve
 | 3-3 | `p3/loopback-transport-fixture` | ✅ **Done** (PR #18), SSU2 only. In-memory `LossyChannel` (drop%, reorder, delay, MTU) pairing two `SSU2Session` objects — no sockets, no NetDb. NTCP2 half deferred to 3-3b. | Gate **not met, by design** — the handshake itself fails, so there is no data phase to measure. Four quarantined red tests, owner Phase 4. See session 3. |
 | 3-3b | `p3/ntcp2-loopback-fixture` | *Optional, low priority.* Pair two `NTCP2Session` objects over a real `TcpListener` pair on 127.0.0.1 — framing and handshake only, no loss injection. Deferred from 3-3 because `NTCP2Session` reaches for `TcpClient.GetStream()` in ~10 places across 2019 lines, so a socket-free version needs a `Stream` seam through a file Phases 4 and 9 rewrite (R6), and TCP makes a lossy channel meaningless. Do this only if an NTCP2 defect actually needs it. | Handshake completes; frames round-trip |
 | 3-4 | `p3/ecies-pump-fixture` | Pair two `ECIESSessionKeyManager` instances over a direct message pump | N=5001 currently throws "No available outbound tags" (`ECIESSessions.cs:428-429`) — the 5-3 defect, documented |
-| 3-5 | `p3/i2pd-golden-vectors` | Capture i2pd bytes as checked-in fixtures: SSU2 SessionRequest / **Retry** / Data-with-ACK; ECIES NS/NSR/ES. Parse + re-serialize round-trip tests. | Round-trips pass, or fail with a byte diff — either is information |
+| 3-5 | `p3/i2pd-golden-vectors` | ✅ **Done** (PR #21), one SSU2 vector. Reusable capture harness + a checked-in i2pd **TokenRequest**. SessionRequest/Retry/Data and the ECIES vectors are blocked, not skipped — see session 3. | Gate met: the byte diff is the deliverable. Found the ChaCha20 block-counter divergence and that i2pd opens with TokenRequest. |
 | 3-6 | `p3/catch-audit-protocol-scope` | Every `catch` in `TransportLayer/SSU2/` and `SessionLayer/ECIES/` must log at Warning+ with the exception, or carry a justifying comment. (102 silent catches exist repo-wide; this narrows to the ~20 files Phase 4–5 depend on.) | Zero bare `catch {}` / `catch (Exception) {}` in those two directories |
 
 3-6 runs last in Phase 3. It is the difference between debugging SSU2 and debugging it blindfolded.
@@ -129,8 +129,9 @@ Order is driven by one question: what must exist before SSU2/ECIES repair is eve
 
 | ID | Branch | Scope | Verify |
 |---|---|---|---|
+| 4-0 | `p4/ssu2-header-chacha-block` | **New, added by batch 3-5; run it first.** `SSU2HeaderEncryption.GenerateChaCha20Mask` builds its mask from ChaCha20 block 0; i2pd's `ChaCha20()` helper inits its state with counter **1**, so no header we send can be read by i2pd and none of its can be read by us. Self-consistent, hence invisible to every C#-only test. Re-derive from the published SSU2 spec and i2pd's source — the file's "spec lines 761-798" citations point at a document not in this repo. Then un-quarantine `OurHeaderDecryptionCanReadI2pdsHeader`. | That test goes green against the checked-in vector; `I2pdHeaderMaskComesFromChaCha20BlockOne` stays green |
 | 4-1 | `p4/ssu2-ack-wiring` | Instantiate `SSU2AckManager` per session; `RecordSent` in `SendBlock`/`BuildDataPacket`; `RecordReceived` in `ProcessDataPacket`; replace the empty ACK case at `SSU2Session.cs:1215-1219` with real processing; `GenerateAck()` on session tick; drive retransmit from `GetPacketsNeedingRetransmit()` | 3-3 fixture at 5% loss delivers 100/100 |
-| 4-2 | `p4/ssu2-retry-token` | Add `MSG_TYPE_RETRY` (`SSU2Constants.cs:59`) to the dispatch at `SSU2Session.cs:616-637` — today it falls to "Unknown packet type". Per-peer token cache with expiry; set `header.Token` in `SendSessionRequest` (`:481-490`). | Golden-vector Retry parse; outbound connect to a token-enforcing i2pd completes <5 s |
+| 4-2 | `p4/ssu2-retry-token` | Add `MSG_TYPE_RETRY` (`SSU2Constants.cs:59`) to the dispatch at `SSU2Session.cs:616-637` — today it falls to "Unknown packet type". Per-peer token cache with expiry; set `header.Token` in `SendSessionRequest` (`:481-490`). **Widened by 3-5:** also *answer* an inbound **TokenRequest** (type 10) with a Retry. i2pd's opening packet to a peer it holds no token for is a TokenRequest, and nothing here handles it, so an inbound SSU2 session from i2pd cannot begin at all. This also unblocks capturing the Retry and Data-with-ACK vectors 3-5 could not reach. | Golden-vector Retry parse; outbound connect to a token-enforcing i2pd completes <5 s; i2pd proceeds to SessionRequest after our Retry |
 | 4-3 | `p4/ssu2-path-validation` | Real `SendPathResponse` (`SSU2Session.cs:360-372`); only then restore `ConnectionMigrationSupported` | Source-port migration mid-session survives |
 | 4-4 | `p4/ssu2-frag-termination` | Fragment/reassembly + Termination/ImmediateAck parity vs golden vectors | Fixture + integration |
 | 4-5 | `p4/ssu2-default-on` | `EnableSSU2`→true, `--disable-ssu2` retained, README status updated | Full integration suite |
@@ -590,3 +591,42 @@ Three sites fixed, all switched to the existing `BufUtils.ToByteArray(bi, length
 **CI note.** This is the first time the trx artifact from the `build` job was used to diagnose a failure — `gh run download -n unit-test-results` plus `.github/scripts/summarise_trx.py` names the failing test and its message without reading the log. Batch 3-2 built that for the integration job; it works for the unit job too.
 
 **Next: 3-5** (`p3/i2pd-golden-vectors`), then 3-6 (catch audit, last in the phase). 3-5 matters more than the plan implies now: 3-3 showed our SSU2 SessionRequest cannot be read by our own responder, and a captured i2pd SessionRequest is the reference that says whether our header *construction* or our header *hashing* is the wrong side.
+
+### Session 3 (continued) — 2026-08-08 — batch 3-5 — PR #21, merged
+
+**Unit suite 251 passed / 0 failed / 1 skipped** (was 249), Release build 0 errors / 58 warnings, both CI jobs green. Integration **52 total / 49 executed / 26 passed / 23 failed / 3 skipped** — one test added (the capture producer, passing), the 23 failures and their signatures unchanged from 3-2.
+
+The batch's own verification says *"round-trips pass, or fail with a byte diff — either is information."* It produced two findings, and **neither is the one it went looking for.** It set out to adjudicate the 3-3 handshake failure; it instead found a defect 3-3 could not have seen, and did not explain the one it was sent to explain.
+
+#### 1. Our SSU2 header encryption uses the wrong ChaCha20 block
+
+Production decryption run against a header i2pd really sent recovers **version 27, netid 27** where 2 and 99 are correct. Scanning 128 bytes of key stream for the offset that decodes correctly finds **exactly one match, at byte 64** — the start of the second ChaCha20 block.
+
+i2pd's `ChaCha20()` helper calls `Chacha20Init(state, nonce, key, 1)`, i.e. **counter 1**. `SSU2HeaderEncryption.GenerateChaCha20Mask` uses BouncyCastle's `ChaCha7539Engine` from its initial state, which is counter 0. The nonce agrees; only the block differs.
+
+**No SSU2 header we produce can be read by i2pd, and none of i2pd's can be read by us.** That is an outright interop blocker for all of Phase 4, so it is now batch **4-0** and runs before 4-1.
+
+**Why nothing caught it.** Both ends of a C#-only exchange use block 0, so it is perfectly self-consistent: every existing test passes, and 3-3's loopback fixture gets all the way to the Noise layer before failing. **A protocol implementation cannot detect a convention error by talking to itself** — this is the concrete cost of having had no reference peer until 3-1, and the clearest argument yet for golden vectors over more fixtures.
+
+It is also **separate from the 3-3 AEAD failure**, which is C#-to-C# and this does not explain. 3-3's "diff the two byte arrays" lead still stands, untouched. Two SSU2 defects, not one.
+
+#### 2. i2pd opens with a TokenRequest, not a SessionRequest
+
+The first packet is 69 bytes (73 on another run — padding varies), decoding to type **10**, version 2, netid 99. Nothing in this repository handles that message type. A C# router must answer a TokenRequest with a Retry before i2pd will ever send a SessionRequest, so an *inbound* SSU2 session from i2pd cannot begin at all. Batch 4-2's scope is widened accordingly — it was written as though we only need to *receive* Retry as an initiator.
+
+#### Scope: SSU2 only, and the rest is blocked rather than skipped
+
+The batch also lists SessionRequest, Retry, Data-with-ACK and ECIES NS/NSR/ES. Retry and Data cannot be captured until we can answer a TokenRequest (finding 2) — the capture harness never gets a second packet out of i2pd. ECIES vectors need a destination, tunnels and a LeaseSet driven through i2pd, which the integration suite cannot currently do (19 of its 23 failures are fixture-level, per 3-2). The harness is reusable for all of them once those unblock; **capture them as the batches that unblock them land, not as a later catch-up batch.**
+
+#### Decisions recorded in-code
+
+- **Vectors are `key=HEX` text, not a binary container.** They diff readably in review, they grep, and the parser is twenty lines. A binary format brings its own bugs to a file whose entire purpose is being trusted.
+- **The vector is checked in, so the tests over it are ordinary unit tests** — no i2pd, no network, no ports. `SSU2GoldenVectorCapture` is a separate Integration-category *producer* that refreshes it. This is the pattern to copy: capture is expensive and flaky, reading a captured byte string is neither.
+- **`I2pdHeaderMaskComesFromChaCha20BlockOne` is the durable test, not the red one.** It asserts a fact about i2pd, so it stays green after 4-0 corrects `SSU2HeaderEncryption` — a later regression moves it rather than silently passing. The red `OurHeaderDecryptionCanReadI2pdsHeader` is quarantined `[Category(Experimental)]`, owner Phase 4, and is the one 4-0 flips.
+- Capture keys are throwaway, generated for the capture and committed alongside it, so the vector is self-contained and decodable by anyone.
+
+#### Note for whoever fixes 4-0
+
+`SSU2HeaderEncryption` cites "SSU2 spec lines 761-798" of a document **not in this repository**. Re-derive from the published spec and i2pd's source; do not trust those line references. Batch 9-1 already carries the same problem with its "ntcp2-hybrid.md line 363" citations — this is a repo-wide habit, and a citation to a file nobody has is worse than none.
+
+**Next: 3-6** (`p3/catch-audit-protocol-scope`), last in the phase, and then Gate 3. Phase 4 starts at the new **4-0**, then the fixture NRE and SAM-bridge startup that 3-2 flagged (19 of 23 integration failures are downstream of those two), then 4-1.
