@@ -88,6 +88,41 @@ public class SSU2Host : ITransportProtocol
     }
 
     /// <summary>
+    ///     Test seam, batch 3-3 (docs/PRODUCTION-PLAN.md). Builds a host that owns no UDP
+    ///     socket and runs no worker thread, and whose identity and static keys are supplied
+    ///     per instance instead of being taken from <see cref="RouterContext.Inst" /> and the
+    ///     process-wide <see cref="TransportKeys" /> store.
+    ///     <para>
+    ///         That second part is the point. <see cref="InitializeStaticKeys" /> loads one
+    ///         SSU2 keypair for the whole process, so two hosts built the normal way are the
+    ///         same peer and cannot hand-shake with each other. Assigning the key fields here
+    ///         before calling <see cref="UpdateRouterContext" /> makes InitializeStaticKeys
+    ///         early-out on its "already initialized" check, so each host publishes its own
+    ///         static and intro keys into its own RouterInfo.
+    ///     </para>
+    ///     <para>
+    ///         Deliberately not a general-purpose multi-instance constructor — it exists so a
+    ///         pair of sessions can be driven over an in-memory channel. Real per-instance
+    ///         hosts are Phase 8.
+    ///     </para>
+    /// </summary>
+    internal SSU2Host(RouterContext routerContext, byte[] staticPrivateKey, byte[] staticPublicKey,
+        byte[] introKey)
+    {
+        MyRouterContext = routerContext ?? throw new ArgumentNullException(nameof(routerContext));
+        StaticPrivateKey = staticPrivateKey ?? throw new ArgumentNullException(nameof(staticPrivateKey));
+        StaticPublicKey = staticPublicKey ?? throw new ArgumentNullException(nameof(staticPublicKey));
+        IntroKey = introKey ?? throw new ArgumentNullException(nameof(introKey));
+
+        // Publishes the SSU2 address, carrying the keys just assigned, into routerContext.
+        UpdateRouterContext();
+
+        // No NetworkSettingsChanged subscription: it would re-enter InitializeSocket.
+        // No socket, no worker thread — the channel drives this host by calling
+        // DispatchPacket directly, and SendPacket is overridden to feed the peer.
+    }
+
+    /// <summary>
     ///     Maximum number of concurrent incoming SSU2 sessions.
     ///     Matches i2pd default of 2500.
     /// </summary>
@@ -456,7 +491,13 @@ public class SSU2Host : ITransportProtocol
         }
     }
 
-    private void DispatchPacket(IPEndPoint remoteEP, byte[] packetData)
+    /// <summary>
+    ///     Route one received datagram: to its existing session, or into a new inbound session
+    ///     if it trial-decrypts as a SessionRequest. Internal rather than private as of batch
+    ///     3-3 so a test channel can deliver packets through the same path the socket uses —
+    ///     a fixture that hand-built its inbound session would be testing its own wiring.
+    /// </summary>
+    internal void DispatchPacket(IPEndPoint remoteEP, byte[] packetData)
     {
         try
         {
@@ -598,7 +639,12 @@ public class SSU2Host : ITransportProtocol
         }
     }
 
-    public void SendPacket(IPEndPoint destination, byte[] data)
+    /// <summary>
+    ///     Every outbound SSU2 datagram leaves through here. Virtual as of batch 3-3 so a test
+    ///     host can divert the wire into an in-memory channel instead of a socket; production
+    ///     behaviour is unchanged.
+    /// </summary>
+    public virtual void SendPacket(IPEndPoint destination, byte[] data)
     {
         try
         {
