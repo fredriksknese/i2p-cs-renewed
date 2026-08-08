@@ -81,8 +81,12 @@ jobs:
       # Floor for "the suite actually ran". Anything below this means the tests
       # skipped themselves or the test host died mid-run, both of which have
       # happened and both of which look like success in the console output.
-      # Raise this to just under the real count once CI has measured one.
-      MIN_INTEGRATION_TESTS: "1"
+      #
+      # 48 of 51 execute, measured identically on this runner and locally (the
+      # other 3 self-skip because i2pd advertises no ML-KEM support). The floor
+      # sits well under that so adding or skipping a few tests does not trip it,
+      # and well over the ~55% that the one observed test-host crash produced.
+      MIN_INTEGRATION_TESTS: "40"
 
     steps:
     - uses: actions/checkout@v4
