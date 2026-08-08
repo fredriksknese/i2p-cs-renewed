@@ -274,9 +274,29 @@ public class DataTransferTests
     ///     5MB transfer with ECIES-X25519 encryption (standard).
     ///     This is the default encryption for all SAM streams, so this test
     ///     verifies the standard path works end-to-end.
+    ///
+    ///     <para>
+    ///         <b>Quarantined by batch 4-0e; owner Phase 5 (5-5).</b> Not because it fails —
+    ///         it is supposed to fail, ECIES is the subsystem Phase 5 exists to repair — but
+    ///         because of <i>how</i>. Before 4-0e it failed in seconds, on "failed to connect to
+    ///         the SAM bridge", since nothing was listening on the configured port. With the
+    ///         bridge actually bound it gets as far as a real 5 MB transfer, hangs, and reaches
+    ///         <c>CancelAfter</c> — and the timeout takes the test host process down with it:
+    ///         <c>"The active test run was aborted. Reason: Test host process crashed"</c>.
+    ///     </para>
+    ///     <para>
+    ///         That cost the eleven ScaledNetwork tests, which run after this namespace and
+    ///         never started, and tripped batch 3-2's <c>MIN_INTEGRATION_TESTS</c> guard —
+    ///         working exactly as intended. <b>One hanging test must not be able to erase
+    ///         unrelated coverage</b>, and 23 tests in this suite carry <c>CancelAfter</c>, so
+    ///         this will recur as Phase 5 progresses and more of them get far enough to hang.
+    ///         The durable fix is batch 4-0f: isolate the namespaces so a crash truncates one
+    ///         group rather than the run. Un-quarantine this when 5-5 lands.
+    ///     </para>
     /// </summary>
     [Test]
     [CancelAfter(DataTransferTimeoutMs)]
+    [Category(TestCategories.Experimental)]
     public async Task TestSend5MB_ECIES_X25519()
     {
         // ECIES-X25519 is the default encryption for destinations.
