@@ -129,7 +129,8 @@ Order is driven by one question: what must exist before SSU2/ECIES repair is eve
 
 | ID | Branch | Scope | Verify |
 |---|---|---|---|
-| 4-0 | `p4/ssu2-header-chacha-block` | **New, added by batch 3-5; run it first.** `SSU2HeaderEncryption.GenerateChaCha20Mask` builds its mask from ChaCha20 block 0; i2pd's `ChaCha20()` helper inits its state with counter **1**, so no header we send can be read by i2pd and none of its can be read by us. Self-consistent, hence invisible to every C#-only test. Re-derive from the published SSU2 spec and i2pd's source — the file's "spec lines 761-798" citations point at a document not in this repo. Then un-quarantine `OurHeaderDecryptionCanReadI2pdsHeader`. | That test goes green against the checked-in vector; `I2pdHeaderMaskComesFromChaCha20BlockOne` stays green |
+| 4-0 | `p4/ssu2-header-chacha-block` | ✅ **Done** (PR #23). Keystream now starts at ChaCha20 block 1, matching i2pd's `Crypto.cpp ChaCha20()` (`iv[0] = htole32(1)`). Citations re-derived from i2pd symbols, replacing the "spec lines 761-798" references to an absent document. | ✅ `OurHeaderDecryptionCanReadI2pdsHeader` un-quarantined and green against the checked-in vector; `I2pdHeaderMaskComesFromChaCha20BlockOne` still green |
+| 4-0b | `p4/ssu2-header-48-byte-pass` | **Found by 4-0; this is also batch 3-3's unexplained AEAD failure — one defect, not two.** i2pd covers packet bytes 16..64 in a **single 48-byte ChaCha20 pass** (`SSU2Session.cpp` Send/ProcessSessionRequest) for Session Request and Session Created. We use two restarted keystreams, so the ephemeral key is XORed with keystream bytes 0..32 where i2pd uses 16..48; and `SessionRequest.ToByteArray` calls `EncryptLongHeaderInPacket`, which stops at byte 16, so the source connection ID and token go out **in the clear**. The sender masks 0-15 while `SSU2Host.DispatchPacket` unmasks 0-31, which is why the loopback AEAD tag fails. The 16-byte form is correct for TokenRequest/Retry/PeerTest and must stay. **Blocked on 4-2** for reference bytes — do not land it against a self-agreeing test. | The three `Ssu2HeaderLayoutTest` tests un-quarantine; 3-3 loopback gets past Session Request |
 | 4-1 | `p4/ssu2-ack-wiring` | Instantiate `SSU2AckManager` per session; `RecordSent` in `SendBlock`/`BuildDataPacket`; `RecordReceived` in `ProcessDataPacket`; replace the empty ACK case at `SSU2Session.cs:1215-1219` with real processing; `GenerateAck()` on session tick; drive retransmit from `GetPacketsNeedingRetransmit()` | 3-3 fixture at 5% loss delivers 100/100 |
 | 4-2 | `p4/ssu2-retry-token` | Add `MSG_TYPE_RETRY` (`SSU2Constants.cs:59`) to the dispatch at `SSU2Session.cs:616-637` — today it falls to "Unknown packet type". Per-peer token cache with expiry; set `header.Token` in `SendSessionRequest` (`:481-490`). **Widened by 3-5:** also *answer* an inbound **TokenRequest** (type 10) with a Retry. i2pd's opening packet to a peer it holds no token for is a TokenRequest, and nothing here handles it, so an inbound SSU2 session from i2pd cannot begin at all. This also unblocks capturing the Retry and Data-with-ACK vectors 3-5 could not reach. | Golden-vector Retry parse; outbound connect to a token-enforcing i2pd completes <5 s; i2pd proceeds to SessionRequest after our Retry |
 | 4-3 | `p4/ssu2-path-validation` | Real `SendPathResponse` (`SSU2Session.cs:360-372`); only then restore `ConnectionMigrationSupported` | Source-port migration mid-session survives |
@@ -671,3 +672,43 @@ All 31 catch sites in `TransportLayer/SSU2/` and `SessionLayer/ECIES/` audited a
 **Next: Phase 4, starting at 4-0** (`p4/ssu2-header-chacha-block`) — the ChaCha20 block-counter fix from 3-5, which blocks every SSU2 interop measurement. Then the fixture NRE and SAM-bridge startup (19 of 23 integration failures are downstream of those two, and until they are fixed the suite cannot report on SSU2 or ECIES at all), then 4-1's ACK wiring — which per 3-3 must also **add the per-session tick it is written against**, because `SSU2Host.ProcessSessions` only reaps terminated sessions today.
 
 Two independent SSU2 defects are on the table for Phase 4 and neither explains the other: the **header block counter** (3-5, C#-to-i2pd) and the **SessionRequest AEAD failure** (3-3, C#-to-C#). Also still open from 3-3: `SSU2Session.cs:488` and `:1369` build headers with a literal `NetId = 2`, so SSU2 cannot establish on netid 3 or 99 at all.
+
+### Session 4 — 2026-08-08 — batch 4-0 — PR #23, merged
+
+**Unit suite 256 passed / 0 failed / 1 skipped** (was 254), Release build 0 errors / 58 warnings, both CI jobs green. Integration **52 total / 49 executed / 26 passed / 23 failed / 3 skipped** — unchanged from 3-5/3-6, and expected to be: 4-0 fixes a C#-to-i2pd convention, and no integration test exercises SSU2 against i2pd today.
+
+The batch itself is small and its reasoning is in the file: `GenerateChaCha20Mask` discards one 64-byte block so the keystream starts at block 1, matching i2pd. The two findings below are what the session added on top.
+
+#### 1. Batch 3-3's AEAD failure and the i2pd header divergence are the same defect
+
+Session 3 signed off saying "two independent SSU2 defects are on the table for Phase 4 and neither explains the other." **That is now wrong, and it is recorded as batch 4-0b.** Re-deriving the header convention from i2pd source to fix the block counter surfaced the wider divergence, and it accounts for both symptoms:
+
+- i2pd encrypts packet bytes 16..64 as **one 48-byte ChaCha20 pass** for Session Request and Session Created. We use two restarted keystreams, so the ephemeral key gets keystream bytes 0..32 where i2pd uses 16..48.
+- `SessionRequest.ToByteArray` calls `EncryptLongHeaderInPacket`, which stops at byte 16 — so header bytes 16-31 (source connection ID, token) are **transmitted in the clear**.
+- The sender masks bytes 0-15; `SSU2Host.DispatchPacket` unmasks 0-31. The receiver therefore XORs 16 bytes the sender never masked, the header Bob hashes differs from the one Alice hashed, and the Noise AEAD tag fails. That is 3-3's C#-to-C# failure exactly.
+
+Measured, not inferred: switching that one call to `EncryptLongHeaderComplete` takes the 3-3 loopback fixture from `sent=1` to `sent=2`. **It was deliberately not applied.** The correct fix is the single 48-byte pass, which subsumes the interim one, and there is no captured i2pd Session Request to verify it against until 4-2 lets us answer a TokenRequest. Landing the interim form would be merging a protocol change behind a test that only agrees with itself — the failure this plan keeps rediscovering. `Ssu2HeaderLayoutTest` pins the divergence as three tests: one green (asserting i2pd's convention) and two quarantined red, owner 4-0b.
+
+**Phase 4 was about to spend a session treating these as two separate bugs.** Batch order changes accordingly: 4-2 before 4-0b, because 4-2 produces the reference bytes 4-0b needs.
+
+#### 2. The test harness resets the process to netid 2 — the live network
+
+`CSharpRouterHarness.Start()` sets `I2PConstants.I2PNetworkId = 99` and `Bootstrap.Disabled = true` (`:89`, `:92`). `Stop()` restores them to `I2PNetworkId = 0x02` and `Bootstrap.Disabled = false` (`:258-259`) under the comment "Restore defaults only when we own the router".
+
+**Netid 2 is the live I2P network, and that restore also switches reseed back on.** These are process-wide statics in a test host that runs many fixtures in one process, so any router started afterwards that does not go through `Start()` inherits live-network settings. `ScaledNetworkFixture` has exactly such a path: when `TestNetworkFixture.CSharpRouter != null` it reuses that router (`:115-127`) and never calls `Start()`, so it never sets the netid and never disables Bootstrap.
+
+Nothing observed has actually reached netid 2 — the fixtures that matter all run through `Start()` first. It is a latent violation of the plan's own non-negotiable rule 5, not a demonstrated live-network connection, and it should be fixed before it becomes one. The right shape is almost certainly to stop restoring these at all: there is no correct "default" for a test process to fall back to, and 0x02 is the worst available choice.
+
+#### 3. The 11-test NRE is an ordering dependency, and does not reproduce standalone
+
+Running `ExploratoryTunnelsShouldBeBuilt` on its own, locally, against i2pd 2.61.0: **the 10-router network starts in 113.5s and the test passes.** No NRE. The suspicion recorded in 3-2 — that the SAM-bridge cluster is collateral from a fixture that crashed earlier in the run — now has direct support, and the mechanism is visible in the code.
+
+`TestNetworkFixture` (namespace `I2PTests.IntegrationTests`) and `ScaledNetworkFixture` (namespace `I2PTests.ScaledNetwork`) are separate `[SetUpFixture]`s. Running one ScaledNetwork test alone, `TestNetworkFixture.CSharpRouter` is null, so `ScaledNetworkFixture` takes its **else** branch and builds its own harness — which works. In a full CI run `TestNetworkFixture` has already run, so it takes the **reuse** branch, which assumes a router another fixture owns and may already have stopped.
+
+**Do not fix this by reading the code.** The CI failure carries no stack trace — 11 tests report a bare `OneTimeSetUp: SetUp : NullReferenceException`, and `ScaledNetworkFixture.cs:99` logs the real exception only to `/tmp/i2p_scaled_test.log`, which is not collected as an artifact. There are at least four plausible null sites in the reuse branch. **Step one of that batch is making the failure legible** — attach the exception to the fixture failure and/or collect that log file in CI — and only then fix what it names.
+
+#### Tooling note
+
+The integration `.trx` **is** in the CI artifacts, and `.github/scripts/summarise_trx.py` renders the six failure signatures and the exact failing-test list from it in one command. Reaching for the 1356-line job log first was wasted effort. `gh run download <id> -n integration-test-results` then summarise; the job log only adds value when you need a stack trace, and in this case it did not have one either.
+
+**Next: batch 4-2** (`p4/ssu2-retry-token`) — it is now on the critical path for two reasons rather than one: it unblocks inbound SSU2 from i2pd, and it produces the captured Session Request that 4-0b needs. The fixture-NRE/SAM-bridge work should be split into its own batch before or alongside it, starting with diagnosability rather than a fix. **4-0b comes after 4-2, not before.**
