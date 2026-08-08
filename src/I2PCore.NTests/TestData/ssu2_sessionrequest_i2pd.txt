@@ -1,0 +1,21 @@
+# SSU2 SessionRequest captured from i2pd, after it accepted our Retry. Batch 4-2c.
+# source: i2pd version 2.61.0 (0.9.70)
+# netid: 99
+# Captured by SSU2GoldenVectorCapture.CaptureSessionRequestByAnsweringTheTokenRequest.
+#
+# i2pd only sends this after a Retry it authenticated and accepted, so the file's existence is
+# itself proof that batch 4-2a's Retry is correct against the real peer. Verified further: the
+# token in header bytes 24-31 is byte-identical to the one we issued (2a47ab58bd88cd2b), and the
+# header decodes as type=0 version=2 netid=99.
+#
+# This is the reference batch 4-0b needs. Bytes 32-63 are i2pd's ephemeral key X, and unmasking
+# it is the open question: i2pd covers packet bytes 16..64 in ONE 48-byte ChaCha20 pass, so X is
+# XORed with keystream bytes 16..48, whereas we restart the stream and use 0..32. Header bytes
+# 16-31 cannot distinguish the two -- both conventions use keystream bytes 0..16 there, which is
+# why the TokenRequest vector could never settle it and this one can.
+#
+# Throwaway keys, generated for this capture only.
+static_private=D8A41E88A4F75F4E8988025A96C347822D805E07B36F432C73AFD1FEE5755747
+static_public=53D3228217445F741AEED38E99DC8EE182262B37FEB5C0FF6CB660B5F4853F06
+intro_key=BDE8B0A7ADF062540477E7B09431BCF498ECD75374B03C476E0C0955A7B4E73B
+packet=7E81ECE125C17D2B22B130164BB17FCD757D0F409D6B9D61B77960520D509CE5B4E60A09EF8790361470D40BC5785512A6AFB5510E1E8CFAB17D4FF3BD91A568E5ECFAD86AA900CB66695C82498588E9390DDBE90CAEFD36EDC671FE56813DFBE7264FE71D57C32677E6B6110B433D80A93281C6
