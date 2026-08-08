@@ -540,3 +540,53 @@ Both are avoided by unpacking with `dpkg-deb -x` into `/opt/i2pd` instead of ins
 **Size:** ~700 lines of test code against the 400-line rule, with 48 lines of production code. Not split — the channel, the peer harness and the tests cannot be verified separately, and much of the bulk is doc comments carrying the three findings above.
 
 **Next: 3-4** (`p3/ecies-pump-fixture`), then 3-5 (golden vectors) and 3-6 (catch audit, last in the phase). Given finding 1, **3-5's SSU2 golden vectors just became more valuable than planned** — a captured i2pd SessionRequest is the reference that says whether our header construction or our header hashing is the wrong one.
+
+### Session 3 (continued) — 2026-08-08 — batches 3-4 and an unplanned key-padding fix — PRs #19, #20, both merged
+
+**Unit suite 249 passed / 0 failed / 1 skipped** (was 243), Release build 0 errors / 58 warnings, both CI jobs green.
+
+#### 3-4 — ECIES pump fixture (PR #19)
+
+**ECIES works.** In sharp contrast to SSU2 in 3-3: New Session and New Session Reply both complete, both carry their payloads, and traffic flows in both directions. **No production code needed changing** — `ECIESSessionKeyManager`'s public API was already sufficient. Worth saying plainly against the README's blanket pessimism: the ECIES handshake is not one of this project's broken parts.
+
+**The 5-3 defect reproduces exactly as the plan predicted:**
+
+```
+delivered 5000 of 100000 before stopping: InvalidOperationException: No available outbound tags
+```
+
+`ECIESSession.InitializeBiDirectionalTags` pre-generates exactly `TagsPerDirection` = 5000 tags per direction at handshake time and never generates another. At 1 KB per message that is roughly **5 MB before a destination stops being able to speak** — under half of Gate 5's ">10 MB sustained, no session reset".
+
+**What the plan does not say, and what it cost.** A responder does **not** reply inside `ProcessMessage`. That call only decrypts the payload and records a pending handshake; the reply is a separate explicit `CreateHandshakeReply(remoteHash, originalNewSessionBytes, replyPayload)` that `Session.cs:257` makes when it next has something to send. A fixture that skips it sees `success=True` on the New Session, no reply bytes, and **no session tags ever created** — and would file that as a tag-generation bug. The first spike did exactly that. Anyone driving ECIES by hand needs the three-step exchange.
+
+Related asymmetry, kept rather than hidden: the initiator addresses the responder by its real `I2PIdentHash`, but the responder identifies the initiator by `SHA256(static key)`, because a New Session carries a static key and not a destination. Production reconciles it later via `ConfirmRemoteHash`.
+
+Two deliberate test choices. The exhaustion test runs to **100000**, not the plan's 5001, so a "fix" that merely enlarges the fixed block rather than making a real sliding window still fails. And `TheTagWindowIsExactlyTheGeneratedTagCount` asserts today's buggy boundary on purpose — **it is meant to go red when batch 5-3 lands**, turning that change from silent into deliberate. Updating one assertion is the intended cost; do not just delete it.
+
+#### Unplanned: derived public keys were not padded to fixed width (PR #20)
+
+**The `GarlicTest.TestEncodeDecodeLoop` flake was never a flake.** Session 1 saw it once, could not reproduce it in fourteen runs, and left it open. It failed CI again on PR #19, and the cause is a real defect in key derivation.
+
+`I2PPublicKey` derived ElGamal keys with `BigInteger.ToByteArrayUnsigned()`, which drops leading zero bytes. A key whose most significant byte happens to be zero comes out **255 bytes instead of 256**. I2P public keys are fixed width, so a short key shifts every field after it in the serialised `Destination` and the reader recovers a corrupt group element — `"y value does not appear to be in correct group"`.
+
+| derivation | short keys, unfixed |
+|---|---|
+| ElGamal2048 public | 8 of 3000 |
+| DsaSha1 signing public | 13 of 3000 |
+
+About **one in 256**. Every destination made with the default key type is affected — `I2PDestinationInfo(signkeytype)` defaults to ElGamal2048 — so this was a live router defect, not a test problem.
+
+Three sites fixed, all switched to the existing `BufUtils.ToByteArray(bi, length)`, which already left-pads: `I2PPublicKey.cs:19` (ElGamal derivation), `I2PPublicKey.cs:92` (`I2PPublicKey(BigInteger, I2PCertificate)`), `I2PSigningPublicKey.cs:20` (DSA derivation).
+
+**The asymmetry that hid it:** the codebase already knew. `I2PSigningKey(BigInteger, I2PCertificate)` — the direct counterpart of the second site — has always padded, and `I2PSignature` pads `r` and `s` with a comment quoting the spec. Only the derivation paths were missing it, so nothing read as obviously wrong.
+
+**Lessons worth carrying:**
+
+1. **"Rare, randomised, unreproducible" is a hypothesis, not a diagnosis.** Session 1 ran the failing test 14 more times and concluded little. What settled it in minutes was generating 3000 keys and *counting* — testing the suspected mechanism directly instead of re-rolling the dice. Do that with the next intermittent failure.
+2. **Population tests, not repeat runs.** The regression tests generate 2000 keys each; a single run catches a one-in-256 defect 0.4% of the time, which is exactly how it survived two sessions.
+3. **A round-trip test was written and then deleted** — it passed with the defect reinstated, so it guarded nothing. Both surviving tests were confirmed to fail against the unfixed code. Phase 2's vacuous-test lesson still applies to every batch.
+4. **Grep for the pattern, not the symptom.** `ToByteArrayUnsigned()` appears at ~17 sites. The signature ones already pad; `Elligator2.cs:179`, `BlindedPublicKey.cs:590,600` and `ElGamalCrypto.cs:94` were not audited here and are worth a look in Phase 10.
+
+**CI note.** This is the first time the trx artifact from the `build` job was used to diagnose a failure — `gh run download -n unit-test-results` plus `.github/scripts/summarise_trx.py` names the failing test and its message without reading the log. Batch 3-2 built that for the integration job; it works for the unit job too.
+
+**Next: 3-5** (`p3/i2pd-golden-vectors`), then 3-6 (catch audit, last in the phase). 3-5 matters more than the plan implies now: 3-3 showed our SSU2 SessionRequest cannot be read by our own responder, and a captured i2pd SessionRequest is the reference that says whether our header *construction* or our header *hashing* is the wrong side.
