@@ -44,6 +44,24 @@ public class Ssu2NetIdTest
     private static readonly Regex Hardcoded =
         new( @"(?<![A-Za-z_])NetId\s*=\s*(?:2|0x02)\b", RegexOptions.Compiled );
 
+    /// <summary>
+    ///     Batch 4-0d-fix. The pattern above matches one *spelling* of the defect, and 4-0d
+    ///     declared the sweep complete on that basis. Two more spellings existed:
+    ///     <c>SSU2Constants.NETWORK_ID = 2</c>, and <c>header[14] = ...</c> writing it as a raw
+    ///     byte in <c>SSU2RelayHandler</c>. Neither contains the string "NetId".
+    ///
+    ///     <para>
+    ///         <b>A guard that only matches the syntax the fix happened to use is not a guard.</b>
+    ///         When a scan is the evidence that a defect class is gone, it has to cover the class.
+    ///     </para>
+    /// </summary>
+    private static readonly Regex HardcodedConstant =
+        new( @"NETWORK_ID\s*=\s*(?:2|0x02)\b", RegexOptions.Compiled );
+
+    /// <summary>The netid byte sits at offset 14 of an SSU2 long header.</summary>
+    private static readonly Regex RawHeaderWrite =
+        new( @"\[\s*14\s*\]\s*=\s*(?:2|0x02)\b", RegexOptions.Compiled );
+
     private int _originalNetworkId;
 
     /// <summary>
@@ -123,7 +141,13 @@ public class Ssu2NetIdTest
     {
         var offenders = Ssu2Sources()
             .Select( f => ( file: Path.GetFileName( f ), text: File.ReadAllText( f ) ) )
-            .Where( f => Hardcoded.IsMatch( StripComments( f.text ) ) )
+            .Where( f =>
+            {
+                var code = StripComments( f.text );
+                return Hardcoded.IsMatch( code )
+                       || HardcodedConstant.IsMatch( code )
+                       || RawHeaderWrite.IsMatch( code );
+            } )
             .Select( f => f.file )
             .ToArray();
 

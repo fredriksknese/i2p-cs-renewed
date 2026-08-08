@@ -1160,7 +1160,7 @@ public class SSU2RelayHandler
         // Version (byte 13)
         header[13] = SSU2Constants.VERSION;
         // NetId (byte 14)
-        header[14] = SSU2Constants.NETWORK_ID;
+        header[14] = (byte)I2PConstants.I2PNetworkId;
         // Reserved (byte 15)
         header[15] = 0;
         // Source connection ID (bytes 16-23): use zero; we don't have a session yet

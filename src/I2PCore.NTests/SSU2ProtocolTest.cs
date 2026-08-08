@@ -3,6 +3,7 @@ using I2PCore.Crypto;
 using I2PCore.TransportLayer.SSU2;
 using I2PCore.TransportLayer.SSU2.Messages;
 using I2PCore.Utils;
+using I2PCore.Data;
 using NUnit.Framework;
 using Assert = NUnit.Framework.Legacy.ClassicAssert;
 
@@ -28,7 +29,9 @@ public class SSU2ProtocolTest
 
         // Version and network ID
         Assert.AreEqual(2, SSU2Constants.VERSION, "SSU2 version must be 2");
-        Assert.AreEqual(2, SSU2Constants.NETWORK_ID, "Network ID must be 2 for mainnet");
+        // Batch 4-0d-fix: the assertion "Network ID must be 2 for mainnet" was removed with the
+        // constant it guarded. It enforced the defect -- netid 2 is the live network, the send
+        // path must honour --netid, and Ssu2NetIdTest now asserts exactly the opposite.
 
         // Header sizes per spec
         Assert.AreEqual(16, SSU2Constants.SHORT_HEADER_SIZE);
@@ -126,7 +129,7 @@ public class SSU2ProtocolTest
             PacketNumber = 0,
             Type = SSU2Constants.MSG_TYPE_SESSION_REQUEST,
             Version = SSU2Constants.VERSION,
-            NetId = SSU2Constants.NETWORK_ID,
+            NetId = (byte)I2PConstants.I2PNetworkId,
             Flag = 0,
             SourceConnectionId = 0x1122334455667788,
             Token = 0xDEADBEEFCAFEBABE,

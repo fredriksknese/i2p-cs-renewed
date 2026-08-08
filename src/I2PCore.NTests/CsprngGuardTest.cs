@@ -84,6 +84,27 @@ public class CsprngGuardTest
             "packet numbers repeated far more than chance allows over 2000 draws" );
     }
 
+    /// <summary>
+    ///     Drop a line comment before matching.
+    ///
+    ///     <para>
+    ///         Batch 4-0d-fix. This scan used to read whole lines, so <i>prose describing the
+    ///         banned constructor tripped it</i> — batch 4-2a's <c>SSU2TokenCache</c> was flagged
+    ///         for a doc comment explaining the rule, and had to be reworded around a guard rather
+    ///         than for a reader. A guard that fires on its own documentation trains people to
+    ///         work around it, which is the opposite of what it is for.
+    ///     </para>
+    ///     <para>
+    ///         Deliberately crude: no string-literal awareness, so <c>"new Random("</c> inside a
+    ///         string still counts. That direction of error is the safe one.
+    ///     </para>
+    /// </summary>
+    private static string StripComment( string line )
+    {
+        var at = line.IndexOf( "//", StringComparison.Ordinal );
+        return at >= 0 ? line[..at] : line;
+    }
+
     private static List<string> ScanFor( string root, Regex pattern )
     {
         return Directory
@@ -91,7 +112,7 @@ public class CsprngGuardTest
             .Where( f => !f.Contains( $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}" ) )
             .Where( f => !f.Contains( $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}" ) )
             .SelectMany( f => File.ReadLines( f )
-                .Select( ( line, n ) => ( f, n: n + 1, line ) )
+                .Select( ( line, n ) => ( f, n: n + 1, line: StripComment( line ) ) )
                 .Where( t => pattern.IsMatch( t.line ) ) )
             .Select( t => $"{Path.GetFileName( t.f )}:{t.n}" )
             .ToList();
