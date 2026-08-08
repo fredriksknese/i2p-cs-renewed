@@ -183,6 +183,11 @@ jobs:
           # flushed per line, so they survive a hard kill and name the last thing attempted.
           /tmp/i2p_scaled_test.log
           /tmp/i2pd_scaled_*.log
+          # Batch 4-2c: the golden-vector producers write into the test binary's TestData
+          # directory, so a capture that succeeded in CI was unreachable -- the bytes existed
+          # for the length of the job and then vanished. Collect them so a successful capture
+          # can actually be checked in.
+          src/I2PCore.NTests/bin/Release/net10.0/TestData/ssu2_*.txt
         if-no-files-found: warn
 
     # StopI2pd() only runs via Dispose(), so a timed-out or crashed test host
