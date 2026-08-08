@@ -795,3 +795,54 @@ There is a safety edge as well. `CLAUDE.md` says test ports use 29000-29099 "to 
 This is a Phase 0 safe-defaults and Phase 7 config-unification defect that also happens to cost 13 integration tests. **Fix the discarding, not just the call order** — moving the host's `SetConfig` calls earlier repairs the two hosts in this repo and leaves the trap set for the next one. A `Start()` that silently ignores configuration is the actual bug.
 
 **Next: 4-0e** (`p4/clientcontext-config-before-start`), then **4-2**, then **4-0b**, then **4-1**.
+
+### Session 4 (continued) — 2026-08-08 — batch 4-0e — PR #26, **merged with CI red**
+
+> **⚠️ `github-master`'s integration job is RED as of this batch, and batch 4-0f owns it.**
+> The test host crashes part-way through the run, so the 11 ScaledNetwork tests never execute
+> and batch 3-2's `MIN_INTEGRATION_TESTS` floor fails the job. **This breaks the plan's
+> "merge only when green" rule for every batch after it.** Until 4-0f lands, judge a batch by
+> the unit suite plus the integration `.trx` numbers, and compare failures against this
+> baseline rather than expecting a green job.
+
+**Unit suite 270 passed / 0 failed / 1 skipped** (was 266), Release build 0 errors, build job green, integration job red.
+
+#### The defect, which is a production one
+
+`Router.cs:125` calls `ClientContext.Inst.Start()`, and `ClientContext.Start()` began with `if (IsRunning) { LogWarning("Already running."); return; }`. Every host configures `ClientContext` *after* `Router.Start()` returns, so the services came up on their defaults and every `SetConfig` afterwards was applied to an already-started object and discarded. For a user of `I2PRouterCli`:
+
+- `--sam-port N` and `--http-proxy-port N` did nothing; SAM listened on 7656, the proxy on 4444.
+- `--sam-port 0`, which the CLI treats as *disable SAM*, **left SAM listening**.
+- "Disable SOCKS to avoid port conflicts" did not; SOCKS stayed on 4447.
+- Both hosts printed the ports they had asked for, having bound others.
+
+`CLAUDE.md` claims test ports avoid 29000-29099 so as not to collide with a live local I2P router; every run bound 7656/4444/4447 anyway.
+
+**Verified by measurement**, not review: the bridge moved from 7656 to the configured 29002, disabled services stay down, and every "failed to connect to the SAM bridge" failure is gone from the integration suite — those tests now fail at `CANT_REACH_PEER`, i.e. they reach real I2P routing for the first time.
+
+Reconciliation lives in each `StartX()` rather than in `Start()`, because `I2PRouterWeb`'s `RouterService.StartHttpProxy` calls `StartHTTPProxy()` **directly**; a `Start()`-only fix would have repaired the CLI and left the web console unable to move a port. **Fixing only the call order in the two hosts here would have left the trap armed for the next one.**
+
+#### Three CI attempts, and what each one actually taught
+
+| run | outcome | what preceded the crash |
+|---|---|---|
+| 1 | 41 of 52 in the report | `TestSend5MB_ECIES_X25519` hit `CancelAfter`, then the host died |
+| 2 | 40 | quarantined that test; `TestSend5MB_CSharpToI2pd_SAM` hit `CancelAfter`, host died |
+| 3 | 36 | quarantined all five 5 MB SAM transfers; **no timeout at all** — 5.5 min of silence after the last SSU2 test, then a hard process death |
+
+So there are **two separate causes**, and the quarantine addressed only the first:
+
+1. `[CancelAfter(n)]` cancels a `CancellationToken` NUnit passes **as a test-method parameter**, and none of the 23 tests carrying the attribute declares one. The timeout marks the test failed while its thread runs on; the orphans take the host down.
+2. Something in fixture teardown or the namespace transition kills the process outright. `ScaledNetworkFixture` never logs a line — an earlier green run has 40 such log lines, this run has zero — so the crash lands before its setup produces output. No OOM signal.
+
+**The hangs themselves are not a regression.** Before this batch those tests failed in seconds on a SAM connect that never succeeded; with the bridge bound they get far enough to stall on the streaming layer Phase 5 repairs. 4-0e converted fast failures into slow ones and thereby exposed a pre-existing landmine.
+
+**A hypothesis was formed and then refuted mid-batch**, which is worth recording as much as the finding: cause 1 was assumed to explain everything, and run 3 disproved it. Quarantining tests one at a time is what let that assumption survive two runs — *the third failure is the signal to stop treating symptoms*, and it should have come sooner.
+
+#### Merging red was a deliberate exception, taken by the maintainer
+
+The plan's rule 4 says stop and report rather than merge a partial fix. That was done: the options were put to the maintainer, who chose to land 4-0e and revert the quarantine. The reasoning recorded here so it is not mistaken for drift: the production defect is real, verified and unrelated to the crash; the crash is a fixture problem that predates this batch; and holding a correct fix behind an unrelated failure helps nobody. **The quarantine was reverted** because hiding five tests bought only cause 1 and cost real visibility.
+
+The CI integration filter keeps the new `TestCategory!=Experimental` exclusion, which the unit filter always had. Quarantine should mean quarantined everywhere — and it matters most for integration tests, which get quarantined precisely because of *how* they fail.
+
+**Next: 4-0f is now the highest priority in Phase 4**, because until the integration suite completes, no later batch can be measured — and Phase 4's remaining batches (4-2, 4-0b, 4-1) are exactly the ones whose verification lives in that suite.
