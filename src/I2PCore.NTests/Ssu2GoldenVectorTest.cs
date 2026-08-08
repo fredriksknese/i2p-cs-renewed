@@ -103,15 +103,13 @@ public class Ssu2GoldenVectorTest
     ///         failure this does not explain.
     ///     </para>
     ///     <para>
-    ///         Quarantined; owner Phase 4. The comments in <c>SSU2HeaderEncryption</c> cite
-    ///         "SSU2 spec lines 761-798" of a document not in the repository, so whoever fixes
-    ///         this should re-derive the convention from the published spec and i2pd's source
-    ///         rather than from those line references — batch 9-1 has the same problem with its
-    ///         citations.
+    ///         <b>Fixed by batch 4-0</b>, and this test is no longer quarantined — it is now the
+    ///         regression guard for the block counter. The convention was re-derived from
+    ///         <c>libi2pd/Crypto.cpp ChaCha20()</c> (<c>iv[0] = htole32 (1)</c>) rather than from
+    ///         the absent document the old comments cited.
     ///     </para>
     /// </summary>
     [Test]
-    [Category(TestCategories.Experimental)]
     public void OurHeaderDecryptionCanReadI2pdsHeader()
     {
         var vector = GoldenVectors.Read(GoldenVectors.Ssu2TokenRequest);

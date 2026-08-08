@@ -7,17 +7,78 @@ using Org.BouncyCastle.Crypto.Parameters;
 namespace I2PCore.Crypto;
 
 /// <summary>
-///     SSU2 Header Encryption
-///     Per SSU2 spec lines 761-798: Header Encryption
-///     Uses two-stage ChaCha20 encryption for obfuscation and DPI resistance
-///     CRITICAL: Key derivation differs by message type:
-///     - Session Request: k_header_1 = bik, k_header_2 = bik (Bob's intro key DIRECTLY, no derivation)
-///     - Session Created: k_header_1 = bik, k_header_2 = HKDF(chainKey, ZEROLEN, "SessCreateHeader", 32)
-///     - Session Confirmed: k_header_1 = bik, k_header_2 = HKDF(chainKey, ZEROLEN, "SessionConfirmed", 32)
-///     - Data: k_header_2 from data phase KDF
+///     SSU2 header encryption — two-stage ChaCha20 obfuscation for DPI resistance.
+///
+///     <para>
+///         <b>Citations.</b> This file used to cite "SSU2 spec lines 761-798" and similar, of a
+///         document that is not in this repository and that nobody has been able to produce.
+///         Batch 4-0 re-derived the convention from i2pd, the peer we must interoperate with,
+///         and cites it by symbol so the references can be checked:
+///         <c>libi2pd/Crypto.cpp ChaCha20()</c>, <c>libi2pd/SSU2Session.h CreateHeaderMask()</c>,
+///         and the send/process pairs in <c>libi2pd/SSU2Session.cpp</c>. Verified against
+///         i2pd 2.61.0. <b>Do not reintroduce line-number citations to an absent document</b> —
+///         batch 9-1 has the same problem with "ntcp2-hybrid.md line 363".
+///     </para>
+///
+///     <para><b>Key selection by message type</b> (unchanged, and confirmed correct):</para>
+///     <list type="bullet">
+///         <item>Session Request: k_header_1 = k_header_2 = Bob's intro key, no derivation</item>
+///         <item>Session Created: k_header_1 = bik, k_header_2 = HKDF(chainKey, ZEROLEN, "SessCreateHeader", 32)</item>
+///         <item>Session Confirmed: k_header_1 = bik, k_header_2 = HKDF(chainKey, ZEROLEN, "SessionConfirmed", 32)</item>
+///         <item>Data: k_header_2 from the data-phase KDF</item>
+///     </list>
+///
+///     <para>
+///         <b>Known remaining divergence from i2pd — batch 4-0b, not fixed here.</b> For Session
+///         Request and Session Created, i2pd encrypts packet bytes <b>16..64 as a single
+///         48-byte ChaCha20 pass</b> — header bytes 16-31 (source connection ID and token) plus
+///         the 32-byte ephemeral key, one keystream, zero nonce:
+///     </para>
+///     <code>
+///         // SSU2Session.cpp SendSessionRequest / ProcessSessionRequest
+///         m_Server.ChaCha20 (headerX, 48, m_Address->i, nonce, headerX);
+///         m_Server.ChaCha20 (buf + 16, 48, i2p::context.GetSSU2IntroKey (), nonce, headerX);
+///     </code>
+///     <para>
+///         We instead treat those as two independent keystreams — <see cref="EncryptLongHeaderComplete" />
+///         for bytes 16-31 and <see cref="ObfuscateEphemeralKey" /> for the key, each restarting
+///         at the beginning — so the ephemeral key is XORed with keystream bytes 0..32 where
+///         i2pd uses 16..48. Worse, <c>SessionRequest.ToByteArray</c> calls
+///         <see cref="EncryptLongHeaderInPacket" /> and never covers bytes 16-31 at all, so the
+///         source connection ID and token go out in the clear.
+///     </para>
+///     <para>
+///         <b>That same asymmetry is batch 3-3's unexplained AEAD failure.</b> Measured during
+///         4-0, not inferred: <c>SSU2Session.SendSessionRequest</c> encrypts with
+///         <see cref="EncryptLongHeaderInPacket" /> (bytes 0-15), while
+///         <c>SSU2Host.DispatchPacket</c> decrypts with <see cref="DecryptLongHeaderComplete" />
+///         (bytes 0-31). The receiver therefore XORs 16 bytes the sender never masked, so the
+///         header Bob hashes differs from the one Alice hashed and the Noise AEAD tag fails.
+///         Switching that one call to <see cref="EncryptLongHeaderComplete" /> takes the
+///         loopback fixture from <c>sent=1</c> to <c>sent=2</c> — Bob accepts the Session Request
+///         and replies. Not applied here, because the correct fix is 4-0b's single 48-byte pass,
+///         which subsumes it; landing the interim form would be writing code 4-0b immediately
+///         rewrites.
+///     </para>
+///     <para>
+///         So 3-3's C#-to-C# failure and this i2pd interop divergence are <b>one defect</b>, and
+///         4-0b closes both. That is worth knowing before Phase 4 spends a session treating them
+///         as separate.
+///     </para>
+///     <para>
+///         Left for 4-0b deliberately: there is no captured i2pd Session Request to verify the
+///         48-byte form against, because i2pd opens with a TokenRequest we cannot yet answer
+///         (batch 3-5, finding 1), so batch 4-2 unblocks the reference bytes.
+///         <c>Ssu2HeaderLayoutTest</c> pins the divergence as quarantined red tests meanwhile.
+///         The 16-byte form used here <i>is</i> correct for TokenRequest, Retry and PeerTest,
+///         which carry no ephemeral key.
+///     </para>
 /// </summary>
 public static class SSU2HeaderEncryption
 {
+    /// <summary>ChaCha20 operates on 64-byte blocks; block 0 is discarded to start at block 1.</summary>
+    private const int ChaCha20BlockSize = 64;
+
     /// <summary>
     ///     Derive k_header_2 for Session Created
     ///     SSU2 spec lines 1255-1270
@@ -201,7 +262,35 @@ public static class SSU2HeaderEncryption
     }
 
     /// <summary>
-    ///     Generate ChaCha20 keystream mask
+    ///     ChaCha20 keystream, starting at <b>block 1</b>.
+    ///
+    ///     <para>
+    ///         Batch 4-0 (docs/PRODUCTION-PLAN.md). This used to return the keystream from block
+    ///         0, which is <see cref="ChaCha7539Engine" />'s initial state. i2pd starts at block
+    ///         1 — <c>libi2pd/Crypto.cpp</c>, <c>ChaCha20()</c>:
+    ///     </para>
+    ///     <code>
+    ///         uint32_t iv[4];
+    ///         iv[0] = htole32 (1); memcpy (iv + 1, nonce, 12); // counter | nonce
+    ///     </code>
+    ///     <para>
+    ///         RFC 8439 §2.4 permits either ("this can be set to any number, but will usually be
+    ///         zero or one"), so neither library is wrong on its own — but the two disagree, and
+    ///         SSU2 is defined by what the network does. Every masked byte was therefore offset
+    ///         by 64 bytes of keystream: no header we produced could be read by i2pd and none of
+    ///         i2pd's could be read by us.
+    ///     </para>
+    ///     <para>
+    ///         Batch 3-5 measured this against a captured i2pd TokenRequest before it was fixed —
+    ///         scanning 128 bytes of keystream for an offset that decoded the header found
+    ///         exactly one, at byte 64. <c>Ssu2GoldenVectorTest</c> holds both ends of that:
+    ///         one test asserts i2pd's convention, the other decodes the real packet with ours.
+    ///     </para>
+    ///     <para>
+    ///         It stayed invisible because it is self-consistent — both ends of a C#-only
+    ///         exchange used block 0, so every internal test passed. Nothing that talks only to
+    ///         itself can detect a convention error.
+    ///     </para>
     /// </summary>
     private static byte[] GenerateChaCha20Mask(byte[] key, byte[] nonce, int length)
     {
@@ -212,6 +301,14 @@ public static class SSU2HeaderEncryption
 
         var engine = new ChaCha7539Engine();
         engine.Init(true, new ParametersWithIV(new KeyParameter(key), nonce));
+
+        // Discard block 0 rather than calling SkipTo: the engine exposes the skip as a counter
+        // manipulation on its parent Salsa20Engine, and generating the block explicitly is both
+        // obviously correct and immune to that API changing under us. These buffers are at most
+        // 32 bytes of payload on top of the 64 discarded, so this is not worth optimising until
+        // batch 10 pools the packet allocations around it.
+        var discarded = new byte[ChaCha20BlockSize];
+        engine.ProcessBytes(new byte[ChaCha20BlockSize], 0, ChaCha20BlockSize, discarded, 0);
 
         var input = new byte[length];
         var output = new byte[length];
