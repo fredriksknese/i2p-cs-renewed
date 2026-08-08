@@ -17,8 +17,13 @@ public class I2PSigningPublicKey : I2PSigningKey
         switch (Certificate.SignatureType)
         {
             case SigningKeyTypes.DsaSha1:
+                // Left-padded to the fixed width. Same defect as the ElGamal derivation in
+                // I2PPublicKey: ToByteArrayUnsigned() drops leading zero bytes, so about one
+                // DSA signing key in 256 was a byte short and serialised into a malformed
+                // Destination. Note the base I2PSigningKey(BigInteger, ...) constructor already
+                // pads -- only this derivation path was missing it.
                 Key = new I2PByteBlock(I2PConstants.DsaG.ModPow(privkey.ToBigInteger(), I2PConstants.DsaP)
-                    .ToByteArrayUnsigned());
+                    .ToByteArray(SigningPublicKeyLength(SigningKeyTypes.DsaSha1)));
                 break;
 
             case SigningKeyTypes.EcdsaSha256P256:
