@@ -897,3 +897,31 @@ Both remaining SSU2 batches are over the ~400-line rule and must split:
 | 6 | **4-1** | ACK wiring; its gate needs a working handshake, so it cannot precede 4-0b |
 
 **4-2's stated gate cannot be met by 4-2**, and that is 4-0b's doing, not 4-2's: "outbound connect to a token-enforcing i2pd completes <5 s" needs a Session Request i2pd can authenticate. 4-2a's honest gate is *i2pd answers our Retry with a Session Request, and we capture it*. Say so in the PR rather than leaving a gate looking unmet for unknown reasons.
+
+### Session 4 (continued) — 2026-08-08 — batch 4-0f — PR #27, merged — **`github-master` is green again**
+
+> The warning at the head of the 4-0e entry is **lifted**. The integration job passes, and the report is back to **52 total / 49 executed / 29 passed / 20 failed / 3 skipped** — the pre-crash baseline, with all 11 ScaledNetwork tests running again. Judge batches normally.
+
+**Unit suite 274 passed / 0 failed / 1 skipped**, both CI jobs green, integration job 47m33s (longer *because* the tests it used to kill now run).
+
+#### The fixture was SIGKILLing its own test host
+
+`RouterProcessManager.KillProcessOnPort` ran `fuser -k {port}/tcp`. **That signals every process holding the port and offers no way to spare the caller.** `ScaledNetworkFixture:111` sweeps 29000-29299 as its first action.
+
+While the in-process SAM bridge was wrongly bound to its default 7656 the two ranges never overlapped. **Batch 4-0e fixed the bridge to honour its configured port — 29002, the third port in the sweep — and the fixture began killing its own test host a second into setup.** Hence "started after 4-0e" with 4-0e itself being correct.
+
+Holders are now enumerated with `lsof -t` and killed by PID, skipping `Environment.ProcessId`. A missing `lsof` declines to kill rather than falling back to a blind `fuser`; killing blind is the defect.
+
+#### Reproduced on demand, which is the standard to aim for
+
+Reinstating `fuser -k` locally and running the new guard reproduces the CI signature verbatim — `The active test run was aborted. Reason: Test host process crashed` — and restoring the fix makes it pass. **A defect you can toggle is a defect you understand.** Three sessions of this plan have now been spent on failures that were merely *observed*; this one took minutes once it could be switched on and off.
+
+#### The wrong inference, and what caused it
+
+Session 4 recorded, as evidence, that `ScaledNetworkFixture` "never logged a line, so the crash lands before its setup produces output". **That was wrong.** `ScaledNetworkFixture.SetUp:74` redirects logging to `/tmp/i2p_scaled_test.log`, which the workflow did not collect — so the fixture ran, was killed mid-setup, and its evidence was discarded. The log is now in the artifact list along with `/tmp/i2pd_scaled_*.log`; both are flushed per line and survive a hard kill.
+
+**Absence of logs is not absence of execution — check where the logs went before concluding anything from their silence.** This is the third diagnosability gap this session (after the unread `.trx` `StackTrace` and the uncollected router logs) and the third time the expensive part was not the defect.
+
+#### Still open: the other crash cause
+
+`[CancelAfter(n)]` cancels a `CancellationToken` NUnit passes **as a test-method parameter**, and none of the 23 tests carrying the attribute declares one — so a timeout marks the test failed while its thread runs on, and the orphans can take the host down. Two of the three crashed runs had exactly that signature. It is independent of the port sweep, unfixed, and it will resurface as Phase 5 lets more tests reach a real transfer. Give those tests a `CancellationToken` parameter and thread it through `SAMHelper`.
