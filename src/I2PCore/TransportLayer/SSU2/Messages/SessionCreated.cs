@@ -1,5 +1,6 @@
 using System;
 using I2PCore.Crypto;
+using I2PCore.Data;
 using I2PCore.Utils;
 
 namespace I2PCore.TransportLayer.SSU2.Messages;
@@ -22,7 +23,7 @@ public class SessionCreated
             IsLongHeader = true,
             Type = SSU2Header.TYPE_SESSION_CREATED,
             Version = 2,
-            NetId = 2
+            NetId = (byte)I2PConstants.I2PNetworkId
         };
     }
 

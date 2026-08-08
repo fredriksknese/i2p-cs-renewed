@@ -1,5 +1,6 @@
 using System;
 using I2PCore.Crypto;
+using I2PCore.Data;
 using I2PCore.Utils;
 
 namespace I2PCore.TransportLayer.SSU2.Messages;
@@ -24,7 +25,7 @@ public class SessionRequest
             IsLongHeader = true,
             Type = SSU2Header.TYPE_SESSION_REQUEST,
             Version = 2,
-            NetId = 2 // I2P mainnet
+            NetId = (byte)I2PConstants.I2PNetworkId
         };
     }
 

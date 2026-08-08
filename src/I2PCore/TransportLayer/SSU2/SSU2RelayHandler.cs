@@ -987,7 +987,7 @@ public class SSU2RelayHandler
             IsLongHeader = true,
             Type = SSU2Header.TYPE_PEER_TEST,
             Version = 2,
-            NetId = 2,
+            NetId = (byte)I2PConstants.I2PNetworkId,
             SourceConnectionId = ((ulong)BufUtils.RandomUint() << 32) | BufUtils.RandomUint(),
             DestinationConnectionId = 0,
             PacketNumber = BufUtils.RandomUint()
