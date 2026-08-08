@@ -172,12 +172,32 @@ public class RouterProcessManager : IDisposable
     }
 
     /// <summary>
-    ///     Kill any process listening on the given TCP port (Linux only).
+    ///     Kill any *other* process listening on the given TCP port (Linux only).
     ///     Used to clean up stale i2pd instances from previous test runs.
+    ///
+    ///     <para>
+    ///         <b>Batch 4-0f (docs/PRODUCTION-PLAN.md). This used to run
+    ///         <c>fuser -k {port}/tcp</c>, which SIGKILLs every process holding the port —
+    ///         including the test host running this code.</b> <c>ScaledNetworkFixture</c> sweeps
+    ///         ports 29000-29299 as its first action, and while the in-process SAM bridge was
+    ///         (wrongly) bound to its default 7656 that never overlapped. Batch 4-0e fixed the
+    ///         bridge to honour its configured port — 29002 — which is the third port in the
+    ///         sweep, so the fixture began killing its own test host a second into setup.
+    ///     </para>
+    ///     <para>
+    ///         It presented as <c>"The active test run was aborted. Reason: Test host process
+    ///         crashed"</c> with no managed exception, no stack and no NUnit result, because
+    ///         SIGKILL leaves none of those — and it cost all 11 ScaledNetwork tests on every
+    ///         run. <b>Never send a signal to a PID set you have not excluded yourself from.</b>
+    ///     </para>
     /// </summary>
     private static void KillProcessOnPort(int port)
     {
-        // Log what holds the port before killing
+        var self = Environment.ProcessId;
+
+        // lsof -t lists holder PIDs one per line. Kill those individually rather than
+        // handing the port to `fuser -k`, which offers no way to spare the caller.
+        string[] pids;
         try
         {
             var lsof = Process.Start(new ProcessStartInfo
@@ -188,33 +208,44 @@ public class RouterProcessManager : IDisposable
                 RedirectStandardError = true,
                 UseShellExecute = false
             });
-            if (lsof != null)
-            {
-                var pids = lsof.StandardOutput.ReadToEnd().Trim();
-                lsof.WaitForExit(2000);
-                if (!string.IsNullOrEmpty(pids))
-                    Logging.LogWarning($"Port {port} held by PID(s): {pids}");
-            }
+            if (lsof == null) return;
+
+            pids = lsof.StandardOutput.ReadToEnd()
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            lsof.WaitForExit(2000);
         }
-        catch
+        catch (Exception ex)
         {
+            // lsof missing: previously this fell through to `fuser -k`. It no longer does —
+            // killing blind is what this batch exists to stop.
+            Logging.LogWarning($"Cannot enumerate holders of port {port} ({ex.GetType().Name}: {ex.Message}); leaving it alone");
+            return;
         }
 
-        try
+        foreach (var pidText in pids)
         {
-            var proc = Process.Start(new ProcessStartInfo
+            if (!int.TryParse(pidText, out var pid)) continue;
+
+            if (pid == self)
             {
-                FileName = "fuser",
-                Arguments = $"-k {port}/tcp",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false
-            });
-            proc?.WaitForExit(3000);
-        }
-        catch
-        {
-            // fuser may not be available; best-effort only
+                // The whole point. Also worth knowing about: it means a fixture is sweeping a
+                // port its own process legitimately holds.
+                Logging.LogWarning(
+                    $"Port {port} is held by this test host (PID {pid}); not killing it. "
+                    + "A fixture is sweeping a port range that overlaps its own listeners.");
+                continue;
+            }
+
+            try
+            {
+                Logging.LogWarning($"Port {port} held by PID {pid}; killing it");
+                Process.GetProcessById(pid).Kill(true);
+            }
+            catch (Exception ex)
+            {
+                // Already gone between lsof and here, or not ours to kill. Both are fine.
+                Logging.LogDebug($"Could not kill PID {pid} on port {port} ({ex.GetType().Name}: {ex.Message})");
+            }
         }
     }
 
