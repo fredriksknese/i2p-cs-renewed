@@ -41,3 +41,140 @@ jobs:
         name: unit-test-results
         path: TestResults/*.trx
         if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # Batch 3-2 (docs/PRODUCTION-PLAN.md) — integration tests against a real i2pd.
+  #
+  # This job gates on the tests *executing*, not on them passing. Before batch
+  # 3-1 all 51 integration tests Assert.Ignore()d themselves because i2pd was
+  # never found, and the suite reported success while covering nothing. That is
+  # the regression this job exists to prevent.
+  #
+  # Results are expected to be red for now: 25 passed / 23 failed against i2pd
+  # 2.45.1 as of 3-1, and those failures are the measured input to Phases 4-5.
+  # Hence `continue-on-error` on the test step only — the assert step after it
+  # still fails the job if the suite skipped itself or died part-way through.
+  # Gate 3 removes the continue-on-error and starts gating on results too.
+  #
+  # Kept a separate job from `build` so the ~25 minute run never delays the unit
+  # gate and a red result is attributable at a glance.
+  # ---------------------------------------------------------------------------
+  integration:
+    runs-on: ubuntu-24.04
+
+    # The suite runs strictly serially — fixtures share the Router and
+    # TransportProvider singletons and fixed ports 29000-29039 — and takes
+    # ~24 min locally. Generous headroom over that, but bounded, because a hung
+    # fixture would otherwise burn the full 6 h runner limit.
+    timeout-minutes: 60
+
+    env:
+      # Pinned upstream release rather than the distro package. Ubuntu and
+      # Debian ship i2pd 2.45.1, which is plan risk R4: gates passed against it
+      # prove less than they appear. Bump I2PD_VERSION, I2PD_DEB and
+      # I2PD_DEB_SHA256 together — the hash is checked before the file is used.
+      I2PD_VERSION: "2.61.0"
+      I2PD_DEB: i2pd_2.61.0-1noble1_amd64.deb
+      I2PD_DEB_SHA256: 5d4138be6cb448c1d59bba8c1e67e99f6cdbfea3e6f8697d3cce0252cfe24cf8
+      I2PD_PREFIX: /opt/i2pd
+
+      # Floor for "the suite actually ran". Anything below this means the tests
+      # skipped themselves or the test host died mid-run, both of which have
+      # happened and both of which look like success in the console output.
+      #
+      # 48 of 51 execute, measured identically on this runner and locally (the
+      # other 3 self-skip because i2pd advertises no ML-KEM support). The floor
+      # sits well under that so adding or skipping a few tests does not trip it,
+      # and well over the ~55% that the one observed test-host crash produced.
+      MIN_INTEGRATION_TESTS: "40"
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 10.0.x
+
+    - name: Install i2pd ${{ env.I2PD_VERSION }}
+      run: |
+        set -euo pipefail
+
+        # lsof/psmisc back RouterProcessManager.KillStaleProcessesOnPorts, which
+        # frees test ports between fixtures. It is best-effort in C#, so a
+        # missing fuser degrades to a confusing "Address already in use".
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          libboost-program-options1.83.0 libminiupnpc17 libssl3t64 zlib1g lsof psmisc
+
+        deb="$RUNNER_TEMP/$I2PD_DEB"
+        curl -fsSL --retry 3 --retry-delay 5 -o "$deb" \
+          "https://github.com/PurpleI2P/i2pd/releases/download/$I2PD_VERSION/$I2PD_DEB"
+        echo "$I2PD_DEB_SHA256  $deb" | sha256sum -c -
+
+        # Unpacked, not installed. `apt install ./i2pd.deb` runs maintainer
+        # scripts that (a) start i2pd as a systemd service on the LIVE network —
+        # netid 2, which this repo's safety rule keeps CI well away from — and
+        # (b) register an AppArmor profile confining /usr/bin/i2pd to
+        # /var/lib/i2pd and ~/.i2pd. Our fixtures run i2pd with
+        # --datadir=/tmp/i2pd_test_*, which that profile denies. Unpacking to
+        # $I2PD_PREFIX sidesteps both: no maintainer scripts run at all, and the
+        # binary path does not match the profile's attachment glob.
+        sudo dpkg-deb -x "$deb" "$I2PD_PREFIX"
+        echo "I2PD_PATH=$I2PD_PREFIX/usr/bin/i2pd" >> "$GITHUB_ENV"
+
+    - name: Verify i2pd runs and no router is live
+      run: |
+        set -euo pipefail
+        "$I2PD_PATH" --version
+
+        if systemctl is-active --quiet i2pd; then
+          echo "::error::i2pd is running as a service; it would be on the live network"
+          exit 1
+        fi
+        if pgrep -x i2pd > /dev/null; then
+          echo "::error::a stray i2pd process is already running"
+          exit 1
+        fi
+
+    - name: Restore dependencies
+      run: dotnet restore i2p.sln
+
+    - name: Build
+      run: dotnet build i2p.sln -c Release --no-restore
+
+    # Integration fixtures spawn i2pd on netid 99 (I2pdConfigGenerator.TestNetworkId)
+    # and C# routers with --netid 99 --disable-reseed, so nothing here reaches the
+    # live network. ScaledNetwork and MultiHop tests carrying [Category("Integration")]
+    # are included by this filter, exactly as in the local command in the plan.
+    - name: Integration tests
+      continue-on-error: true
+      run: >
+        dotnet test src/I2PCore.NTests -c Release --no-build
+        --filter "TestCategory=Integration"
+        --logger "trx;LogFileName=integration-tests.trx"
+        --results-directory TestResults
+
+    # The console output of `dotnet test` cannot be trusted here: it rewrites
+    # lines with \r, and a crashed test host prints "Passed!" next to a non-zero
+    # exit and a total missing every test that never ran. The .trx is the record.
+    - name: Summarise results and assert the suite ran
+      if: always()
+      run: python3 .github/scripts/summarise_trx.py TestResults
+
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: integration-test-results
+        path: |
+          TestResults/*.trx
+          /tmp/i2p_integration_test.log
+          /tmp/i2pd_test*.log
+        if-no-files-found: warn
+
+    # StopI2pd() only runs via Dispose(), so a timed-out or crashed test host
+    # leaves i2pd behind holding test ports (plan session log, Phase 3 finding 2).
+    - name: Kill leftover i2pd processes
+      if: always()
+      run: pkill -x i2pd || true
