@@ -133,6 +133,7 @@ Order is driven by one question: what must exist before SSU2/ECIES repair is eve
 | 4-0b | `p4/ssu2-header-48-byte-pass` | **Found by 4-0; this is also batch 3-3's unexplained AEAD failure — one defect, not two.** i2pd covers packet bytes 16..64 in a **single 48-byte ChaCha20 pass** (`SSU2Session.cpp` Send/ProcessSessionRequest) for Session Request and Session Created. We use two restarted keystreams, so the ephemeral key is XORed with keystream bytes 0..32 where i2pd uses 16..48; and `SessionRequest.ToByteArray` calls `EncryptLongHeaderInPacket`, which stops at byte 16, so the source connection ID and token go out **in the clear**. The sender masks 0-15 while `SSU2Host.DispatchPacket` unmasks 0-31, which is why the loopback AEAD tag fails. The 16-byte form is correct for TokenRequest/Retry/PeerTest and must stay. **Blocked on 4-2** for reference bytes — do not land it against a self-agreeing test. | The three `Ssu2HeaderLayoutTest` tests un-quarantine; 3-3 loopback gets past Session Request |
 | 4-0c | `p4/integration-fixture-ordering` | **Test infrastructure, not SSU2** — the `4-0x` numbering only means "runs before 4-1". Three `[SetUpFixture]`s decide whether to reuse the shared C# router by testing `TestNetworkFixture.CSharpRouter != null`. That stays true after teardown disposes it, and `NetDb.Stop()` nulls `NetDb.Inst`, so the reused router is dead: 11 tests NRE'd inside `NetDb.Inst.AddRouterInfo` and the SAM-bridge cluster lost its listener. Fix: `CSharpRouterHarness.IsRunning` (asks the singletons), null the static on teardown, and stop `Stop()` restoring `I2PNetworkId = 0x02` + `Bootstrap.Disabled = false` — a rule-5 breach. Also make `summarise_trx.py` print stack frames; the traces were in the `.trx` all along. | Integration failures drop from 23; `IntegrationFixtureLifecycleTest` green and confirmed red with each defect reinstated |
 | 4-0d | `p4/ssu2-netid-from-config` | **Blocks every other SSU2 batch.** Outgoing headers hardcode `NetId = 2` while `SSU2SecurityValidator.cs:87` and `SSU2Helpers.cs:136` validate against `I2PConstants.I2PNetworkId` — the send path is pinned to the live network while the receive path honours configuration, so **SSU2 rejects its own traffic on netid 3 or 99**. Integration runs on 99 and rule 5 mandates 3, so no SSU2 handshake can complete on any netid this project may use. **Five sites, not the two 3-3 recorded:** `SSU2Session.cs:496`, `:1382`, `SSU2RelayHandler.cs:990`, `Messages/SessionRequest.cs:27` (commented `// I2P mainnet`), `Messages/SessionCreated.cs:25`. | `Ssu2NetIdTest`: headers announce the configured netid, what we send passes our own validator on 2/3/99, and a scan keeps the literal out |
+| 4-0e | `p4/clientcontext-config-before-start` | **Production defect, found by 4-0d.** `Router.cs:125` starts `ClientContext` before any host configures it, and `ClientContext.Start()` returns early on `IsRunning` — so every `SetConfig` a host makes afterwards is silently discarded. SAM/HTTP/SOCKS all default to enabled, so a router binds **7656/4444/4447** whatever the flags say, `--sam-port 0` does not disable SAM, and the CLI prints ports it never bound. Costs 13 integration tests too. Fix the silent discarding, not only the call order. | `--sam-port`/`--http-proxy-port` bind what was asked; `--sam-port 0` leaves nothing on 7656; SAM tests reach the configured port |
 | 4-1 | `p4/ssu2-ack-wiring` | Instantiate `SSU2AckManager` per session; `RecordSent` in `SendBlock`/`BuildDataPacket`; `RecordReceived` in `ProcessDataPacket`; replace the empty ACK case at `SSU2Session.cs:1215-1219` with real processing; `GenerateAck()` on session tick; drive retransmit from `GetPacketsNeedingRetransmit()` | 3-3 fixture at 5% loss delivers 100/100 |
 | 4-2 | `p4/ssu2-retry-token` | Add `MSG_TYPE_RETRY` (`SSU2Constants.cs:59`) to the dispatch at `SSU2Session.cs:616-637` — today it falls to "Unknown packet type". Per-peer token cache with expiry; set `header.Token` in `SendSessionRequest` (`:481-490`). **Widened by 3-5:** also *answer* an inbound **TokenRequest** (type 10) with a Retry. i2pd's opening packet to a peer it holds no token for is a TokenRequest, and nothing here handles it, so an inbound SSU2 session from i2pd cannot begin at all. This also unblocks capturing the Retry and Data-with-ACK vectors 3-5 could not reach. | Golden-vector Retry parse; outbound connect to a token-enforcing i2pd completes <5 s; i2pd proceeds to SessionRequest after our Retry |
 | 4-3 | `p4/ssu2-path-validation` | Real `SendPathResponse` (`SSU2Session.cs:360-372`); only then restore `ConnectionMigrationSupported` | Source-port migration mid-session survives |
@@ -752,3 +753,40 @@ The guard test found `MultiHopTestFixture` carrying the same defect, and since f
 `Stop()` restored `I2PConstants.I2PNetworkId = 0x02` and `Bootstrap.Disabled = false`, commented "restore defaults". Netid 2 is the live I2P network and that second line switches reseed back on, in process-wide statics that outlive the fixture that set them. Nothing observed reached netid 2, so this was latent rather than realised — but it is a breach of rule 5 sitting in the one place the rule most needs to hold. Nothing is restored now: **a test process has no legitimate non-test consumer of those globals, and 0x02 is the worst available choice of default.**
 
 **Next: the SSU2 netid batch, then 4-2.** Scoping during this session found the hardcoded-netid problem is **five sites, not the two** 3-3 recorded: `SSU2Session.cs:496` and `:1382`, `SSU2RelayHandler.cs:990`, `Messages/SessionRequest.cs:27` (commented "I2P mainnet") and `Messages/SessionCreated.cs:25`. Meanwhile `SSU2SecurityValidator.cs:87` and `SSU2Helpers.cs:136` both validate against `I2PConstants.I2PNetworkId`. **The send path is pinned to the live network while the receive path honours configuration, so SSU2 rejects its own traffic on netid 3 or 99** — every SSU2 test runs on 99 and the plan mandates 3 for local work, so nothing in Phase 4 is measurable until this lands. It is small, and it comes before 4-2.
+
+### Session 4 (continued) — 2026-08-08 — batch 4-0d — PR #25, merged
+
+**Unit suite 266 passed / 0 failed / 1 skipped** (was 260), Release build 0 errors, both CI jobs green. Integration **29 passed / 20 failed** — unchanged, and expected to be: 4-0d removes a precondition failure, it does not complete a handshake. Nothing flips green until 4-2 and 4-0b land.
+
+Five sites built SSU2 headers with a literal `NetId = 2` while `SSU2SecurityValidator.cs:87` and `SSU2Helpers.cs:136` validated against `I2PConstants.I2PNetworkId`. **The send path was pinned to the live network while the receive path honoured configuration, so SSU2 rejected its own traffic on any netid but 2** — and rule 5 forbids netid 2, integration runs on 99. No SSU2 handshake could complete on any netid this project is permitted to use.
+
+3-3 recorded two sites. Grepping for the pattern rather than the symptom found five — the same lesson the ElGamal padding fix recorded in session 3, now with a second data point. `Messages/SessionRequest.cs` stated the assumption outright as `// I2P mainnet`.
+
+**A guard test caught its own author.** The first version scanned for the substring `NetId = 2` and flagged `SSU2Blocks.cs`, which declares the termination reason `WrongNetId = 21`. It is a regex with a lookbehind now. A source-scanning guard is code, and gets the same scepticism as the code it guards.
+
+#### Found while investigating the SAM cluster: `Router.Start()` starts client services before any host can configure them
+
+Not fixed here — it is the next batch, and it is **a production defect, not a test one**.
+
+`Router.cs:125` calls `ClientContext.Inst.Start()`. Every host app configures `ClientContext` *after* `Router.Start()` returns, and `ClientContext.Start()` opens with `if (IsRunning) { LogWarning("Already running."); return; }`. **The configuration is applied to a thing that already started, and is silently discarded.** Measured locally:
+
+```
+SAMBridge: Listening on 127.0.0.1:7656
+ClientContext: SAM bridge started on port 7656.
+SAM bridge started on port 29002      <- the harness printing its intent, not what bound
+ClientContext: Already running.
+```
+
+Defaults are all enabled — SAM **7656**, HTTP proxy **4444**, SOCKS **4447**. `I2PRouterCli/Program.cs` calls `Router.Start()` at `:324` and sets SAM/HTTP/SOCKS config at `:354-374`, so for a real user:
+
+- `--sam-port N` is ignored; SAM listens on 7656.
+- `--http-proxy-port N` is ignored; the proxy is on 4444.
+- `--sam-port 0`, which the CLI treats as *disable SAM*, **leaves SAM listening**.
+- The comment "Disable SOCKS to avoid port conflicts" does not; SOCKS stays on 4447.
+- The CLI prints "SAM bridge enabled on port {samPort}" and "HTTP proxy started on 127.0.0.1:{httpProxyPort}". Both are false.
+
+There is a safety edge as well. `CLAUDE.md` says test ports use 29000-29099 "to avoid colliding with a live local I2P router", but every test run binds 7656/4444/4447 regardless — so the suite *does* collide with a local I2P install, and a service the operator asked to disable is listening anyway.
+
+This is a Phase 0 safe-defaults and Phase 7 config-unification defect that also happens to cost 13 integration tests. **Fix the discarding, not just the call order** — moving the host's `SetConfig` calls earlier repairs the two hosts in this repo and leaves the trap set for the next one. A `Start()` that silently ignores configuration is the actual bug.
+
+**Next: 4-0e** (`p4/clientcontext-config-before-start`), then **4-2**, then **4-0b**, then **4-1**.
