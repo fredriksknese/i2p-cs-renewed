@@ -237,6 +237,29 @@ public static class Logging
         Log(LogLevels.Warning, $"Exception ({module}): {Unwrap(ex)}");
     }
 
+    /// <summary>
+    ///     Batch 3-6 (docs/PRODUCTION-PLAN.md). <see cref="LogLevels.Error" /> has always been in
+    ///     the enum and has always been selectable as <c>--log-level error</c>, but no helper
+    ///     emitted at it — so that setting showed Critical only, and the whole level was
+    ///     unreachable from library code. Added because the catch audit found failures that end a
+    ///     transport for the life of the process, which Warning understates and Critical (a level
+    ///     that passes every threshold, including <c>Nothing</c>) overstates.
+    /// </summary>
+    public static void LogError(string txt)
+    {
+        Log(LogLevels.Error, txt);
+    }
+
+    public static void LogError(Exception ex)
+    {
+        Log(LogLevels.Error, $"Exception: {Unwrap(ex)}");
+    }
+
+    public static void LogError(string module, Exception ex)
+    {
+        Log(LogLevels.Error, $"Exception ({module}): {Unwrap(ex)}");
+    }
+
     public static void LogCritical(string txt)
     {
         Log(LogLevels.Critical, txt);

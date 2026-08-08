@@ -77,9 +77,17 @@ public class ECIESRouterProcessor
                 // Try to use existing session
                 return SessionManager.CreateExistingSessionMessage(remoteRouterHash, payload);
             }
-            catch (InvalidOperationException)
+            catch (InvalidOperationException ex)
             {
-                // No tags available or session expired, create new session
+                // Falling back to a fresh handshake is correct and recoverable, so this is not an
+                // error path. It is logged at Warning anyway because the usual cause is outbound
+                // tag exhaustion (batch 5-3: InitializeBiDirectionalTags pre-generates a fixed
+                // 5000 tags per direction and never generates more, so a long-lived session
+                // simply stops being able to speak). Swallowed silently, that defect presents as
+                // nothing worse than "this peer re-handshakes a lot".
+                Logging.LogWarning(
+                    $"ECIESRouterProcessor: existing session to {remoteRouterHash.Id32Short} "
+                    + $"could not be used, falling back to a new handshake: {ex}");
             }
 
         // Create new session
@@ -110,10 +118,21 @@ public class ECIESRouterProcessor
         }
         catch (Exception ex)
         {
+            // Debug, not Warning: the only caller (Router.HandleGarlic) uses this as a trial
+            // decrypt and returns false to fall through to the ElGamal path, so failure is the
+            // normal outcome for any router garlic not addressed to our static key.
+            //
+            // Logged here rather than left to the caller because that caller reads only
+            // Payload and never looks at Error — so before this line the exception had nowhere
+            // to go at all. The type is carried alongside the message for the same reason
+            // ProcessNewSessionMessage carries it: "Bad Data" names no layer on its own.
+            Logging.LogDebug(
+                $"ECIESRouterProcessor: ProcessMessage could not decrypt {message.Length} bytes: {ex}");
+
             return new ProcessedMessage
             {
                 Success = false,
-                Error = ex.Message
+                Error = $"{ex.GetType().Name}: {ex.Message}"
             };
         }
     }
@@ -165,7 +184,7 @@ public class ECIESRouterProcessor
         }
         catch (Exception ex)
         {
-            Logging.LogWarning($"ECIESRouterProcessor: HandleNextKey error: {ex.Message}");
+            Logging.LogWarning($"ECIESRouterProcessor: HandleNextKey error: {ex}");
         }
     }
 
