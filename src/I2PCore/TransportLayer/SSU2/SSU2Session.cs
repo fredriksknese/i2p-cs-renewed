@@ -493,7 +493,7 @@ public class SSU2Session : ITransport
             IsLongHeader = true,
             Type = SSU2Header.TYPE_SESSION_REQUEST,
             Version = 2,
-            NetId = 2,
+            NetId = (byte)I2PConstants.I2PNetworkId,
             DestinationConnectionId = RemoteConnectionId,
             SourceConnectionId = LocalConnectionId,
             PacketNumber = BufUtils.RandomUint() // Random for handshake packets
@@ -1379,7 +1379,7 @@ public class SSU2Session : ITransport
             IsLongHeader = true,
             Type = SSU2Header.TYPE_SESSION_CREATED,
             Version = 2,
-            NetId = 2,
+            NetId = (byte)I2PConstants.I2PNetworkId,
             DestinationConnectionId = RemoteConnectionId,
             SourceConnectionId = LocalConnectionId,
             PacketNumber = BufUtils.RandomUint() // Random for handshake packets
