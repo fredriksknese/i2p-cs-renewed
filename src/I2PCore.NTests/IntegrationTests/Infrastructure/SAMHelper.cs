@@ -247,7 +247,9 @@ public class SAMHelper : IDisposable
     ///     Convenience method for tests.
     /// </summary>
     public static async Task<SAMHelper> CreateAndHelloAsync(
-        string host, int port, int timeoutMs = 120000)
+        // Batch 4-0g: was 120000. Six of these in one test is where TestBidirectional5MB's
+        // 946 seconds came from -- each failed connect burned the full two minutes.
+        string host, int port, int timeoutMs = 45_000)
     {
         var helper = new SAMHelper(host, port);
         var sw = Stopwatch.StartNew();

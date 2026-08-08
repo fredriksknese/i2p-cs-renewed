@@ -27,8 +27,14 @@ public class DataTransferTests
     }
 
     private const int DataSize = 5 * 1024 * 1024; // 5MB
-    private const int DataTransferTimeoutMs = 300000; // 5 minutes
-    private const int ConnectionTimeoutMs = 120000; // 2 minutes
+    // Batch 4-0g (docs/PRODUCTION-PLAN.md): capped so no integration test can exceed ~5 minutes.
+    // Measured on the run that prompted this: the slowest *passing* test took 120s, while
+    // TestBidirectional5MB burned 946s and failed -- despite carrying [CancelAfter(300000)].
+    // CancelAfter cancels a CancellationToken that none of these tests declares as a parameter,
+    // so it only reports a timeout; it never stops the work. The internal waits below are the
+    // only thing that actually bounds a test, which is why they, not the attribute, were cut.
+    private const int DataTransferTimeoutMs = 240_000; // 4 minutes
+    private const int ConnectionTimeoutMs = 45_000;
 
     /// <summary>
     ///     Wait for both routers to have established tunnels before data transfer.
