@@ -462,3 +462,50 @@ Fixes: `RoutersStatistics` no longer reads `NetDb.Inst` (path passed in by its o
 4. **`dotnet test` console output is unreliable for capture** — it uses `\r` progress rewriting, and a redirect can leave only a mangled tail. Use `--logger trx` with `--results-directory` for anything you intend to quote.
 
 **Next: 3-2** (`p3/i2pd-in-ci`), then 3-3/3-4 (the paired-object fixtures), 3-5 (golden vectors), 3-6 (catch audit).
+
+### Session 3 — 2026-08-08 — batch 3-2 — PR #17, merged
+
+**Integration tests now run in CI.** A second job in `.github/workflows/dotnet.yml` installs a pinned i2pd and runs `--filter TestCategory=Integration`. Unit job 2m51s, integration job **23m17s**, both green.
+
+| | total | executed | passed | failed | skipped |
+|---|---|---|---|---|---|
+| CI, i2pd 2.61.0 | 51 | 48 | 25 | 23 | 3 |
+| local, i2pd 2.61.0 | 51 | 48 | 25 | 23 | 3 |
+| local, i2pd 2.45.1 (session 2) | 51 | 48 | 25 | 23 | 3 |
+
+**R4 is substantially retired.** The risk was that gates passed against Debian's ancient i2pd 2.45.1 prove less than they appear. Against **2.61.0 (0.9.70)**, the current upstream release, the suite produces not just the same counts but the same six failure signatures with the same multiplicities. Whatever is broken is not a 2.45.1 artifact. Keep recording the version in integration PR bodies, but the concern no longer needs to shape the schedule.
+
+**The "23 failures" are not 23 defects — they are six, and mostly not protocol defects at all.** This corrects the session-2 framing that they are "the measured input to Phases 4–5":
+
+| count | signature |
+|---|---|
+| 11 | `OneTimeSetUp: SetUp : NullReferenceException` — a fixture never initialises, so 11 tests exercise nothing |
+| 8 | `Failed to connect to SAM bridge at 127.0.0.1:29002` — the C# router's SAM bridge never came up |
+| 1 | `SAM STREAM CONNECT failed: CANT_REACH_PEER "LeaseSet not found"` |
+| 1 | `i2pd RouterInfo should be in our NetDb after NTCP2 handshake` |
+| 1 | `Expected SESSION STATUS, got: ` |
+| 1 | `Datagram session should succeed or report status: ` |
+
+Only the last four reach a protocol-level measurement. **Whoever starts Phase 4 should fix the fixture NRE and the SAM bridge startup first** — 19 of 23 failures are downstream of those two, and until they are fixed the suite cannot report on SSU2 or ECIES at all. Note also that these fixtures share the `Router`/`TransportProvider` singletons, so it is plausible the SAM-bridge cluster is collateral from the fixture that crashed earlier in the run; that ordering dependency is worth confirming before treating them as two separate causes.
+
+**Two hazards in the i2pd Debian package, both of which would have failed only in CI:**
+
+1. **The `postinst` starts i2pd as a systemd service** — `invoke-rc.d ... start` and `deb-systemd-invoke start i2pd.service`. On netid 2, the live network, on every runner.
+2. **The package ships an AppArmor profile** attached to `/{usr/,}bin/i2pd` that restricts writes to `/var/lib/i2pd/**` and `~/.i2pd/**`. Our fixtures run i2pd with `--datadir=/tmp/i2pd_test_*` and `logfile=/tmp/...`, which that profile denies. This never bites locally because apt on Debian installs to `/usr/sbin/i2pd`, which the attachment glob does not match — but the upstream deb puts the binary at `/usr/bin/i2pd`, which it does.
+
+Both are avoided by unpacking with `dpkg-deb -x` into `/opt/i2pd` instead of installing: no maintainer scripts run at all, and the path falls outside the profile's glob. A verify step then asserts no i2pd service is active and no stray i2pd process exists. **If a later batch switches to `apt install`, both hazards come back.**
+
+**Deviation from the batch spec, deliberately.** The plan says `continue-on-error: true`. Applying that to the *job* would also excuse the two failure modes this project has already hit — a suite that skips itself (the entire pre-3-1 state) and a test host that dies mid-run (the crash that forced batch 2-7). It sits on the *test step* instead, and a following step parses the `.trx` and fails the job if fewer than `MIN_INTEGRATION_TESTS` executed. So CI gates on the suite *running* while staying lenient about results. Gate 3 removes one line and starts gating on results too.
+
+`MIN_INTEGRATION_TESTS` is **40**, set from the measured 48 rather than guessed: low enough that adding or skipping a few tests will not trip it, high enough to catch the ~55% partial run that the observed test-host crash produced.
+
+**Findings for later phases:**
+
+1. **i2pd 2.61.0 still does not advertise ML-KEM.** The 3 skips are the PQ tests, self-skipping with "i2pd does not advertise ML-KEM support" — on the current release, not just on 2.45.1. Phase 9's note frames the source build as necessary because *Debian* ships something old; it is necessary regardless. **Batch 9-4's `I2PD_ALLOW_BUILD=1` path is not optional.**
+2. **Phase 3 finding 3 does not bite — verified, not assumed.** Every integration fixture already disables reseed: `CSharpRouterHarness.cs:92` sets `Bootstrap.Disabled = true`, and `CSharpProcessManager.cs:113` passes `--disable-reseed` alongside `--netid 99`. CI therefore makes no live-network contact. Worth re-checking if a new fixture is added.
+3. **Phase 3 finding 2 is mitigated in CI but not fixed in code.** A `pkill -x i2pd` step with `if: always()` cleans up after a timed-out or crashed host, and the runner is ephemeral besides. The kill-on-close job object is still wanted for local runs, where a leaked i2pd holds test ports across sessions.
+4. **`.github/scripts/summarise_trx.py` is the reusable half of this batch.** It turns a `.trx` into a job summary and exits non-zero when too few tests executed. Point it at any results directory; `MIN_INTEGRATION_TESTS` sets the floor.
+
+**No production code changed** — this batch is CI configuration only, so the unit suite and the 58-warning Release build are unmoved.
+
+**Next: 3-3** (`p3/loopback-transport-fixture`), then 3-4 (ECIES pump fixture), 3-5 (golden vectors), 3-6 (catch audit, last in the phase).
