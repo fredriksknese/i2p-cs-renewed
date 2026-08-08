@@ -223,7 +223,9 @@ public class SSU2Host : ITransportProtocol
         }
         catch (Exception ex)
         {
-            Logging.LogWarning($"SSU2Host: Failed to initialize UDP socket: {ex}");
+            // UdpSocket stays null and every send and receive silently no-ops from here on, so
+            // the transport is dead rather than degraded. Error, not Warning.
+            Logging.LogError($"SSU2Host: Failed to initialize UDP socket, SSU2 will not run: {ex}");
         }
     }
 
@@ -252,7 +254,10 @@ public class SSU2Host : ITransportProtocol
         }
         catch (Exception ex)
         {
-            Logging.LogWarning($"SSU2Host: Fatal error: {ex}");
+            // This catch wraps the entire worker loop, so reaching it ends SSU2 for the lifetime
+            // of the process — no sessions, no receives, no peer tests, and nothing restarts it.
+            // "Fatal" was accurate; the level was not.
+            Logging.LogError($"SSU2Host: worker loop terminated, SSU2 is now dead: {ex}");
         }
         finally
         {
@@ -301,7 +306,10 @@ public class SSU2Host : ITransportProtocol
         }
         catch (Exception ex)
         {
-            Logging.LogDebug($"SSU2Host: PeerTest initiation failed: {ex.Message}");
+            // Rate-limited by PeerTestAction, so this cannot spam. Warning because peer testing
+            // is how IsFirewalled is determined, and a router that silently never completes one
+            // keeps whatever reachability assumption it booted with.
+            Logging.LogWarning($"SSU2Host: PeerTest initiation failed: {ex}");
             _peerTestInProgress = false;
             selectedSession.RelayHandler.PeerTestCompleted -= OnPeerTestCompleted;
         }
@@ -481,9 +489,17 @@ public class SSU2Host : ITransportProtocol
                 DispatchPacket(remoteEP, packetData);
             }
         }
-        catch (SocketException)
+        catch (SocketException ex)
         {
-            // Socket closed or network error - ignore
+            // Shutdown closes the socket out from under a blocked Receive, so this is routine
+            // once Terminated is set and stays at Debug. At any other time it is not routine:
+            // this catch sits outside the receive loop, so a SocketException abandons the whole
+            // batch of pending datagrams, and "SSU2 quietly stops receiving" is precisely the
+            // failure mode Phase 4 must be able to see.
+            if (Terminated)
+                Logging.LogDebug($"SSU2Host: receive socket closed during shutdown: {ex.Message}");
+            else
+                Logging.LogWarning($"SSU2Host: ProcessIncomingPackets socket error: {ex}");
         }
         catch (Exception ex)
         {
@@ -635,7 +651,7 @@ public class SSU2Host : ITransportProtocol
         }
         catch (Exception ex)
         {
-            Logging.LogWarning($"SSU2Host: HandleIncomingPeerTestPacket error for {remoteEP}: {ex.Message}");
+            Logging.LogWarning($"SSU2Host: HandleIncomingPeerTestPacket error for {remoteEP}: {ex}");
         }
     }
 

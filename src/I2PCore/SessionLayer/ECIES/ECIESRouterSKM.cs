@@ -292,8 +292,13 @@ public class ECIESRouterSKM
         }
         catch (Exception ex)
         {
-            Logging.LogDebug($"ECIESRouterSKM: Failed to parse blocks: {ex.Message}");
-            // Fallback: use raw data as payload if parsing failed
+            // The fallback hands the unparsed bytes downstream as though they were a valid
+            // payload, so a parse failure here does not stop anything — it produces garbage one
+            // layer further on, where the cause is no longer visible. Warning, with the
+            // exception, because this is the shape of bug Phase 5 is expected to hit.
+            Logging.LogWarning(
+                $"ECIESRouterSKM: failed to parse blocks, falling back to {data.Length} raw "
+                + $"bytes as the payload: {ex}");
             payload = data;
         }
 

@@ -12,6 +12,21 @@ namespace I2PCore.SessionLayer.ECIES;
 ///     A garlic message contains multiple cloves
 ///     Each clove contains instructions and a payload
 ///     Cloves can be nested (garlic within garlic)
+///
+///     <para>
+///         <b>Dead code, scheduled for deletion in batch 5-1</b> (docs/PRODUCTION-PLAN.md).
+///         Verified during the batch 3-6 catch audit: the type name appears nowhere outside this
+///         file, in either the library or the tests. Router-level garlic goes through
+///         <see cref="ECIESRouterProcessor" /> and destination garlic through
+///         <see cref="ECIESSessionKeyManager" />.
+///     </para>
+///     <para>
+///         Its two catch sites return a <c>Success = false</c> result and log nothing. That would
+///         breach the 3-6 rule if the code ran; it is left as-is, and recorded here instead of
+///         being tidied, because dressing up an unreachable path would only make it look
+///         maintained. If 5-1 decides to keep this class, its error handling has to be brought up
+///         to the rest of the directory first.
+///     </para>
 /// </summary>
 public class ECIESGarlicProcessor
 {

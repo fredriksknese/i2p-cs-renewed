@@ -174,7 +174,12 @@ public class ECIESSessionKeyManager
             }
             catch (Exception ex)
             {
-                Logging.LogDebug($"ECIESSessionKeyManager.ProcessNewSession: Hybrid variant {variant} failed: {ex.Message}");
+                // Expected: this loop trials every ML-KEM variant against one message, so all but
+                // at most one must fail. Debug for that reason, but with the full exception —
+                // "variant 3 failed" without a cause is what makes a PQ handshake bug (batch 9-3)
+                // indistinguishable from a message that was simply not hybrid.
+                Logging.LogDebug(
+                    $"ECIESSessionKeyManager.ProcessNewSession: hybrid variant {variant} failed: {ex}");
             }
         }
 
@@ -305,7 +310,17 @@ public class ECIESSessionKeyManager
                         IsHandshakeReply = true
                     };
                 }
-                catch { /* Not the right session or invalid reply */ }
+                catch (Exception ex)
+                {
+                    // Expected: this is a trial loop over every pending hybrid session, and all
+                    // but at most one of them must fail. Debug rather than Warning for that
+                    // reason — at Warning a single reply would log once per pending session.
+                    // The exception is still carried, because "none matched" with no record of
+                    // *how* each one failed is the blindfolded case this audit exists to remove.
+                    Logging.LogDebug(
+                        $"ECIESSessionKeyManager: Step 3 hybrid session "
+                        + $"{sess.RemoteHash?.Id32Short} did not match this reply: {ex}");
+                }
             }
         }
 
@@ -363,7 +378,14 @@ public class ECIESSessionKeyManager
         }
         catch (Exception ex)
         {
-            return new ProcessedDestinationMessage { Success = false, Error = ex.Message };
+            // Propagated rather than logged at Warning here: SessionManager.DecryptMessage logs
+            // Error for the caller and this is a trial path it recovers from. The exception type
+            // travels with the message because the string is all the caller ever sees.
+            return new ProcessedDestinationMessage
+            {
+                Success = false,
+                Error = $"HandshakeReply:{ex.GetType().Name}:{ex.Message}"
+            };
         }
     }
 
@@ -396,10 +418,14 @@ public class ECIESSessionKeyManager
         }
         catch (Exception ex)
         {
+            // As above: SessionManager.DecryptMessage is the logging consumer of Error, and a
+            // failure here is recoverable (it falls through to the NewSession path). Carrying
+            // the type distinguishes "wrong session" from "malformed message", which is the
+            // distinction batch 5-3's tag-window work will need.
             return new ProcessedDestinationMessage
             {
                 Success = false,
-                Error = ex.Message
+                Error = $"ExistingSession:{ex.GetType().Name}:{ex.Message}"
             };
         }
     }
@@ -448,6 +474,10 @@ public class ECIESSessionKeyManager
             }
             catch (Exception ex)
             {
+                // No log: this is a trial over every variant, and the accumulated `errors` list
+                // is returned to the caller as a single joined string below, which
+                // SessionManager.DecryptMessage logs. Recording the exception *type* per variant
+                // is what makes that string diagnostic rather than a wall of "Bad Data".
                 errors.Add($"{variant}:{ex.GetType().Name}:{ex.Message}");
             }
         }
@@ -472,6 +502,8 @@ public class ECIESSessionKeyManager
         }
         catch (Exception ex)
         {
+            // Terminal: every variant and the classical IK path have now failed, and this is the
+            // one return that carries the whole trial history out to the caller.
             errors.Add($"IK:{ex.GetType().Name}:{ex.Message}");
             return new ProcessedDestinationMessage
             {

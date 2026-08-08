@@ -297,7 +297,7 @@ public class SSU2Session : ITransport
         }
         catch (Exception ex)
         {
-            Logging.LogWarning($"{DebugId}: SendBlock failed: {ex.Message}");
+            Logging.LogWarning($"{DebugId}: SendBlock failed: {ex}");
         }
     }
 
@@ -433,6 +433,8 @@ public class SSU2Session : ITransport
     /// </summary>
     private static bool SupportsPQ(I2PRouterInfo routerInfo)
     {
+        if (routerInfo is null) return false;
+
         try
         {
             // Check if router identity uses ECIES-MLKEM crypto key type
@@ -441,8 +443,14 @@ public class SSU2Session : ITransport
                    || keyType == I2PKeyType.KeyTypes.MLKEM768_X25519
                    || keyType == I2PKeyType.KeyTypes.MLKEM1024_X25519;
         }
-        catch
+        catch (Exception ex)
         {
+            // Reading the key type parses a peer-supplied certificate, so this is reachable on
+            // malformed input. Answering "no PQ" is the safe default, but it is not routine —
+            // a peer whose certificate will not parse is worth seeing.
+            Logging.LogWarning(
+                $"SSU2Session: SupportsPQ could not read the certificate of "
+                + $"{routerInfo.Identity?.IdentHash}: {ex}");
             return false;
         }
     }
@@ -1106,7 +1114,7 @@ public class SSU2Session : ITransport
         }
         catch (Exception ex)
         {
-            Logging.LogWarning($"{DebugId}: Failed to parse SessionConfirmed payload: {ex.Message}");
+            Logging.LogWarning($"{DebugId}: Failed to parse SessionConfirmed payload: {ex}");
             Terminate($"Failed to parse SessionConfirmed payload: {ex.Message}");
             return;
         }
@@ -1266,7 +1274,12 @@ public class SSU2Session : ITransport
                     }
                     catch (Exception ex)
                     {
-                        Logging.LogDebug($"{DebugId}: Failed to parse RouterInfo block: {ex.Message}");
+                        // Dropping a data-phase RouterInfo update is survivable, but it silently
+                        // leaves NetDb and RemoteRouterInfo stale, and a peer whose RouterInfo we
+                        // can never parse looks identical to one that never sends updates.
+                        Logging.LogWarning(
+                            $"{DebugId}: failed to parse a data-phase RouterInfo block "
+                            + $"({block.Data?.Length ?? 0} bytes), NetDb not updated: {ex}");
                     }
 
                     break;

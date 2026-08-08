@@ -1102,7 +1102,12 @@ public class SSU2RelayHandler
         }
         catch (Exception ex)
         {
-            Logging.LogDebug($"SSU2Relay: RequestRelayTag failed: {ex.Message}");
+            // 0 is also the success return here (the tag arrives asynchronously via
+            // HandleRelayTag), so the caller cannot tell this apart from "asked, still waiting".
+            // The log is the only signal that a firewalled router is failing to acquire
+            // introducers, and SendBlock already handles its own errors — reaching this catch
+            // means something further out went wrong.
+            Logging.LogWarning($"SSU2Relay: RequestRelayTag failed for {session.DebugId}: {ex}");
             return 0;
         }
     }

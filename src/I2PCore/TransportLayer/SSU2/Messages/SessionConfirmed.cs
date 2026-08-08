@@ -104,9 +104,15 @@ public class SessionConfirmed
                             $"SessionConfirmed: Compressed RouterInfo from {riBytes.Length} to {compressed.Length} bytes");
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // Compression failed, use uncompressed
+                    // Falling back to the uncompressed RouterInfo is always wire-valid, so this
+                    // is recoverable — but it is not expected, and it is not free: compression is
+                    // what keeps a large RouterInfo inside one packet. A handshake that starts
+                    // failing on oversized SessionConfirmed would otherwise show no cause here.
+                    Logging.LogWarning(
+                        $"SessionConfirmed: RouterInfo compression failed, sending "
+                        + $"{riBytes.Length} bytes uncompressed: {ex}");
                 }
 
             // RouterInfo block header:
@@ -154,10 +160,14 @@ public class SessionConfirmed
             switch (blockType)
             {
                 case 2: // RouterInfo block
+                    // Declared outside the try so the catch below can report whether we thought
+                    // the block was compressed — the first thing worth knowing when it fails.
+                    byte flags = 0;
+
                     try
                     {
                         // Parse flags and frag
-                        var flags = reader.ReadByte();
+                        flags = reader.ReadByte();
                         var frag = reader.ReadByte();
 
                         // Read RouterInfo data (blockSize - 2 for flags/frag)
@@ -185,7 +195,14 @@ public class SessionConfirmed
                     }
                     catch (Exception ex)
                     {
-                        Logging.LogDebug($"SessionConfirmed: Failed to parse RouterInfo block: {ex.Message}");
+                        // RouterInfo stays null and the handshake carries on without ever
+                        // learning who the peer is. At Debug that reads downstream as "the peer
+                        // never sent one" rather than "we could not read the one it sent" —
+                        // which is exactly the ambiguity the integration suite's missing-peer
+                        // RouterInfo failure leaves open.
+                        Logging.LogWarning(
+                            $"SessionConfirmed: failed to parse the peer's RouterInfo block "
+                            + $"(gzipped={(flags & 0x02) != 0}, {blockSize - 2} bytes): {ex}");
                     }
 
                     break;
