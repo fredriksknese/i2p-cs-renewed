@@ -177,6 +177,12 @@ jobs:
           TestResults/*.trx
           /tmp/i2p_integration_test.log
           /tmp/i2pd_test*.log
+          # Batch 4-0f: ScaledNetworkFixture.SetUp redirects logging to its own file, so
+          # everything after the IntegrationTests namespace went uncollected — which is why a
+          # test host being SIGKILLed looked like "ScaledNetworkFixture never ran". These are
+          # flushed per line, so they survive a hard kill and name the last thing attempted.
+          /tmp/i2p_scaled_test.log
+          /tmp/i2pd_scaled_*.log
         if-no-files-found: warn
 
     # StopI2pd() only runs via Dispose(), so a timed-out or crashed test host
