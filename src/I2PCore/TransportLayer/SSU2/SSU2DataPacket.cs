@@ -60,7 +60,7 @@ public class SSU2DataPacket
     public static byte[] BuildWithBlock(
         SSU2BlockType blockType, byte[] blockData,
         ulong destConnId, uint packetNum,
-        byte[] dataKey, byte[] headerKey2)
+        byte[] dataKey, byte[] headerKey1, byte[] headerKey2)
     {
         var packet = new SSU2DataPacket
         {
@@ -78,7 +78,11 @@ public class SSU2DataPacket
             Data = blockData ?? Array.Empty<byte>()
         });
 
-        return packet.ToByteArray();
+        // Batch 4-1a: this took dataKey and headerKey2 and used neither, returning
+        // packet.ToByteArray() — the bare block list, with no 16-byte header and no AEAD. Every
+        // relay tag request and peer test SendBlock has ever sent went out unframed and in the
+        // clear. The parameters were there all along; only the call was missing.
+        return packet.BuildEncryptedPacket(dataKey, headerKey1, headerKey2);
     }
 
     public byte[] ToByteArray()
@@ -101,16 +105,21 @@ public class SSU2DataPacket
     {
         var payload = ToByteArray();
 
-        // Build unencrypted header (16 bytes)
-        var headerBytes = new byte[16];
-        headerBytes[0] = (byte)((Header.DestinationConnectionId >> 56) & 0xFF);
-        headerBytes[1] = (byte)((Header.DestinationConnectionId >> 48) & 0xFF);
-        headerBytes[2] = 0; // Type field (0 for short header)
-        headerBytes[3] = 0; // Version/NetID
-        // Packet number at offset 4-7
-        var pnBytes = BufUtils.Flip32B(Header.PacketNumber);
-        Array.Copy(pnBytes, 0, headerBytes, 4, 4);
-        // Rest of header is padding/reserved
+        // Batch 4-1a (docs/PRODUCTION-PLAN.md): this used to hand-roll a 16-byte header that was
+        // not an SSU2 short header — two bytes of connection ID at 0-1, the packet number at 4,
+        // and a type byte at 2 — while every reader in the codebase takes the type from offset
+        // 12. Parse() mirrored the same invented layout, so build/parse round-tripped and no test
+        // noticed; nothing i2pd sends could be read and nothing we send could be read by i2pd.
+        // Truncating the 64-bit connection ID to its top 16 bits was the worse half: two sessions
+        // agreeing in those bits were indistinguishable.
+        //
+        // SSU2Header.ToByteArray already emits the correct layout (connection ID 0-7, packet
+        // number 8-11, type 12, flags 13-15) and the long-header path has always used it. Use the
+        // one definition rather than a second, private opinion of the wire format.
+        Header.IsLongHeader = false;
+        Header.Type = SSU2Header.TYPE_DATA;
+
+        var headerBytes = Header.ToByteArray();
 
         // Encrypt payload with ChaCha20-Poly1305 using header as AD
         // Per spec line 1901: ad = 16 byte header, before header encryption
@@ -138,20 +147,13 @@ public class SSU2DataPacket
         Array.Copy(packetData, packetCopy, packetData.Length);
         SSU2HeaderEncryption.DecryptShortHeaderInPacket(packetCopy, 0, headerKey1, headerKey2);
 
-        // Parse short header (now decrypted)
+        // Parse short header (now decrypted). Batch 4-1a: this used to read the invented layout
+        // described in BuildEncryptedPacket, recovering the connection ID from two bytes and the
+        // packet number from offset 4. Use the canonical parser, which is the same one the
+        // long-header path and SSU2Session's type peek already use.
         var reader = new I2PBufferCursor(packetCopy);
-        var connIdHigh = reader.ReadByte();
-        var connIdLow = reader.ReadByte();
-        reader.Seek(2); // Skip type/version
-        var packetNum = reader.ReadUInt32BigEndian();
-        reader.Seek(8); // Skip rest of header (total 16 bytes)
-
-        packet.Header = new SSU2Header
-        {
-            IsLongHeader = false,
-            DestinationConnectionId = ((ulong)connIdHigh << 56) | ((ulong)connIdLow << 48),
-            PacketNumber = packetNum
-        };
+        packet.Header = SSU2Header.ParseShortHeader(reader);
+        var packetNum = packet.Header.PacketNumber;
 
         // Build header bytes for AD (use decrypted header)
         var headerBytes = new byte[16];

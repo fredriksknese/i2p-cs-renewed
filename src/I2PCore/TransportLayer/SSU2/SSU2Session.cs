@@ -287,11 +287,14 @@ public class SSU2Session : ITransport
 
         try
         {
+            // Batch 4-1a: k_header_1 is the intro key of whichever router published the SSU2
+            // address, matching BuildDataPacket and ProcessDataPacket.
+            var kHeader1 = IsOutgoing ? GetRemoteIntroKey() : Host.GetMyIntroKey();
             var packet = SSU2DataPacket.BuildWithBlock(
                 blockType, blockData,
                 RemoteConnectionId,
                 SendPacketNumber++,
-                SendDataKey, SendHeaderKey2);
+                SendDataKey, kHeader1, SendHeaderKey2);
             Host.SendPacket(RemoteEndpoint, packet);
             BytesSent += packet.Length;
         }
@@ -617,8 +620,13 @@ public class SSU2Session : ITransport
                 // Try short header decryption if established
                 if (State == SessionState.Established)
                 {
+                    // Batch 4-1a: this passed the whole packet to DecryptShortHeader, which
+                    // throws unless the array is exactly 16 bytes — so every data packet larger
+                    // than its own header threw out of here into the outer catch and was
+                    // dropped. Decrypt the header in place on a clone instead.
                     var shortDecrypted = (byte[])packetData.Clone();
-                    SSU2HeaderEncryption.DecryptShortHeader(shortDecrypted, ReceiveHeaderKey2);
+                    SSU2HeaderEncryption.DecryptShortHeaderInPacket(
+                        shortDecrypted, 0, kHeader1, ReceiveHeaderKey2);
                     type = shortDecrypted[12]; // Type at offset 12 in short header
                 }
             }
