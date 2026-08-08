@@ -713,3 +713,41 @@ Running `ExploratoryTunnelsShouldBeBuilt` on its own, locally, against i2pd 2.61
 The integration `.trx` **is** in the CI artifacts, and `.github/scripts/summarise_trx.py` renders the six failure signatures and the exact failing-test list from it in one command. Reaching for the 1356-line job log first was wasted effort. `gh run download <id> -n integration-test-results` then summarise; the job log only adds value when you need a stack trace, and in this case it did not have one either.
 
 **Next: batch 4-2** (`p4/ssu2-retry-token`) — it is now on the critical path for two reasons rather than one: it unblocks inbound SSU2 from i2pd, and it produces the captured Session Request that 4-0b needs. The fixture-NRE/SAM-bridge work should be split into its own batch before or alongside it, starting with diagnosability rather than a fix. **4-0b comes after 4-2, not before.**
+
+### Session 4 (continued) — 2026-08-08 — batch 4-0c — PR #24, merged
+
+**Unit suite 260 passed / 0 failed / 1 skipped** (was 256), Release build 0 errors, both CI jobs green. Integration **52 total / 49 executed / 29 passed / 20 failed / 3 skipped** (was 26/23). i2pd 2.61.0, all routers on netid 99.
+
+#### The defect: three fixtures reused a router that was already stopped
+
+`TestNetworkFixture`, `ScaledNetworkFixture` and `MultiHopTestFixture` each decided whether they could reuse the shared in-process router by testing `TestNetworkFixture.CSharpRouter != null`. Teardown disposes the router but leaves the static reference set, and `Router.Stop()` → `NetDb.Stop()` sets `NetDb.Inst = null`. **The check stayed true for a router that no longer existed.** `[SetUpFixture]`s in other namespaces run after that teardown, so `ScaledNetworkFixture` reused a dead router and died inside `NetDb.Inst.AddRouterInfo`.
+
+It never reproduced standalone — run one ScaledNetwork test alone and the reference really is null, so the fixture builds its own router and the 10-router network comes up in 113.5s. **"Works alone, fails in the suite" was the whole signature**, and it is worth reading as "shared process state" on sight.
+
+Fixed with `CSharpRouterHarness.IsRunning`, which asks the singletons rather than the object; all three call sites branch on it, and teardown now drops the reference with the router.
+
+#### Two sessions were lost to a diagnosability gap, not a hard bug
+
+The `.trx` carries a `StackTrace` next to every failure `Message`. `summarise_trx.py` only ever read `Message`. **The file and line were in the CI artifact the entire time** — 3-2 recorded these as an opaque `NullReferenceException`, 4-0 went digging through a 1356-line job log that did not contain the trace either, and printing the existing field named the defect in one command. The summariser now prints the repo's own frames per failure.
+
+This is the second time this plan has paid a session for missing observability rather than for a hard defect (the first being 0-1's Release logging). **When a failure is unreadable, fix the reporting before fixing the code** — it is nearly always cheaper than the investigation it replaces.
+
+#### The count barely moved and that is the wrong measure
+
+23 → 20 failures, but **all 11 `NullReferenceException`s are gone** and the integration job went from 23m to **36m55s**. The 11 tests that used to die in `OneTimeSetUp` now run and do real work, and three report protocol defects the suite has never before been able to measure:
+
+- `TestSend5MB_I2pd0_To_I2pd1` — **SHA-256 mismatch**, i2pd → i2pd with C# routers as tunnel hops
+- `TestSend5MB_I2pd2_To_I2pd3` — **SHA-256 mismatch**
+- `LeaseSetLookupAndEncryptionVerification` — LeaseSet lookup does not succeed
+
+Data corruption with C# as a participating hop is a Phase 6 finding that arrived early. **Do not judge a fixture-repair batch by the failure count** — 3-2's "23 failures are six signatures, and mostly not protocol defects" framing was right, and the corollary is that fixing them raises the count of *meaningful* failures while barely moving the total.
+
+#### A prediction made during the batch, and refuted by it
+
+The guard test found `MultiHopTestFixture` carrying the same defect, and since four of the eight SAM-bridge failures are MultiHop tests, this session predicted the SAM cluster shared the root cause. **It does not.** SAM failures persist and now also appear on port **29102** — `PortAllocator.Scaled.Cs0Sam`, the router `ScaledNetworkFixture` now correctly starts for itself. `CSharpRouterHarness.Start()` wraps SAM startup in a `catch` that logs a warning, and that warning does not appear, so the bridge is not throwing — it simply never accepts a connection. **This is a separate defect and needs its own batch** (~13 tests).
+
+#### Unplanned: the harness restored the process to the live network
+
+`Stop()` restored `I2PConstants.I2PNetworkId = 0x02` and `Bootstrap.Disabled = false`, commented "restore defaults". Netid 2 is the live I2P network and that second line switches reseed back on, in process-wide statics that outlive the fixture that set them. Nothing observed reached netid 2, so this was latent rather than realised — but it is a breach of rule 5 sitting in the one place the rule most needs to hold. Nothing is restored now: **a test process has no legitimate non-test consumer of those globals, and 0x02 is the worst available choice of default.**
+
+**Next: the SSU2 netid batch, then 4-2.** Scoping during this session found the hardcoded-netid problem is **five sites, not the two** 3-3 recorded: `SSU2Session.cs:496` and `:1382`, `SSU2RelayHandler.cs:990`, `Messages/SessionRequest.cs:27` (commented "I2P mainnet") and `Messages/SessionCreated.cs:25`. Meanwhile `SSU2SecurityValidator.cs:87` and `SSU2Helpers.cs:136` both validate against `I2PConstants.I2PNetworkId`. **The send path is pinned to the live network while the receive path honours configuration, so SSU2 rejects its own traffic on netid 3 or 99** — every SSU2 test runs on 99 and the plan mandates 3 for local work, so nothing in Phase 4 is measurable until this lands. It is small, and it comes before 4-2.
