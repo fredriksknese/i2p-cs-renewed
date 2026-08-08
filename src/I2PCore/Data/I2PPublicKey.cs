@@ -16,11 +16,17 @@ public class I2PPublicKey : I2PKeyType
         switch (Certificate.PublicKeyType)
         {
             case KeyTypes.ElGamal2048:
+                // ToByteArray(length), not ToByteArrayUnsigned(): the latter drops leading zero
+                // bytes, so roughly one ElGamal key in 256 came out 255 bytes long (and one in
+                // 65536 shorter still). I2P public keys are fixed width, so a short key
+                // serialised into a Destination shifts every field after it and the peer reads
+                // a corrupt group element -- "y value does not appear to be in correct group".
+                // Rare enough to look like a flaky test rather than a key that was born broken.
                 Key = new I2PByteBlock(I2PConstants
                     .ElGamalG.ModPow(
                         priv.ToBigInteger(),
                         I2PConstants.ElGamalP)
-                    .ToByteArrayUnsigned());
+                    .ToByteArray(Certificate.PublicKeyLength));
                 break;
 
             case KeyTypes.X25519:
@@ -89,7 +95,10 @@ public class I2PPublicKey : I2PKeyType
 
     public I2PPublicKey(BigInteger pubkey, I2PCertificate cert) : base(cert)
     {
-        Key = new I2PByteBlock(pubkey.ToByteArrayUnsigned());
+        // Left-padded for the same reason as the ElGamal derivation above. The signing-key
+        // counterpart, I2PSigningKey(BigInteger, I2PCertificate), has always padded here; this
+        // one did not, which is the asymmetry that hid the bug.
+        Key = new I2PByteBlock(pubkey.ToByteArray(cert.PublicKeyLength));
     }
 
     public override int KeySizeBytes => Certificate.PublicKeyLength;
