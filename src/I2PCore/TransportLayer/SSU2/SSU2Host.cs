@@ -47,6 +47,11 @@ public class SSU2Host : ITransportProtocol
     // Periodic peer test for NAT/firewall detection
     private readonly PeriodicAction PeerTestAction = new(TickSpan.Minutes(5));
 
+    // Batch 4-2a: SSU2 anti-DoS tokens. Per host rather than static, so two hosts can coexist
+    // in one process -- the property batch 3-3 introduced and Phase 8 depends on.
+    internal readonly SSU2TokenCache Tokens = new();
+    private readonly PeriodicAction TokenPruneAction = new(TickSpan.Minutes(5));
+
     // External IP detection from peer reports
     private readonly LinkedList<IPAddress> ReportedAddresses = new();
     private readonly Dictionary<IPEndPoint, SSU2Session> Sessions = new();
@@ -247,6 +252,7 @@ public class SSU2Host : ITransportProtocol
 
                 // Periodic peer test for NAT/firewall detection
                 PeerTestAction.Do(TryInitiatePeerTest);
+                TokenPruneAction.Do(Tokens.Prune);
 
                 // Periodic introducer management (for firewalled nodes)
                 if (MyRouterContext.IsFirewalled) IntroducerUpdateAction.Do(UpdateIntroducers);
@@ -530,8 +536,10 @@ public class SSU2Host : ITransportProtocol
                 }
             }
 
-            // Parse header to determine packet type
-            if (packetData.Length < 32)
+            // Parse header to determine packet type. Batch 4-2a raised this from 32: the
+            // trial decrypt below derives its IVs from the last 24 bytes, so anything under 64
+            // reads its own header as an IV and throws into the outer catch.
+            if (packetData.Length < 64)
             {
                 Logging.LogDebug($"SSU2Host: Packet from {remoteEP} too short ({packetData.Length} bytes)");
                 return;
@@ -581,6 +589,10 @@ public class SSU2Host : ITransportProtocol
             {
                 HandleIncomingPeerTestPacket(remoteEP, packetData);
             }
+            else if (header.Type == SSU2Header.TYPE_TOKEN_REQUEST)
+            {
+                HandleIncomingTokenRequest(remoteEP, packetData);
+            }
             else
             {
                 Logging.LogWarning(
@@ -590,6 +602,51 @@ public class SSU2Host : ITransportProtocol
         catch (Exception ex)
         {
             Logging.LogWarning($"SSU2Host: DispatchPacket error for {remoteEP}: {ex}");
+        }
+    }
+
+    /// <summary>
+    ///     Answer a TokenRequest with a Retry carrying a freshly issued token.
+    ///
+    ///     <para>
+    ///         Batch 4-2a (docs/PRODUCTION-PLAN.md). Type 10 used to fall through DispatchPacket's
+    ///         final else to "Received packet type 10 from unknown endpoint", and since a
+    ///         TokenRequest is i2pd's <b>first</b> packet to any peer it holds no token for, an
+    ///         inbound SSU2 session from i2pd could not begin at all.
+    ///     </para>
+    ///     <para>
+    ///         <b>No session is created here, deliberately.</b> A TokenRequest is stateless
+    ///         anti-DoS — that is its entire purpose — and registering a session would leave a
+    ///         half-live entry in Sessions[remoteEP] that the real Session Request would then be
+    ///         routed into.
+    ///     </para>
+    /// </summary>
+    private void HandleIncomingTokenRequest(IPEndPoint remoteEP, byte[] packetData)
+    {
+        try
+        {
+            if (!Retry.TryOpen(packetData, IntroKey, SSU2Header.TYPE_TOKEN_REQUEST,
+                    out var header, out _))
+            {
+                Logging.LogDebug(
+                    $"SSU2Host: TokenRequest from {remoteEP} did not authenticate; ignoring");
+                return;
+            }
+
+            var token = Tokens.Issue(remoteEP);
+            if (token == 0)
+            {
+                Logging.LogDebug($"SSU2Host: no token available for {remoteEP}; not answering");
+                return;
+            }
+
+            SendPacket(remoteEP, Retry.Build(header, token, IntroKey, remoteEP));
+
+            Logging.LogDebug($"SSU2Host: answered TokenRequest from {remoteEP} with a Retry");
+        }
+        catch (Exception ex)
+        {
+            Logging.LogWarning($"SSU2Host: HandleIncomingTokenRequest error for {remoteEP}: {ex}");
         }
     }
 
