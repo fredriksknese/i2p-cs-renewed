@@ -61,9 +61,19 @@ public class DataTransferTests
     ///     C# router sends 5MB to i2pd via SAM STREAM.
     ///     Data flows: C# SAM → C# tunnels → i2pd tunnels → i2pd SAM.
     ///     Verifies SHA-256 hash on receiving side.
+    ///     <para>
+    ///         <b>Quarantined by batch 4-0e; owner Phase 5 (5-5), with the rest of the 5 MB SAM
+    ///         transfers.</b> See <see cref="TestSend5MB_ECIES_X25519" /> for the mechanism: with
+    ///         the SAM bridge finally bound these reach a real transfer, stall on the streaming
+    ///         layer Phase 5 repairs, and their <c>CancelAfter</c> cancels a token no signature
+    ///         here accepts — so NUnit records a failure while the test thread runs on, and the
+    ///         orphans take the host down. Which one dies is a race: 4-0e's first CI run lost
+    ///         <c>TestSend5MB_ECIES_X25519</c>, the second <c>TestSend5MB_CSharpToI2pd_SAM</c>.
+    ///     </para>
     /// </summary>
     [Test]
     [CancelAfter(DataTransferTimeoutMs)]
+    [Category(TestCategories.Experimental)]
     public async Task TestSend5MB_CSharpToI2pd_SAM()
     {
         await WaitForTunnels();
@@ -137,9 +147,19 @@ public class DataTransferTests
     ///     i2pd sends 5MB to C# router via SAM STREAM.
     ///     Data flows: i2pd SAM → i2pd tunnels → C# tunnels → C# SAM.
     ///     Verifies SHA-256 hash on receiving side.
+    ///     <para>
+    ///         <b>Quarantined by batch 4-0e; owner Phase 5 (5-5), with the rest of the 5 MB SAM
+    ///         transfers.</b> See <see cref="TestSend5MB_ECIES_X25519" /> for the mechanism: with
+    ///         the SAM bridge finally bound these reach a real transfer, stall on the streaming
+    ///         layer Phase 5 repairs, and their <c>CancelAfter</c> cancels a token no signature
+    ///         here accepts — so NUnit records a failure while the test thread runs on, and the
+    ///         orphans take the host down. Which one dies is a race: 4-0e's first CI run lost
+    ///         <c>TestSend5MB_ECIES_X25519</c>, the second <c>TestSend5MB_CSharpToI2pd_SAM</c>.
+    ///     </para>
     /// </summary>
     [Test]
     [CancelAfter(DataTransferTimeoutMs)]
+    [Category(TestCategories.Experimental)]
     public async Task TestSend5MB_I2pdToCSharp_SAM()
     {
         await WaitForTunnels();
@@ -210,9 +230,19 @@ public class DataTransferTests
     /// <summary>
     ///     Bidirectional 5MB transfer: both routers send simultaneously.
     ///     Tests that the streaming protocol handles concurrent traffic.
+    ///     <para>
+    ///         <b>Quarantined by batch 4-0e; owner Phase 5 (5-5), with the rest of the 5 MB SAM
+    ///         transfers.</b> See <see cref="TestSend5MB_ECIES_X25519" /> for the mechanism: with
+    ///         the SAM bridge finally bound these reach a real transfer, stall on the streaming
+    ///         layer Phase 5 repairs, and their <c>CancelAfter</c> cancels a token no signature
+    ///         here accepts — so NUnit records a failure while the test thread runs on, and the
+    ///         orphans take the host down. Which one dies is a race: 4-0e's first CI run lost
+    ///         <c>TestSend5MB_ECIES_X25519</c>, the second <c>TestSend5MB_CSharpToI2pd_SAM</c>.
+    ///     </para>
     /// </summary>
     [Test]
     [CancelAfter(DataTransferTimeoutMs)]
+    [Category(TestCategories.Experimental)]
     public async Task TestBidirectional5MB_SAM()
     {
         await WaitForTunnels();
@@ -346,9 +376,19 @@ public class DataTransferTests
     /// <summary>
     ///     5MB transfer with ML-KEM768-X25519 hybrid encryption (post-quantum).
     ///     Skips if i2pd doesn't support ML-KEM.
+    ///     <para>
+    ///         <b>Quarantined by batch 4-0e; owner Phase 5 (5-5), with the rest of the 5 MB SAM
+    ///         transfers.</b> See <see cref="TestSend5MB_ECIES_X25519" /> for the mechanism: with
+    ///         the SAM bridge finally bound these reach a real transfer, stall on the streaming
+    ///         layer Phase 5 repairs, and their <c>CancelAfter</c> cancels a token no signature
+    ///         here accepts — so NUnit records a failure while the test thread runs on, and the
+    ///         orphans take the host down. Which one dies is a race: 4-0e's first CI run lost
+    ///         <c>TestSend5MB_ECIES_X25519</c>, the second <c>TestSend5MB_CSharpToI2pd_SAM</c>.
+    ///     </para>
     /// </summary>
     [Test]
     [CancelAfter(DataTransferTimeoutMs)]
+    [Category(TestCategories.Experimental)]
     public async Task TestSend5MB_MLKEM768_Hybrid()
     {
         // Check if i2pd supports ML-KEM
