@@ -112,7 +112,13 @@ public class ScaledNetworkFixture
             Enumerable.Range(29000, 300).ToArray());
 
         // Phase 2: Start C# Router 0 in-process with floodfill
-        if (TestNetworkFixture.CSharpRouter != null)
+        //
+        // Batch 4-0c: this asked `TestNetworkFixture.CSharpRouter != null`, which is true
+        // for a disposed harness too — TestNetworkFixture's OneTimeTearDown runs before
+        // this namespace's fixtures, so in a full suite run the router was already gone
+        // and every test here died with a NullReferenceException from NetDb.Inst. Ask
+        // whether the router is running, not whether the object exists.
+        if (TestNetworkFixture.CSharpRouter?.IsRunning == true)
         {
             CSharp0 = TestNetworkFixture.CSharpRouter;
             Cs0SamPort = CSharp0.SamPort;

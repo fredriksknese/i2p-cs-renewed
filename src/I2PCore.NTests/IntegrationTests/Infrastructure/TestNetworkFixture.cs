@@ -141,6 +141,14 @@ public class TestNetworkFixture
         {
         }
 
+        // Batch 4-0c: drop the reference as well as the router. Disposing it nulls
+        // NetDb.Inst and TransportProvider.Inst, so what is left here is a handle to a
+        // router that no longer exists — and ScaledNetworkFixture used to test this
+        // property for null to decide whether it could reuse it, then NRE inside
+        // NetDb.Inst.AddRouterInfo. Fixtures in other namespaces run after this
+        // teardown, so the window is real and not hypothetical.
+        CSharpRouter = null;
+
         try
         {
             if (!string.IsNullOrEmpty(I2pdDataDir) && Directory.Exists(I2pdDataDir))
@@ -168,7 +176,10 @@ public class TestNetworkFixture
     /// </summary>
     public static void RequireCSharpRouter()
     {
-        if (CSharpRouter == null)
-            Assert.Ignore("C# router not started — test network setup may have failed.");
+        // Batch 4-0c: liveness, not non-nullness — see CSharpRouterHarness.IsRunning.
+        // This is the guard that is meant to catch a missing router, so checking the
+        // weaker condition made it the one place most likely to wave a dead one through.
+        if (CSharpRouter?.IsRunning != true)
+            Assert.Ignore("C# router not running — test network setup may have failed.");
     }
 }
