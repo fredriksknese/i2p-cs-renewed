@@ -1240,3 +1240,34 @@ Confirmed red at 9 of 3000, then 6 of 3000 with the fix reverted — against a p
 Also removed: `docs/PRODUCTION-PLAN.md` carried **committed merge-conflict markers** at the 4-0i addendum, one side empty. The addendum was kept.
 
 **Next is unchanged from 4-0l: re-run the live test.** A padded Session Request is still the first one i2pd has had no stated reason to reject, and that answer can only come from CI — the locally installed i2pd 2.45.1 refuses SSU2 at its endpoint check.
+
+#### Addendum — the CI run of PR #41, and the first real token exchange with i2pd
+
+`CSharpEstablishesAnSSU2SessionWithI2pd` **still fails**, and the failure has moved two messages down the handshake. Previous run: `1 datagrams sent, 0 received`. This run: **2 sent, 24 received**, and i2pd's own log says what happened:
+
+```
+SSU2: SessionRequest token mismatch. Retry
+SSU2: Session MTU=1500, max payload size=1440
+SSU2: Block type 0 of size 4
+SSU2: Datetime
+SSU2: Block type 254 of size 17
+SSU2: Padding
+SSU2: Resending 4          (x22)
+SSU2: Session with 127.0.0.1:29260 terminated
+```
+
+**Four things are confirmed against a real peer at once, none of them by inference:**
+
+- **4-0l worked.** No `message too short`. i2pd accepted the padded Session Request and processed it.
+- **The token exchange works with i2pd.** It answered `token mismatch. Retry`, we consumed the Retry and sent a second Session Request — the flow 4-2a/4-2b built, exercised for the first time against something that is not us.
+- **i2pd parsed our handshake payload block by block**: `Block type 0 of size 4 / Datetime`, then `Block type 254 of size 17 / Padding`. That is 4-0i's framing and 4-0l's padding read correctly by the implementation they were written for. The 17 is ours — `MinimumPadding` 8 plus a random amount under 24.
+- **4-0m is not implicated.** Our netid and i2pd's are both 99 here, so the added version/netid check accepts what it should.
+
+**The new blocker: we receive i2pd's Session Created and do nothing with it.** `Resending 4` twenty-two times is i2pd retransmitting a message we never answer, and our own session stayed in `SessionRequestSent` while 24 datagrams arrived. So the packets reach us and are dropped.
+
+**Next batch (4-0n): find out why the Session Created is dropped, and do it from the evidence rather than by guessing.** The two candidates, in order of how cheaply they can be told apart:
+
+1. **`k_header_2` for the Session Created diverges from i2pd's.** We derive it as `HKDF(chainKey, "SessCreateHeader")` — the question is *which* chainKey, since a Retry restarts the handshake and 4-0h already found one bug of exactly this shape on our own side (the key derived after `se` had been mixed).
+2. **The peek rejects it.** If (1) is wrong the type byte is random, `TrialLongHeaderType` returns `TYPE_UNRECOGNISED`, and the packet reaches the `default` arm.
+
+These are distinguishable without a network: the live test already captures the datagrams, so decrypt a captured Session Created offline with each candidate chaining key and see which one unmasks a header reading `type=1 version=2 netid=99`. **Do not change the derivation until one of them does** — this plan has paid for guessing between plausible explanations before.
