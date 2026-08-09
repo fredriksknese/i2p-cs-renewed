@@ -49,7 +49,7 @@ shown. Until Gate 6, do not run this on the live network (netid 2) — use `--ne
   * Outbound: 50%? working
 * SSU2: *(off by default — no ACK/retransmit wired up, and the handshake payload is not block-framed, which i2pd requires)*
   * Inbound: Handshake completes against another C# router (batch 4-0h); never yet completed against i2pd
-  * Outbound: As above. Data phase delivers 100 of 100 messages on a lossless channel (batch 4-1b) and loses everything the network drops, because nothing retransmits
+  * Outbound: As above. Data phase delivers 100 of 100 on a lossless channel (batch 4-1b) and 100 of 100 through 5% loss (batch 4-1, ACK and retransmit)
 * SSU2-PQ: *(off by default)*
   * Inbound: Totally broken
   * Outbound: Totally broken

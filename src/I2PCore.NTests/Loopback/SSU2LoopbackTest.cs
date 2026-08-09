@@ -1,3 +1,4 @@
+using System.Threading;
 using System.Net;
 using I2PCore.Crypto;
 using I2PCore.Data;
@@ -22,22 +23,22 @@ namespace I2PTests.Loopback;
 ///         because SSU2 has been off by default since batch 0-4.
 ///     </para>
 ///     <para>
-///         Every test here was red when written. <b>The handshake is green as of batch 4-0h and
-///         the clean-channel data phase as of 4-1b</b> — 100 of 100, the gate batch 3-3 was
-///         written to measure. One test remains quarantined: 5% loss still loses exactly what
-///         the channel drops, because nothing retransmits. That is batch 4-1, and it is now the
-///         only thing between here and a working SSU2 data phase.
+///         <b>Every test here was red when written, and every one is now green.</b> The handshake
+///         as of 4-0h, the clean-channel data phase as of 4-1b (100 of 100 — batch 3-3's gate),
+///         and delivery under 5% loss as of 4-1, which wired up the ACK and retransmit path.
+///         Nothing in this fixture is quarantined any more.
 ///     </para>
 ///     <para>
-///         <b>Quarantined, not deleted</b> — each names the batch that owns it, per
-///         <see cref="TestCategories.Experimental" />. They are the specification for Phase 4.
+///         <b>The tick is now real.</b> This fixture used to note that nothing ticked the
+///         sessions because SSU2 had no timer-driven behaviour at all. It has some now — ACK
+///         delay and retransmission — so <see cref="LoopbackSSU2Peer.TickSessions" /> drives it,
+///         and the tests that depend on it spend real milliseconds waiting. There is no time
+///         seam in this repository to fake; introducing one is worth its own batch.
 ///     </para>
 ///     <para>
-///         <b>Nothing here ticks the sessions periodically, because there is nothing to tick.</b>
-///         <c>SSU2Host.ProcessSessions</c> only reaps terminated sessions, and no other periodic
-///         work touches a session — SSU2 has no timer-driven behaviour of any kind. That is a
-///         finding for batch 4-1, which has to add the tick before it can hang
-///         <c>GenerateAck()</c> or retransmission on one.
+///         <b>All of it is C#-to-C#.</b> None of these tests say anything about i2pd, and batch
+///         4-0i has evidence that our handshake payload is not framed the way i2pd frames its
+///         own.
 ///     </para>
 /// </summary>
 [TestFixture]
@@ -161,6 +162,50 @@ public class SSU2LoopbackTest
     }
 
     /// <summary>
+    ///     Batch 4-1. The responder must acknowledge what it received, and the sender must stop
+    ///     holding acknowledged packets.
+    ///
+    ///     <para>
+    ///         Before this batch, <c>SSU2AckManager</c> was a complete, unit-tested class that
+    ///         nothing instantiated and the ACK block case in <c>SSU2Session</c> was an empty
+    ///         <c>break</c>, so a sender kept nothing and a receiver said nothing. This asserts
+    ///         both halves through the wire: Bob emits an ACK on his tick, and Alice's unacked
+    ///         count returns to zero because she processed it.
+    ///     </para>
+    ///     <para>
+    ///         The 600 ms wait is real time and deliberate: <c>MAX_ACK_DELAY_MS</c> is 500, and a
+    ///         responder that ACKs sooner would be a different (chattier) protocol. Faking the
+    ///         clock would need a time seam that does not exist yet — see the note on batch 4-1d.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public void AcknowledgedPacketsStopBeingHeldForRetransmission()
+    {
+        var (channel, alice, bob) = BuildPair();
+
+        var session = alice.ConnectTo(bob);
+        channel.PumpUntilIdle();
+        bob.ObserveNewSessions();
+
+        Assume.That(alice.Established, Is.Not.Empty, "Handshake did not complete.");
+
+        for (var i = 0; i < 10; i++) session.Send(BuildMessage(i));
+        channel.PumpUntilIdle();
+
+        Assert.That(session.UnackedPacketCount, Is.GreaterThan(0),
+            "Alice is not holding the packets she sent, so nothing can be retransmitted");
+
+        // Bob only owes an ACK once MAX_ACK_DELAY_MS has passed.
+        Thread.Sleep(600);
+        bob.TickSessions();
+        channel.PumpUntilIdle();
+
+        Assert.That(session.UnackedPacketCount, Is.Zero,
+            $"Alice still holds packets Bob received: either Bob sent no ACK, or Alice did not "
+            + $"process it. {channel}");
+    }
+
+    /// <summary>
     ///     Batch 4-1b. A data packet must be dispatched as data however its bytes happen to
     ///     decrypt under the intro key.
     ///
@@ -246,7 +291,6 @@ public class SSU2LoopbackTest
     ///     Owner: batch 4-1.
     /// </summary>
     [Test]
-    [Category(TestCategories.Experimental)]
     public void LossAtFivePercentStillDeliversEveryMessage()
     {
         var (channel, alice, bob) = BuildPair();
@@ -266,6 +310,17 @@ public class SSU2LoopbackTest
             session.Send(BuildMessage(i));
 
         channel.PumpUntilIdle();
+
+        // Retransmission is driven by the session tick against a real RTO, so the test has to
+        // let that time pass. Each round: wait out the RTO, tick both ends (Bob acknowledges,
+        // Alice re-sends what is still unacknowledged), deliver.
+        for (var round = 0; round < 6 && bob.Received.Count < MessageCount; round++)
+        {
+            Thread.Sleep(1100);
+            bob.TickSessions();
+            alice.TickSessions();
+            channel.PumpUntilIdle();
+        }
 
         Assert.That(bob.Received.Count, Is.EqualTo(MessageCount),
             $"5% loss must still deliver every message once SSU2 retransmits. {channel}");

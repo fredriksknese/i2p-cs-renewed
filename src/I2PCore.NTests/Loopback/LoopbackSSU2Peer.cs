@@ -145,6 +145,17 @@ public sealed class LoopbackSSU2Peer
         };
     }
 
+    /// <summary>
+    ///     Tick every session this peer holds. Batch 4-1: nothing in the fixture drove
+    ///     <see cref="SSU2Session.Tick" /> before, because nothing in SSU2 had timer-driven
+    ///     behaviour to drive — ACK delay and retransmission are the first, and a fixture with no
+    ///     clock cannot exercise them by pumping alone.
+    /// </summary>
+    public void TickSessions()
+    {
+        foreach (var s in Sessions) s.Tick();
+    }
+
     /// <summary>Attach <see cref="Observe" /> to every session that has appeared so far.</summary>
     public void ObserveNewSessions()
     {

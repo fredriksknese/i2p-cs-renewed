@@ -27,6 +27,15 @@ public class SSU2Session : ITransport
     // Fragment handler for reassembly of incoming fragmented messages
     private readonly SSU2FragmentHandler FragmentHandler = new();
 
+    /// <summary>
+    ///     Batch 4-1. Reliability bookkeeping for the data phase. <c>SSU2AckManager</c> has been a
+    ///     complete, unit-tested class since before this plan started and <b>nothing ever
+    ///     instantiated it</b> — so a sender kept no record of what it sent and a receiver
+    ///     acknowledged nothing. This is that one missing line, plus the four call sites that
+    ///     feed it.
+    /// </summary>
+    private readonly SSU2AckManager Acks = new();
+
     private readonly SSU2Host Host;
 
     // Queue for messages waiting for session establishment
@@ -119,6 +128,12 @@ public class SSU2Session : ITransport
     public IPEndPoint RemoteEndpoint { get; private set; }
     public I2PRouterInfo RemoteRouterInfo { get; private set; }
     public SessionState State { get; private set; }
+
+    /// <summary>
+    ///     Data packets sent and not yet acknowledged. Session telemetry, and the only way to see
+    ///     from outside whether an ACK was understood. Batch 4-1.
+    /// </summary>
+    public int UnackedPacketCount => Acks.UnackedCount;
 
     /// <summary>
     ///     Relay tag assigned to this session by the remote peer (for introducer use).
@@ -245,7 +260,66 @@ public class SSU2Session : ITransport
         {
             Logging.LogInformation($"{DebugId}: Inactivity timeout (5 minutes)");
             Terminate($"Inactivity timeout (5 minutes, State: {State})");
+            return;
         }
+
+        SendPendingAck();
+        RetransmitTimedOutPackets();
+    }
+
+    /// <summary>
+    ///     Acknowledge what we have received, once the ACK delay has elapsed. Batch 4-1.
+    ///
+    ///     <para>
+    ///         A responder that never speaks unless spoken to cannot acknowledge one-way traffic,
+    ///         and one-way traffic is the normal case for a tunnel hop. So the ACK is emitted
+    ///         from the tick rather than piggybacked on outbound data alone — <c>NeedsSendAck</c>
+    ///         holds it back until <c>MAX_ACK_DELAY_MS</c> has passed, which is what stops two
+    ///         peers acknowledging each other's acknowledgements in a loop.
+    ///     </para>
+    /// </summary>
+    private void SendPendingAck()
+    {
+        if (!Acks.NeedsSendAck()) return;
+
+        var ack = Acks.GenerateAck();
+        if (ack == null) return;
+
+        SendBlock(SSU2BlockType.ACK, ack.Serialize());
+    }
+
+    /// <summary>
+    ///     Re-send data packets the peer has not acknowledged, and give up on the ones that have
+    ///     used their attempts. Batch 4-1 — before it, a dropped datagram was simply gone.
+    ///
+    ///     <para>
+    ///         <c>GetPacketsNeedingRetransmit</c> returns two kinds of packet in one list: those
+    ///         it has just rescheduled, and those that have exhausted
+    ///         <see cref="SSU2AckManager.MaxRetransmitAttempts" /> and are the caller's to drop.
+    ///         It distinguishes them by having pushed the rescheduled ones' deadline into the
+    ///         future — so a deadline still in the past means the packet is finished, not due.
+    ///     </para>
+    /// </summary>
+    private void RetransmitTimedOutPackets()
+    {
+        var due = Acks.GetPacketsNeedingRetransmit();
+        if (due.Count == 0) return;
+
+        var now = DateTime.UtcNow;
+
+        foreach (var packet in due)
+            if (packet.NextRetransmitTime > now)
+            {
+                Host.SendPacket(RemoteEndpoint, packet.PacketData);
+                BytesSent += packet.PacketData.Length;
+            }
+            else
+            {
+                Logging.LogDebug(
+                    $"{DebugId}: giving up on packet {packet.PacketNumber} after "
+                    + $"{packet.RetransmitCount} retransmissions");
+                Acks.RemovePacket(packet.PacketNumber);
+            }
     }
 
     public void Terminate(string reason = null)
@@ -594,11 +668,13 @@ public class SSU2Session : ITransport
 
     private byte[] BuildDataPacket(I2NpMessage msg)
     {
+        var packetNumber = SendPacketNumber++;
+
         // Build SSU2 data packet with I2NP message using SSU2DataPacket
         var dataPacket = SSU2DataPacket.BuildWithI2NPMessage(
             msg,
             RemoteConnectionId,
-            SendPacketNumber++
+            packetNumber
         );
 
         // Get header keys for data phase
@@ -606,7 +682,14 @@ public class SSU2Session : ITransport
         var kHeader1 = IsOutgoing ? GetRemoteIntroKey() : Host.GetMyIntroKey();
 
         // Encrypt and build complete packet using data phase keys
-        return dataPacket.BuildEncryptedPacket(SendDataKey, kHeader1, SendHeaderKey2);
+        var packet = dataPacket.BuildEncryptedPacket(SendDataKey, kHeader1, SendHeaderKey2);
+
+        // Batch 4-1: hold it until the peer acknowledges it. Only I2NP traffic is held —
+        // SendBlock carries ACKs, relay tags and peer tests, none of which want a retransmission
+        // of their own, and an ACK held for retransmission would ACK an ACK forever.
+        Acks.RecordSent(packetNumber, packet);
+
+        return packet;
     }
 
     public void ProcessReceivedPacket(byte[] packetData)
@@ -1358,6 +1441,18 @@ public class SSU2Session : ITransport
 
         ReceivePacketNumber++;
 
+        // Batch 4-1: a retransmission of a packet we already have must be acknowledged again --
+        // its ACK is what got lost -- but its blocks must not be delivered twice.
+        var duplicate = Acks.HasReceived(dataPacket.Header.PacketNumber);
+        Acks.RecordReceived(dataPacket.Header.PacketNumber);
+
+        if (duplicate)
+        {
+            Logging.LogDebug(
+                $"{DebugId}: duplicate data packet {dataPacket.Header.PacketNumber}; re-acking only");
+            return;
+        }
+
         // Process blocks
         foreach (var block in dataPacket.Blocks)
             switch (block.BlockType)
@@ -1402,7 +1497,10 @@ public class SSU2Session : ITransport
                 }
                 case SSU2BlockType.ACK:
                 {
-                    // ACK processing - acknowledge received packets
+                    // Batch 4-1: this was an empty break, so every ACK the peer sent was parsed
+                    // out of the packet and dropped on the floor.
+                    var ack = SSU2AckBlock.Parse(new I2PBufferCursor(block.Data));
+                    Acks.ProcessAck(ack);
                     break;
                 }
                 case SSU2BlockType.RelayRequest:

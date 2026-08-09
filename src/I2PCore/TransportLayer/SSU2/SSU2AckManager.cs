@@ -77,6 +77,19 @@ public class SSU2AckManager
     }
 
     /// <summary>
+    ///     Have we already seen this packet number? Batch 4-1: retransmission makes duplicates
+    ///     normal — a packet that arrived but whose ACK was lost is sent again — and a receiver
+    ///     that hands both copies to the layer above delivers the same I2NP message twice.
+    /// </summary>
+    public bool HasReceived(uint packetNumber)
+    {
+        return ReceivedPackets.Contains(packetNumber);
+    }
+
+    /// <summary>Retransmission attempts before a packet is abandoned. Protocol constant.</summary>
+    public static int MaxRetransmitAttempts => MAX_RETRANSMIT_ATTEMPTS;
+
+    /// <summary>
     ///     Record a sent packet for retransmission tracking
     /// </summary>
     public void RecordSent(uint packetNumber, byte[] packetData)
