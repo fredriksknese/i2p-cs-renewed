@@ -540,8 +540,12 @@ public class SSU2Session : ITransport
         Array.Copy(encryptedPayload, 0, packet, headerBytes.Length + obfuscatedKey.Length,
             encryptedPayload.Length);
 
-        // Encrypt header in place using IVs from packet end
-        SSU2HeaderEncryption.EncryptLongHeaderInPacket(packet, 0, kHeader1, kHeader2);
+        // Encrypt header in place: bytes 0-15 from the packet-end IVs, then bytes 16-31 as the
+        // first 16 bytes of the same zero-nonce pass whose remainder already masked the ephemeral
+        // key above. Batch 4-0b — this used to stop at byte 16, sending the source connection ID
+        // and token in the clear and leaving the receiver (which always unmasked 0-31) with a
+        // header Alice never hashed.
+        SSU2HeaderEncryption.EncryptLongHeaderComplete(packet, 0, kHeader1, kHeader2);
 
         // Send via host
         Host.SendPacket(RemoteEndpoint, packet);
@@ -1463,8 +1467,9 @@ public class SSU2Session : ITransport
                 Array.Copy(encryptedPayload, 0, packet, headerBytes.Length + obfuscatedKey.Length,
                     encryptedPayload.Length);
 
-                // Encrypt header in place
-                SSU2HeaderEncryption.EncryptLongHeaderInPacket(packet, 0, kHeader1, kHeader2);
+                // Encrypt header in place, bytes 0-31 — see the note in SendSessionRequest.
+                // Batch 4-0b.
+                SSU2HeaderEncryption.EncryptLongHeaderComplete(packet, 0, kHeader1, kHeader2);
             }
             else if (attempts > 100)
             {

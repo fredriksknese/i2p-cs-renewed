@@ -36,12 +36,20 @@ namespace I2PTests;
 ///         It is the 48-byte case we get wrong.
 ///     </para>
 ///     <para>
-///         <b>Why this is not fixed in 4-0.</b> There is no captured i2pd Session Request to
-///         verify a fix against: i2pd opens with a TokenRequest we cannot yet answer (batch 3-5),
-///         so batch 3-5's harness never elicited one. Rewriting the handshake byte layout with
-///         no reference bytes would be merging a protocol change behind a test that only agrees
-///         with itself — the exact failure this whole plan keeps rediscovering. 4-2 unblocks the
-///         capture; 4-0b does the fix against it.
+///         <b>Fixed by batch 4-0b</b>, against the Session Request i2pd really sent — batch 4-2c
+///         captured it once we could answer i2pd's opening TokenRequest. Both tests below are now
+///         green and stay as regression guards; the fix itself is measured in
+///         <c>Ssu2SessionRequestVectorTest</c>, where a verifying Noise tag proves the recovered
+///         key is i2pd's rather than merely self-consistent.
+///     </para>
+///     <para>
+///         <b>One test was removed rather than un-quarantined.</b>
+///         <c>SessionRequestObscuresItsSourceConnectionIdAndToken</c> asserted that bytes 16-31
+///         do not go out in the clear by calling the 16-byte primitive directly — but that
+///         primitive was never the defect (TokenRequest, Retry and PeerTest use it correctly);
+///         the Session Request path calling it was. Asserted on the message instead, and against
+///         i2pd's keystream rather than a not-equal, by
+///         <c>Ssu2SessionRequestVectorTest.OurSessionRequestMasksBytesSixteenToSixtyFourAsOnePass</c>.
 ///     </para>
 /// </summary>
 [TestFixture]
@@ -70,11 +78,13 @@ public class Ssu2HeaderLayoutTest
     }
 
     /// <summary>
-    ///     Red, owner batch 4-0b. <c>ObfuscateEphemeralKey</c> restarts the keystream, so it
-    ///     XORs the key with bytes 0..32 where i2pd uses 16..48 of the same stream.
+    ///     Was red, owner batch 4-0b, now green: <c>ObfuscateEphemeralKey</c> used to restart the
+    ///     keystream, XORing the key with bytes 0..32 where i2pd uses 16..48 of the same stream.
+    ///     Kept as the regression guard, alongside
+    ///     <c>Ssu2SessionRequestVectorTest</c>, which asserts the same thing against bytes i2pd
+    ///     really sent.
     /// </summary>
     [Test]
-    [Category( TestCategories.Experimental )]
     public void ObfuscateEphemeralKeyUsesTheContinuationOfTheHeaderKeystream()
     {
         var expected = Xor( EphemeralKey, I2pdKeyStream( Key, new byte[12], 48 ).Skip( 16 ).Take( 32 ).ToArray() );
@@ -84,27 +94,6 @@ public class Ssu2HeaderLayoutTest
         CollectionAssert.AreEqual( expected, actual,
             "the ephemeral key must be XORed with keystream bytes 16..48 of the same 48-byte "
             + "pass that covers header bytes 16-31, not with a keystream restarted at 0" );
-    }
-
-    /// <summary>
-    ///     Red, owner batch 4-0b, and the sharper statement of the same defect:
-    ///     <c>SessionRequest.ToByteArray</c> calls <c>EncryptLongHeaderInPacket</c>, which stops
-    ///     at byte 16. Header bytes 16-31 of a Session Request — the source connection ID and the
-    ///     token — are therefore transmitted in the clear.
-    /// </summary>
-    [Test]
-    [Category( TestCategories.Experimental )]
-    public void SessionRequestObscuresItsSourceConnectionIdAndToken()
-    {
-        // A 96-byte packet: 32 header, 32 ephemeral key, 32 payload. Only the header matters.
-        var packet = Enumerable.Range( 0, 96 ).Select( i => (byte)i ).ToArray();
-        var plaintextRegion = packet.Skip( 16 ).Take( 16 ).ToArray();
-
-        SSU2HeaderEncryption.EncryptLongHeaderInPacket( packet, 0, Key, Key );
-
-        CollectionAssert.AreNotEqual( plaintextRegion, packet.Skip( 16 ).Take( 16 ).ToArray(),
-            "bytes 16-31 of a Session Request header carry the source connection ID and token "
-            + "and must not go out unencrypted" );
     }
 
     /// <summary>

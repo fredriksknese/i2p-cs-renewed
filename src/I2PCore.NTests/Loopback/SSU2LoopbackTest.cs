@@ -43,22 +43,30 @@ public class SSU2LoopbackTest
 
     /// <summary>
     ///     The SSU2 handshake does not complete even between two of our own sessions on a
-    ///     lossless in-memory channel. Bob's host trial-decrypts the header correctly and creates
-    ///     an inbound session — so intro keys, header obfuscation and dispatch all work — and
-    ///     then <c>ProcessSessionRequest</c> throws <c>AEAD authentication failed</c> out of
-    ///     <c>NoiseXK.ProcessMessage1WithHeader</c>.
+    ///     lossless in-memory channel. Still red after batch 4-0b, but it now fails a message
+    ///     later and for a different, identified reason.
     ///
     ///     <para>
-    ///         <b>Not a Noise defect.</b> <see cref="NoiseXkWithHeaderTest" /> pairs those same
-    ///         entry points directly and they round-trip; it also shows a one-byte header
-    ///         difference presenting as exactly this error. So the fault is in SSU2Session: the
-    ///         header bytes Alice mixes into the Noise hash are not the bytes Bob recovers after
-    ///         decrypting. Alice hashes the plaintext header she built and then encrypts it in
-    ///         place (<c>SendSessionRequest</c>); Bob hashes whatever
-    ///         <c>DecryptLongHeaderComplete</c> gives back. Start there.
+    ///         <b>Fixed since this was written.</b> The AEAD failure in
+    ///         <c>ProcessSessionRequest</c> was the header-encryption divergence: Alice masked
+    ///         packet bytes 0-15 while Bob unmasked 0-31, so Bob hashed a header Alice never
+    ///         built. Batch 4-0b closed it, and the fixture now reaches
+    ///         <c>sent=2</c> — Bob logs <c>SessionRequest received and validated</c> and replies
+    ///         with a SessionCreated.
+    ///     </para>
+    ///     <para>
+    ///         <b>Where it stops now: Alice logs <c>Unknown packet type 160</c>.</b>
+    ///         <c>ProcessReceivedPacket</c> peeks the message type by trial-decrypting the long
+    ///         header with <c>k_header_2 = k_header_1 = </c> the intro key. That is right for a
+    ///         Session Request and wrong for a Session Created, whose k_header_2 is
+    ///         <c>HKDF(chainKey, "SessCreateHeader")</c> — the very derivation
+    ///         <c>ProcessSessionCreated</c> performs correctly two calls later. The type byte
+    ///         lives at offset 12, inside the group k_header_2 masks, so Alice can never read the
+    ///         type of the reply she is waiting for and drops it in the <c>default</c> arm.
     ///     </para>
     ///
-    ///     Owner: Phase 4 — batch 4-1 wires ACKs on top of a handshake that has to work first.
+    ///     Owner: the next SSU2 batch. Batch 4-1 wires ACKs on top of a handshake that has to
+    ///     work first.
     /// </summary>
     [Test]
     [Category(TestCategories.Experimental)]

@@ -45,8 +45,9 @@ public class SessionCreated
         var kHeader1 = bobIntroKey;
         var kHeader2 = SSU2HeaderEncryption.DeriveSessionCreatedHeaderKey(chainingKey);
 
-        // Decrypt header in place using IVs from packet end
-        SSU2HeaderEncryption.DecryptLongHeaderInPacket(fullPacket, 0, kHeader1, kHeader2);
+        // Decrypt header in place, bytes 0-31 — the same 48-byte pass as Session Request, under
+        // the derived k_header_2. Batch 4-0b.
+        SSU2HeaderEncryption.DecryptLongHeaderComplete(fullPacket, 0, kHeader1, kHeader2);
 
         // Parse decrypted header from packet
         created.Header = SSU2Header.ParseLongHeader(new I2PBufferCursor(fullPacket));
@@ -88,8 +89,8 @@ public class SessionCreated
             Array.Copy(padding, 0, packet, header.Length + obfuscatedY.Length + encryptedPayload.Length,
                 padding.Length);
 
-        // Encrypt header in place using IVs from packet end
-        SSU2HeaderEncryption.EncryptLongHeaderInPacket(packet, 0, kHeader1, kHeader2);
+        // Encrypt header in place, bytes 0-31. Batch 4-0b.
+        SSU2HeaderEncryption.EncryptLongHeaderComplete(packet, 0, kHeader1, kHeader2);
 
         return packet;
     }
