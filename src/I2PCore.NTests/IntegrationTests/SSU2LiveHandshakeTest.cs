@@ -121,9 +121,23 @@ public class SSU2LiveHandshakeTest
                     + $"{RouterProcessManager.FindI2pdBinary()}. Nothing here measures our "
                     + "handshake; run it against 2.61.0.");
 
+            // The i2pd log lives in a per-run temp directory that CI does not upload, and this
+            // test's whole value is in what i2pd says about our packet. Put its SSU2 lines in
+            // the test output, where the run report already goes. Batch 4-0f learned this the
+            // expensive way: absence of logs is not absence of execution, and a log nobody
+            // collects is a log nobody has.
+            if (session.State != SessionState.Established && File.Exists(i2pdLog))
+            {
+                TestContext.Out.WriteLine("--- i2pd log, SSU2 lines ---");
+                foreach (var line in File.ReadAllLines(i2pdLog)
+                             .Where(l => l.Contains("SSU2") || l.Contains("Transports"))
+                             .TakeLast(40))
+                    TestContext.Out.WriteLine(line);
+            }
+
             Assert.That(session.State, Is.EqualTo(SessionState.Established),
                 $"no SSU2 session with i2pd: state {session.State}, {us.Sent} datagrams sent, "
-                + $"{us.Received} received. i2pd log: {i2pdLog}");
+                + $"{us.Received} received. i2pd's own SSU2 log lines are in this test's output.");
         }
         finally
         {

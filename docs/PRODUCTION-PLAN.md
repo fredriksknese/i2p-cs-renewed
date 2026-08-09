@@ -1144,3 +1144,13 @@ So the local run measured i2pd's ACL, not our protocol. **A test that reported t
 
 **Risk R4 in the plan is now concrete rather than theoretical:** the locally installed i2pd cannot exercise SSU2 interop at all, in either direction, so every SSU2 interop claim has to come from CI.
 >>>>>>> 85dbca6 (4-0i: dial a live i2pd over SSU2, and report honestly when it will not answer)
+
+#### Addendum — the live test ran against i2pd 2.61.0 in CI, and the answer is no
+
+`CSharpEstablishesAnSSU2SessionWithI2pd` **failed in CI**: `state SessionRequestSent, 1 datagrams sent, 0 received`. It did **not** take the `Assert.Ignore` path, so i2pd 2.61.0 logged no `invalid endpoint` — it accepted the datagram at its endpoint check and then said nothing.
+
+**So the SSU2 handshake still does not work against i2pd**, after 4-0b, 4-0h, 4-2a/4-2b and 4-0i. Everything green in Phase 4 remains C#-to-C#, and the plan should not be read as saying otherwise.
+
+**What is missing is the reason, and that is our fault, not i2pd's.** The test writes i2pd's log to a per-run temp directory the workflow does not upload, so the one thing that would explain the silence was discarded — the third time this plan has lost evidence that way, after `/tmp/i2p_scaled_test.log` and the unread `.trx` stack traces. The test now prints i2pd's own SSU2 log lines into the test output on failure, where the run report already goes.
+
+**Next: run it again and read what i2pd says.** Do not guess at the cause from here — a first packet that draws total silence has several plausible explanations (token enforcement expecting a TokenRequest first, header key selection, netid, the Session Request's own framing), and this plan's record on guessing between plausible explanations is poor. The next batch is whatever that log says.
