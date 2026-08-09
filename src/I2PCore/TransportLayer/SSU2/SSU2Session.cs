@@ -103,8 +103,18 @@ public class SSU2Session : ITransport
         // Extract remote endpoint from router info
         ExtractRemoteEndpoint();
 
-        // Generate local connection ID
+        // Both connection IDs, and the initiator picks both. Batch 4-0k: only the local one was
+        // generated here, so RemoteConnectionId stayed 0 until ProcessSessionCreated assigned it
+        // — which happens *after* the Session Request goes out. Every Session Request this
+        // router ever sent was therefore addressed to session zero, and a responder that looks
+        // its sessions up by that field has nothing to find. i2pd answered with silence.
+        //
+        // Invisible C#-to-C#, because both ends agreed on zero. Independent values, as i2pd's
+        // own Session Request shows (batch 4-2c's vector: destConnId=348a6a64213c6856,
+        // srcConnId=d8116fb78ecaa4db) — the responder adopts the destination ID we choose here
+        // as its own, and returns it as the source ID of its Session Created.
         LocalConnectionId = BufUtils.RandomUint() | ((ulong)BufUtils.RandomUint() << 32);
+        RemoteConnectionId = BufUtils.RandomUint() | ((ulong)BufUtils.RandomUint() << 32);
 
         TransportConnectionLogger.Inst.Log(
             $"Created outbound SSU2 session to {RemoteRouterInfo?.Identity?.IdentHash?.Id32Short}",

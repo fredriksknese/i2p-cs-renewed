@@ -162,6 +162,56 @@ public class SSU2LoopbackTest
     }
 
     /// <summary>
+    ///     Batch 4-0k. An initiator's Session Request must address a session identifier the
+    ///     responder can act on. Ours addressed <b>zero</b>.
+    ///
+    ///     <para>
+    ///         <c>RemoteConnectionId</c> was assigned only in <c>ProcessSessionRequest</c> and
+    ///         <c>ProcessSessionCreated</c>, neither of which runs before the first packet goes
+    ///         out — so every Session Request this router has ever sent was addressed to session
+    ///         zero. <b>C#-to-C# that works perfectly, because both ends agree on zero</b>, which
+    ///         is why the loopback used to log <c>Got remote connection ID: 0000000000000000</c>
+    ///         and stay green. A real responder looks its sessions up by that field, and i2pd
+    ///         answered our Session Request with silence: 1 sent, 0 received, no endpoint
+    ///         rejection logged.
+    ///     </para>
+    ///     <para>
+    ///         Asserted on the wire rather than on a property, because the property agreeing with
+    ///         itself is exactly what hid this. The reference is i2pd's own Session Request from
+    ///         batch 4-2c's vector, whose two connection IDs are both non-zero and unrelated.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public void TheSessionRequestAddressesANonZeroConnectionId()
+    {
+        var (channel, alice, bob) = BuildPair();
+
+        byte[] first = null;
+        channel.Tap = (from, _, data) =>
+        {
+            if (Equals(from, alice.Endpoint)) first ??= data;
+        };
+
+        alice.ConnectTo(bob);
+
+        Assert.That(first, Is.Not.Null, "Alice sent no Session Request");
+
+        // Both header keys are Bob's intro key for a Session Request, so this is what Bob does.
+        SSU2HeaderEncryption.DecryptLongHeaderComplete(first, 0, bob.IntroKey, bob.IntroKey);
+        var header = SSU2Header.ParseLongHeader(new I2PBufferCursor(first));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(header.DestinationConnectionId, Is.Not.Zero,
+                "the Session Request addresses session zero, so a real responder has nothing to "
+                + "look up and answers with silence");
+            Assert.That(header.SourceConnectionId, Is.Not.Zero, "our own connection ID");
+            Assert.That(header.DestinationConnectionId, Is.Not.EqualTo(header.SourceConnectionId),
+                "the two connection IDs are independent values, as i2pd's own are");
+        });
+    }
+
+    /// <summary>
     ///     Batch 4-1. The responder must acknowledge what it received, and the sender must stop
     ///     holding acknowledged packets.
     ///
