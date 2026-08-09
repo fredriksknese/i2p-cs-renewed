@@ -21,10 +21,10 @@ public static class NTCP2Constants
     /// </summary>
     public const byte VERSION = 2;
 
-    /// <summary>
-    ///     Network ID (2 for mainnet)
-    /// </summary>
-    public const byte NETWORK_ID = 2;
+    // Batch 4-0d-fix: NETWORK_ID = 2 was removed here. Netid 2 is the live I2P network,
+    // and a constant naming it is a defect that batch 4-0d's guard could not see -- it
+    // matched `NetId = 2` only. never referenced, but a live-network literal waiting to be picked up.
+    // Use (byte)I2PConstants.I2PNetworkId, which honours --netid.
 
     /// <summary>
     ///     Minimum message sizes
