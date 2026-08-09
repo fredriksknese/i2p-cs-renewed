@@ -111,12 +111,31 @@ public sealed class LoopbackSSU2Peer
     }
 
     /// <summary>
-    ///     Record data-phase deliveries on a session. Applied to outbound sessions here and to
-    ///     inbound ones as they are created, so both directions are counted.
+    ///     Record data-phase deliveries and establishment on a session. Applied to outbound
+    ///     sessions here and to inbound ones as they are created, so both directions are counted.
+    ///
+    ///     <para>
+    ///         <b>Batch 4-0h: establishment is watched per session, not only on the host.</b>
+    ///         <c>SSU2Session</c> calls <c>Host.FireConnectionCreated</c> for <em>incoming</em>
+    ///         connections only — an outbound session announces itself by raising
+    ///         <see cref="SSU2Session.ConnectionEstablished" /> on itself, which is what
+    ///         <c>TransportProvider</c> subscribes to. Listening only to the host therefore left
+    ///         <see cref="Established" /> permanently empty for the dialling peer, so
+    ///         <c>HandshakeCompletesOnACleanChannel</c> asserted something the fixture could not
+    ///         observe even once the handshake worked. **A fixture that cannot see success is not
+    ///         measuring failure.**
+    ///     </para>
     /// </summary>
     public void Observe(SSU2Session session)
     {
         session.DataBlockReceived += (_, header) => Received.Add(header);
+        session.ConnectionEstablished += (transport, _) =>
+        {
+            if (Established.Contains(transport)) return;
+
+            Established.Add(transport);
+            if (transport is SSU2Session s && !Sessions.Contains(s)) Sessions.Add(s);
+        };
     }
 
     /// <summary>Attach <see cref="Observe" /> to every session that has appeared so far.</summary>

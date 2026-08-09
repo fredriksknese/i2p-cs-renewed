@@ -602,38 +602,8 @@ public class SSU2Session : ITransport
     {
         try
         {
-            // Decrypt header for type identification
-            // SSU2 spec: long headers (Request/Created/Confirmed) are obfuscated differently than short headers (Data).
-            // We need to try long header decryption first.
-            var trialDecrypted = (byte[])packetData.Clone();
             var kHeader1 = IsOutgoing ? GetRemoteIntroKey() : Host.GetMyIntroKey();
-            var kHeader2 = kHeader1; // Initial default for trial
-
-            // SSU2 spec: for SessionRequest, k_header_1 = k_header_2 = Bob's intro key.
-            // For others, it's more complex, but we can peek the type after decrypting with intro key.
-            SSU2HeaderEncryption.DecryptLongHeaderComplete(trialDecrypted, 0, kHeader1, kHeader2);
-
-            var reader = new I2PBufferCursor(trialDecrypted);
-            var header = SSU2Header.ParseLongHeader(reader);
-            var type = header.Type;
-
-            // If trial decryption with intro key didn't yield a valid long header type,
-            // it might be a data packet (short header).
-            if (type > 2 && type != SSU2Header.TYPE_DATA)
-            {
-                // Try short header decryption if established
-                if (State == SessionState.Established)
-                {
-                    // Batch 4-1a: this passed the whole packet to DecryptShortHeader, which
-                    // throws unless the array is exactly 16 bytes — so every data packet larger
-                    // than its own header threw out of here into the outer catch and was
-                    // dropped. Decrypt the header in place on a clone instead.
-                    var shortDecrypted = (byte[])packetData.Clone();
-                    SSU2HeaderEncryption.DecryptShortHeaderInPacket(
-                        shortDecrypted, 0, kHeader1, ReceiveHeaderKey2);
-                    type = shortDecrypted[12]; // Type at offset 12 in short header
-                }
-            }
+            var type = PeekMessageType(packetData, kHeader1);
 
             switch (type)
             {
@@ -665,6 +635,85 @@ public class SSU2Session : ITransport
             Logging.LogWarning($"{DebugId}: ProcessReceivedPacket failed: {ex}");
             ConnectionException?.Invoke(this, ex);
         }
+    }
+
+    /// <summary>
+    ///     Identify an incoming packet's message type, which means unmasking header bytes 8-15 —
+    ///     the type byte sits at offset 12 — with the key the sender actually masked them with.
+    ///
+    ///     <para>
+    ///         <b>Batch 4-0h.</b> This used to trial-decrypt every packet with
+    ///         <c>k_header_2 = k_header_1 =</c> the intro key. That is right for a Session
+    ///         Request, a Retry, a Token Request and a Peer Test, and wrong for the two messages
+    ///         whose k_header_2 is derived from the Noise chaining key: a <b>Session Created</b>
+    ///         (<c>"SessCreateHeader"</c>) and a <b>Session Confirmed</b>
+    ///         (<c>"SessionConfirmed"</c>). Both were read as a random type and dropped in the
+    ///         <c>default</c> arm — <c>Unknown packet type 160</c> — so a handshake could not get
+    ///         past its second message even between two of our own sessions. The handlers below
+    ///         derive those keys correctly; only the dispatcher did not.
+    ///     </para>
+    ///     <para>
+    ///         <b>The state decides which key to try first, and the type byte has to agree
+    ///         before that guess is accepted.</b> Order matters rather than being cosmetic: with
+    ///         the wrong key the type byte is uniformly random, so an unordered "try both" would
+    ///         misdispatch roughly one packet in sixty on a coincidence. Trying the expected
+    ///         message first and requiring an exact match makes a wrong guess fall through to the
+    ///         intro key, which is what a Retry arriving in this state needs.
+    ///     </para>
+    /// </summary>
+    private byte PeekMessageType(byte[] packetData, byte[] kHeader1)
+    {
+        switch (State)
+        {
+            // Waiting for the responder's reply. It is a Session Created under the derived key,
+            // or a Retry, which is still under the intro key and falls through below.
+            case SessionState.SessionRequestSent when packetData.Length >= SSU2Header.LONG_HEADER_SIZE:
+            {
+                var kHeader2 = SSU2HeaderEncryption.DeriveSessionCreatedHeaderKey(NoiseState.GetChainingKey());
+                if (TrialLongHeaderType(packetData, kHeader1, kHeader2) == SSU2Header.TYPE_SESSION_CREATED)
+                    return SSU2Header.TYPE_SESSION_CREATED;
+                break;
+            }
+
+            // Waiting for the initiator to confirm. A Session Confirmed carries a *short* header.
+            case SessionState.SessionCreatedSent when packetData.Length >= SSU2Header.SHORT_HEADER_SIZE:
+            {
+                var kHeader2 = SSU2HeaderEncryption.DeriveSessionConfirmedHeaderKey(NoiseState.GetChainingKey());
+                if (TrialShortHeaderType(packetData, kHeader1, kHeader2) == SSU2Header.TYPE_SESSION_CONFIRMED)
+                    return SSU2Header.TYPE_SESSION_CONFIRMED;
+                break;
+            }
+        }
+
+        var type = TrialLongHeaderType(packetData, kHeader1, kHeader1);
+
+        // Not a long-header type, so it may be a data packet under the data-phase header key.
+        if (type > SSU2Header.TYPE_SESSION_CONFIRMED && type != SSU2Header.TYPE_DATA
+                                                     && State == SessionState.Established)
+            // Batch 4-1a: this passed the whole packet to DecryptShortHeader, which throws
+            // unless the array is exactly 16 bytes — so every data packet larger than its own
+            // header threw into the outer catch and was dropped.
+            type = TrialShortHeaderType(packetData, kHeader1, ReceiveHeaderKey2);
+
+        return type;
+    }
+
+    /// <summary>Type byte of a long header, unmasked on a copy so the packet is left as sent.</summary>
+    private static byte TrialLongHeaderType(byte[] packetData, byte[] kHeader1, byte[] kHeader2)
+    {
+        var trial = (byte[])packetData.Clone();
+        SSU2HeaderEncryption.DecryptLongHeaderComplete(trial, 0, kHeader1, kHeader2);
+
+        return SSU2Header.ParseLongHeader(new I2PBufferCursor(trial)).Type;
+    }
+
+    /// <summary>Type byte of a short header — same offset 12, different masking.</summary>
+    private static byte TrialShortHeaderType(byte[] packetData, byte[] kHeader1, byte[] kHeader2)
+    {
+        var trial = (byte[])packetData.Clone();
+        SSU2HeaderEncryption.DecryptShortHeaderInPacket(trial, 0, kHeader1, kHeader2);
+
+        return trial[12];
     }
 
     private void ProcessSessionRequest(byte[] packetData)
@@ -1090,8 +1139,26 @@ public class SSU2Session : ITransport
         var encryptedStaticKey = new byte[48];
         Array.Copy(packetCopy, SHORT_HEADER_SIZE, encryptedStaticKey, 0, 48);
 
-        // Process Noise message 3 Part 1
-        NoiseState.MixHash(header.ToByteArray()); // SSU2 spec: hash decrypted header before Part 1
+        // Process Noise message 3 Part 1, hashing the *canonical* header — the same one
+        // SendSessionConfirmed hashes, with flags[0] = 0x01 rather than the fragment counter the
+        // packet on the wire carries.
+        //
+        // Batch 4-0h: this hashed the header as received, which is identical to the canonical
+        // form for an unfragmented Session Confirmed and differs for a fragmented one — flags[0]
+        // is 0x02 on fragment 0 and 0x12 on fragment 1. So the two sides agreed exactly until a
+        // RouterInfo grew past one datagram, and then Bob hashed a byte Alice never did and
+        // Part 1 failed to authenticate. Hashing a header that does not depend on fragmentation
+        // is the point of the canonical form.
+        var canonicalHeader = new SSU2Header
+        {
+            IsLongHeader = false,
+            Type = SSU2Header.TYPE_SESSION_CONFIRMED,
+            DestinationConnectionId = header.DestinationConnectionId,
+            PacketNumber = 0,
+            Flags0 = 0x01
+        };
+
+        NoiseState.MixHash(canonicalHeader.ToByteArray());
         var staticKey = NoiseState.ProcessMessage3Part1(encryptedStaticKey);
 
         if (staticKey == null)
@@ -1515,6 +1582,16 @@ public class SSU2Session : ITransport
         };
         var canonicalHeaderBytes = canonicalHeader.ToByteArray();
 
+        // Header key, derived BEFORE message 3 is built. Batch 4-0h: this used to be derived
+        // after the two Create calls below, and CreateMessage3Part2 mixes se into the chaining
+        // key and then splits — so Alice masked the header with a key derived from a chaining
+        // key that only exists after the message the header introduces. Bob derives his from the
+        // chaining key as it stood when he sent the Session Created, which is the only state
+        // available to a receiver that must unmask a header before it can process what is
+        // inside it. The two never matched, and Bob read a random type byte per fragment.
+        var kHeader1 = GetRemoteIntroKey(); // Bob's intro key
+        var kHeader2 = SSU2HeaderEncryption.DeriveSessionConfirmedHeaderKey(NoiseState.GetChainingKey());
+
         // Use Noise to create message 3
         NoiseState.MixHash(canonicalHeaderBytes); // SSU2 spec: hash plaintext header before Part 1
         var encryptedPart1 = NoiseState.CreateMessage3Part1(); // 48 bytes: 32 static key + 16 MAC
@@ -1532,11 +1609,6 @@ public class SSU2Session : ITransport
 
         // Determine if fragmentation is needed (max 2 fragments per spec)
         var needsFragmentation = encryptedPart2.Length > maxPayloadForPart2;
-
-        // Header encryption keys
-        var kHeader1 = GetRemoteIntroKey(); // Bob's intro key
-        var chainingKey = NoiseState.GetChainingKey();
-        var kHeader2 = SSU2HeaderEncryption.DeriveSessionConfirmedHeaderKey(chainingKey);
 
         if (!needsFragmentation)
         {
