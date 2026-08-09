@@ -47,9 +47,10 @@ shown. Until Gate 6, do not run this on the live network (netid 2) — use `--ne
 * NTCP2-PQ: *(off by default — handshake tests are quarantined, see batch 9-3)*
   * Inbound: 50%? working
   * Outbound: 50%? working
-* SSU2: *(off by default — never yet completed a handshake with i2pd, though the four defects known to prevent it are fixed)*
-  * Inbound: Handshake completes against another C# router (batch 4-0h); never yet completed against i2pd
-  * Outbound: As above. Data phase delivers 100 of 100 on a lossless channel (batch 4-1b) and 100 of 100 through 5% loss (batch 4-1, ACK and retransmit)
+* SSU2: *(off by default — no session has yet been established with i2pd, but the handshake now gets most of the way there and each remaining step is measured, not guessed)*
+  * Outbound against **real i2pd 2.61.0**, measured in CI: i2pd accepts our Session Request, answers `token mismatch. Retry`, accepts the retried request and logs our DateTime and Padding blocks by type and size, and we decrypt and authenticate its Session Created. The last measured failure was parsing that message's Address block (fixed in batch 4-0n; awaiting the next CI run to confirm)
+  * Outbound/Inbound C#-to-C#: handshake completes (batch 4-0h); data phase delivers 100 of 100 on a lossless channel (batch 4-1b) and 100 of 100 through 5% loss (batch 4-1, ACK and retransmit)
+  * **What "off by default" still means**: no end-to-end session with another implementation has been observed. Do not read the above as SSU2 working
 * SSU2-PQ: *(off by default)*
   * Inbound: Totally broken
   * Outbound: Totally broken

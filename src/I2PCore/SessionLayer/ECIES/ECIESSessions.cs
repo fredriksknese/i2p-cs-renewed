@@ -11,6 +11,22 @@ using I2PCore.Utils;
 
 namespace I2PCore.SessionLayer.ECIES;
 
+// Batch 5-1 (docs/PRODUCTION-PLAN.md) — the decision, recorded where the code used to be.
+//
+// Deleted: `ECIESRatchet`, which lived at the bottom of this file. It was constructed once at the
+// end of session establishment and never read again — no caller ever invoked RatchetForward,
+// GetSendKey or GetReceiveKey — and its derivation, HKDF(key, counter, "ratchet"), is not the I2P
+// ECIES ratchet. Keeping a non-spec ratchet that nothing drives is worse than having none: it
+// reads as forward secrecy that is not there.
+//
+// Also deleted in this batch: `ECIESGarlicProcessor` and `NTCP2AckManager`, both entirely
+// unreferenced.
+//
+// **Kept: `RatchetTagSet.NextKeyHandler`.** It models i2pd's HandleNextKey and is the DH-ratchet
+// mechanism batch 5-4 implements. It is unused today for the same reason the above was — that is
+// precisely why the distinction had to be written down rather than left to the next reader's
+// judgement.
+
 /// <summary>
 ///     ECIES deterministic tag set generation (Proposal 144)
 /// </summary>
@@ -88,7 +104,6 @@ public class ECIESSession
 
     private NoiseIK _noiseIK;
     private NoiseIKhfs _noiseIKhfs;
-    private ECIESRatchet _ratchet;
     private byte[] _receiveKey;
     private byte[] _sendKey;
     private byte[] _ck;
@@ -400,8 +415,6 @@ public class ECIESSession
                 var (tag, key) = outboundTagSet.ConsumeNext();
                 _outboundTags.Enqueue((tag, new TagInfo { Key = key, Index = i, Created = DateTime.UtcNow }));
             }
-
-            _ratchet = new ECIESRatchet(_sendKey, _receiveKey);
         }
     }
 
@@ -491,56 +504,5 @@ public class ECIESSession
         public byte[] Key { get; set; }
         public int Index { get; set; }
         public DateTime Created { get; set; }
-    }
-}
-
-/// <summary>
-///     ECIES Ratchet implementation
-///     Provides forward secrecy by advancing keys after each message
-///     Uses HKDF for key derivation per I2P ECIES spec
-/// </summary>
-public class ECIESRatchet
-{
-    private byte[] _receiveKey;
-    private byte[] _sendKey;
-
-    public ECIESRatchet(byte[] sendKey, byte[] receiveKey)
-    {
-        _sendKey = (byte[])(sendKey?.Clone() ?? throw new ArgumentNullException(nameof(sendKey)));
-        _receiveKey = (byte[])(receiveKey?.Clone() ?? throw new ArgumentNullException(nameof(receiveKey)));
-        SendCounter = 0;
-        ReceiveCounter = 0;
-    }
-
-    public int SendCounter { get; private set; }
-
-    public int ReceiveCounter { get; private set; }
-
-    /// <summary>
-    ///     Ratchet the send key forward
-    /// </summary>
-    public void RatchetForward()
-    {
-        _sendKey = HKDF.DeriveKey(
-            _sendKey,
-            BitConverter.GetBytes(SendCounter++),
-            Encoding.ASCII.GetBytes("ratchet"),
-            32);
-
-        _receiveKey = HKDF.DeriveKey(
-            _receiveKey,
-            BitConverter.GetBytes(ReceiveCounter++),
-            Encoding.ASCII.GetBytes("ratchet"),
-            32);
-    }
-
-    public byte[] GetSendKey()
-    {
-        return (byte[])_sendKey.Clone();
-    }
-
-    public byte[] GetReceiveKey()
-    {
-        return (byte[])_receiveKey.Clone();
     }
 }

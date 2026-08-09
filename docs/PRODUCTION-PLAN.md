@@ -1313,3 +1313,20 @@ Both ECIES handshake diagnostics ran at `LogInformation`, the default level, on 
 **The guard is a source scan, and deliberately.** These lines sit on the hybrid post-quantum path, and nothing in the repository can drive one: `ECIESPump` pairs two classical key managers, so a behavioural test would have passed without executing the code it claimed to cover. A vacuous test is worse than an honest scan — the scan carries its own "did it read anything" check, which this plan has now had to add three times.
 
 **Next: 4-0n needs the live test to confirm it**, the same way 4-0l did. The handshake got as far as parsing blocks in the Session Created, so the next CI run says whether that was the last thing between us and an established SSU2 session with i2pd.
+
+### Session 6 (continued) — batch 5-1 and a README correction
+
+**Unit suite 315 passed / 0 failed / 1 skipped**, Release build 0 errors. Deletion only; nothing changed behaviour.
+
+#### 5-1 — three dead things, and one kept on purpose
+
+Each was checked for references before removal rather than trusted from the plan row:
+
+- **`ECIESGarlicProcessor`** and **`NTCP2AckManager`** — referenced nowhere outside their own files.
+- **`ECIESRatchet`** — the plan called it "never invoked", which was nearly right and worth pinning down: it *was* constructed, once, at the end of session establishment, and the field was then never read. No caller ever invoked `RatchetForward`, `GetSendKey` or `GetReceiveKey`. Its derivation, `HKDF(key, counter, "ratchet")`, is not the I2P ECIES ratchet either. **A non-spec ratchet nothing drives is worse than no ratchet**: it reads as forward secrecy that is not there.
+
+**`RatchetTagSet.NextKeyHandler` is kept**, and the reason is now a header comment in `ECIESSessions.cs` rather than folklore. It is unused *today for the same reason the deleted code was*, so the distinction — it models i2pd's `HandleNextKey` and batch 5-4 implements against it — could not be left to the next reader's judgement.
+
+#### The README said something that is no longer true
+
+Not batch 6-3, which rewrites the whole board from measurement; this is the narrower obligation CLAUDE.md sets, to keep the status current when a batch changes it. The SSU2 entry claimed we had "never yet completed a handshake with i2pd, though the four defects known to prevent it are fixed". After PR #41 that understates it in one direction and overstates it in another, so it now records what was actually measured against i2pd 2.61.0 — Session Request accepted, Retry issued and consumed, our blocks parsed, its Session Created decrypted and authenticated — and states plainly that **no session with another implementation has been established**, so the detail cannot be read as SSU2 working.
