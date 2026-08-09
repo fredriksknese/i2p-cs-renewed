@@ -658,7 +658,23 @@ public class SSU2Session : ITransport
         // reads one back; what we used to write agreed only with our own parser. See
         // SSU2HandshakePayload.
         var ts = (uint)DateTime.UtcNow.Subtract(new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
-        stream.Write(SSU2HandshakePayload.Build(ts, 0));
+
+        // Batch 4-0l: pad it. i2pd rejected our 87-byte Session Request on length alone --
+        // "SSU2: SessionRequest message too short 87" -- having decrypted it far enough to know
+        // what it was. 32 header + 32 ephemeral key + a 7-byte DateTime block + a 16-byte tag is
+        // one byte under what it will look inside. i2pd's own Session Request carries a 26-byte
+        // Padding block, and the reason is not decoration: an unpadded request is cheaper to
+        // send than the reply it provokes, which is the shape of an amplification attack.
+        //
+        // A random length within a range rather than a constant, so packet size is not a
+        // fingerprint. Not applied to the PQ case: that appendix is read from a fixed offset
+        // after the DateTime block (see below), and a padding block in between would move it.
+        // A PQ request carries an 1184-byte key and clears any minimum on its own.
+        var padding = IsPQ && LocalKemPublicKey != null
+            ? 0
+            : (int)SSU2HandshakePayload.MinimumPadding + (int)(BufUtils.RandomUint() % 24);
+
+        stream.Write(SSU2HandshakePayload.Build(ts, padding));
 
         // If PQ session, include ML-KEM public key as an options block.
         //
@@ -1701,7 +1717,8 @@ public class SSU2Session : ITransport
             // the other is what the loopback caught immediately — Alice read Bob's bare
             // timestamp as a DateTime block and rejected him for a clock skew of 56 years.
             var ts = (uint)DateTime.UtcNow.Subtract(new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
-            payloadStream.Write(SSU2HandshakePayload.Build(ts, 0));
+            var createdPadding = IsPQ ? 0 : (int)SSU2HandshakePayload.MinimumPadding + (int)(BufUtils.RandomUint() % 24);
+            payloadStream.Write(SSU2HandshakePayload.Build(ts, createdPadding));
 
             var ephKey = NoiseState.GenerateBobEphemeralKeys();
             if (IsPQ) ephKey[31] |= 0x80;

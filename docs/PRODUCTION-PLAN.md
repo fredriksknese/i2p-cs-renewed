@@ -1178,3 +1178,23 @@ So the decision tree for the next session is already determined by the CI run of
 - **i2pd is still silent** → batch **4-2d**: send a TokenRequest first when we hold no token, mirroring what i2pd itself does. The producer in `SSU2GoldenVectorCapture` already builds and reads that message type, so the pieces exist.
 
 The live test now prints i2pd's own SSU2 log lines on failure, so the run will show which of these it is rather than leaving it to be inferred.
+
+### Session 5 (continued) — batch 4-0l — **i2pd told us why, in one line**
+
+With 4-0k's connection ID in place, i2pd 2.61.0 **decrypted our Session Request, recognised what it was, and rejected it on length alone**:
+
+```
+SSU2: SessionRequest message too short 87
+```
+
+That single line is the most valuable output of this session, and it exists only because 4-0i added log surfacing to the live test after the previous run threw the evidence away. **It also validates everything before it**: to say "SessionRequest" i2pd had to unmask the header, read the type, accept the netid and find a connection ID it could act on — 4-0b, 4-0h, 4-0i and 4-0k all confirmed against a real peer at once.
+
+87 = 32 header + 32 ephemeral key + a 7-byte DateTime block + a 16-byte tag, one byte under the shortest request i2pd will look inside. i2pd's own Session Request carries a 26-byte Padding block. **Padding a handshake message is not decoration**: an unpadded request is cheaper to send than the reply it provokes, which is the shape of an amplification attack. Fixed with a random amount above the minimum, so length is not a fingerprint, and not applied to the PQ case whose appendix is read from a fixed offset.
+
+#### An intermittent failure found while verifying, and deliberately not papered over
+
+The full unit suite failed once (1 of 309) and passed on re-run, and a fixture loop showed one run with a test going **Inconclusive** rather than passing. `SSU2LoopbackTest` alone is stable — eight consecutive runs, 13/13 — so this only appears when fixtures run **together**.
+
+The suspect is `I2PConstants.I2PNetworkId`, a mutable process-wide static that `SessionRequestAnnouncesTheConfiguredNetworkId` sets to 3 and restores: any handshake running concurrently would be rejected by its own netid validator and its `Assume` would fire. That is a hypothesis with a mechanism, not a diagnosis — **it has not been confirmed, and this batch must not be recorded as clean until it is.** Phase 2 removed mutable static config elsewhere for exactly this reason (batch 2-6); this one survived in the test suite.
+
+**Next: confirm or refute that before merging 4-0l**, then re-run the live test — a padded Session Request is the first one i2pd has had no stated reason to reject.

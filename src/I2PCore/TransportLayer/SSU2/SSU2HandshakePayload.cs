@@ -42,6 +42,14 @@ public static class SSU2HandshakePayload
     public const int DateTimeBlockSize = BlockHeaderSize + 4;
 
     /// <summary>
+    ///     Least padding that carries a Session Request over the shortest one i2pd will look
+    ///     inside. Batch 4-0l, and the number comes from i2pd rejecting our 87-byte packet:
+    ///     <c>SSU2: SessionRequest message too short 87</c>. Callers add a random amount on top,
+    ///     so packet length is not a fingerprint.
+    /// </summary>
+    public const uint MinimumPadding = 8;
+
+    /// <summary>
     ///     Build a handshake payload: a DateTime block carrying <paramref name="timestamp" />,
     ///     then a Padding block of <paramref name="paddingLength" /> bytes.
     /// </summary>

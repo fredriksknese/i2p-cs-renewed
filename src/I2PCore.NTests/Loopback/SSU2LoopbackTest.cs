@@ -48,6 +48,13 @@ public class SSU2LoopbackTest
 
     /// <summary>Sized so a 1.2%-per-packet defect cannot pass by luck — see the test that uses it.</summary>
     private const int MistypeSampleSize = 1000;
+
+    /// <summary>
+    ///     The shortest Session Request i2pd will look inside — 32 header + 32 ephemeral key +
+    ///     24 payload. Taken from i2pd rejecting our 87-byte packet by number, not from a
+    ///     document: <c>SSU2: SessionRequest message too short 87</c>.
+    /// </summary>
+    private const int I2pdMinimumSessionRequest = 88;
     private const int AlicePort = 41000;
     private const int BobPort = 41001;
 
@@ -159,6 +166,43 @@ public class SSU2LoopbackTest
             "Bob never accepted the Session Confirmed he was sent: its header key must be "
             + "derived from the chaining key as it stood when the Session Created went out, "
             + "before message 3 mixes se into it");
+    }
+
+    /// <summary>
+    ///     Batch 4-0l. A Session Request must be long enough for the peer to accept it.
+    ///
+    ///     <para>
+    ///         <b>i2pd said this itself.</b> With 4-0k's connection ID in place, i2pd 2.61.0
+    ///         decrypted our packet, recognised it as a Session Request — so header encryption,
+    ///         connection IDs, netid and type are all correct — and rejected it on length alone:
+    ///     </para>
+    ///     <code>SSU2: SessionRequest message too short 87</code>
+    ///     <para>
+    ///         87 is 32 header + 32 ephemeral key + 23 payload, where the payload is a 7-byte
+    ///         DateTime block and a 16-byte AEAD tag with **no padding**. i2pd's own Session
+    ///         Request — batch 4-2c's vector — carries a 26-byte Padding block for exactly this
+    ///         reason. Padding a handshake message is not decoration: an unpadded request is
+    ///         cheaper to send than the reply it provokes, which is the shape of an
+    ///         amplification attack.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public void TheSessionRequestIsLongEnoughForI2pdToAccept()
+    {
+        var (channel, alice, bob) = BuildPair();
+
+        byte[] first = null;
+        channel.Tap = (from, _, data) =>
+        {
+            if (Equals(from, alice.Endpoint)) first ??= data;
+        };
+
+        alice.ConnectTo(bob);
+
+        Assert.That(first, Is.Not.Null, "Alice sent no Session Request");
+        Assert.That(first.Length, Is.GreaterThanOrEqualTo(I2pdMinimumSessionRequest),
+            $"i2pd rejects a Session Request below {I2pdMinimumSessionRequest} bytes with "
+            + "'SessionRequest message too short', before it looks at anything inside");
     }
 
     /// <summary>
