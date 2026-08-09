@@ -47,7 +47,7 @@ shown. Until Gate 6, do not run this on the live network (netid 2) — use `--ne
 * NTCP2-PQ: *(off by default — handshake tests are quarantined, see batch 9-3)*
   * Inbound: 50%? working
   * Outbound: 50%? working
-* SSU2: *(off by default — no ACK/retransmit wired up, and the handshake payload is not block-framed, which i2pd requires)*
+* SSU2: *(off by default — never yet completed a handshake with i2pd, though the four defects known to prevent it are fixed)*
   * Inbound: Handshake completes against another C# router (batch 4-0h); never yet completed against i2pd
   * Outbound: As above. Data phase delivers 100 of 100 on a lossless channel (batch 4-1b) and 100 of 100 through 5% loss (batch 4-1, ACK and retransmit)
 * SSU2-PQ: *(off by default)*

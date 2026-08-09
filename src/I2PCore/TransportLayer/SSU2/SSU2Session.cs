@@ -644,17 +644,19 @@ public class SSU2Session : ITransport
     {
         var stream = new ArrayBufferWriter<byte>();
 
-        // Timestamp (4 bytes)
+        // Batch 4-0i: SSU2 blocks, not a bare timestamp. i2pd sends a DateTime block here and
+        // reads one back; what we used to write agreed only with our own parser. See
+        // SSU2HandshakePayload.
         var ts = (uint)DateTime.UtcNow.Subtract(new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
-        stream.Write(BufUtils.Flip32B(ts));
+        stream.Write(SSU2HandshakePayload.Build(ts, 0));
 
-        // Padding length (2 bytes)
-        stream.Write(BufUtils.Flip16B(0));
-
-        // Reserved (2 bytes)
-        stream.Write(BufUtils.Flip16B(0));
-
-        // If PQ session, include ML-KEM public key as an options block
+        // If PQ session, include ML-KEM public key as an options block.
+        //
+        // Batch 4-0i did NOT reframe this. It is a bespoke appendix — a version byte and a raw
+        // key, with no block header — that only this implementation understands, and it now sits
+        // after the DateTime block rather than after the old 8-byte prefix. Giving it a real
+        // block type is a protocol decision, and it belongs to the Phase 9 PQ work rather than
+        // to a batch about classical interop.
         if (IsPQ && LocalKemPublicKey != null)
         {
             // PQ version byte (1 byte): 3 = ML-KEM-768
@@ -988,10 +990,11 @@ public class SSU2Session : ITransport
             return;
         }
 
-        // Parse payload
-        var payloadReader = new I2PBufferCursor(payload);
-        var timestamp = payloadReader.ReadUInt32BigEndian();
-        var paddingLen = payloadReader.ReadUInt16BigEndian();
+        // Parse payload. Batch 4-0i: block-framed, so a DateTime block rather than a bare
+        // timestamp — read the old way, i2pd's block decodes as a router forty years in the past.
+        var parsedPayload = SSU2HandshakePayload.Parse(payload);
+        var timestamp = parsedPayload.Timestamp;
+        var paddingLen = parsedPayload.PaddingLength;
 
         // Validate timestamp (clock skew check)
         var now = (uint)DateTime.UtcNow.Subtract(new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
@@ -1005,10 +1008,10 @@ public class SSU2Session : ITransport
 
         // Check for PQ KEM public key in remaining payload
         // If initiator sent ML-KEM key, we need to encapsulate and include ciphertext in reply
-        var remainingAfterHeader = payload.Length - 8 - paddingLen;
+        var remainingAfterHeader = payload.Length - SSU2HandshakePayload.DateTimeBlockSize - paddingLen;
         if (remainingAfterHeader > 1)
         {
-            var pqReader = new I2PBufferCursor(payload, 8);
+            var pqReader = new I2PBufferCursor(payload, SSU2HandshakePayload.DateTimeBlockSize);
             var remotePQVersion = pqReader.ReadByte();
             if (remotePQVersion >= 1 && remotePQVersion <= 3)
             {
@@ -1111,10 +1114,11 @@ public class SSU2Session : ITransport
             return;
         }
 
-        // Parse payload
-        var payloadReader = new I2PBufferCursor(payload);
-        var timestamp = payloadReader.ReadUInt32BigEndian();
-        var paddingLen = payloadReader.ReadUInt16BigEndian();
+        // Parse payload. Batch 4-0i: block-framed, so a DateTime block rather than a bare
+        // timestamp — read the old way, i2pd's block decodes as a router forty years in the past.
+        var parsedPayload = SSU2HandshakePayload.Parse(payload);
+        var timestamp = parsedPayload.Timestamp;
+        var paddingLen = parsedPayload.PaddingLength;
 
         // Validate timestamp (clock skew check)
         var now = (uint)DateTime.UtcNow.Subtract(new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
@@ -1126,14 +1130,10 @@ public class SSU2Session : ITransport
             return;
         }
 
-        // Skip reserved bytes (2 bytes)
-        payloadReader.ReadByte();
-        payloadReader.ReadByte();
-
         // Check for PQ KEM ciphertext in remaining payload
         // If we sent a PQ session request, the response should include
         // a KEM ciphertext that we need to decapsulate
-        var remainingPayloadLen = payload.Length - 8 - paddingLen;
+        var remainingPayloadLen = payload.Length - SSU2HandshakePayload.DateTimeBlockSize - paddingLen;
         if (IsPQ && LocalKemSecretKey != null)
         {
             var gotPQResponse = false;
@@ -1172,13 +1172,12 @@ public class SSU2Session : ITransport
             }
         }
 
-        // Parse optional blocks (before padding)
-        var blocksLen = payload.Length - 8 - paddingLen; // 8 = 4 timestamp + 2 padding len + 2 reserved
-        if (blocksLen > 0)
-        {
-            var blocksData = new I2PBufferCursor(payloadReader.ReadBytes(blocksLen));
-            ParseSessionCreatedBlocks(blocksData);
-        }
+        // Parse the payload's blocks — Address in particular, which is how the peer tells us our
+        // external IP. Batch 4-0i: this used to be handed a slice starting after a fixed 8-byte
+        // prefix that does not exist on the wire. It walks type/size pairs itself and ignores
+        // what it has no case for, so the whole payload is the right input, and it now sees
+        // blocks that sat before the old offset.
+        ParseSessionCreatedBlocks(new I2PBufferCursor(payload));
 
         State = SessionState.SessionCreatedReceived;
 
@@ -1687,10 +1686,12 @@ public class SSU2Session : ITransport
 
             // Build a fresh payload stream if we are retrying
             var payloadStream = new ArrayBufferWriter<byte>();
+
+            // Batch 4-0i: block-framed, exactly like the Session Request. Changing one and not
+            // the other is what the loopback caught immediately — Alice read Bob's bare
+            // timestamp as a DateTime block and rejected him for a clock skew of 56 years.
             var ts = (uint)DateTime.UtcNow.Subtract(new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
-            payloadStream.WriteUInt32BigEndian(ts);
-            payloadStream.WriteUInt16BigEndian(0); // Padding length
-            payloadStream.WriteUInt16BigEndian(0); // Reserved
+            payloadStream.Write(SSU2HandshakePayload.Build(ts, 0));
 
             var ephKey = NoiseState.GenerateBobEphemeralKeys();
             if (IsPQ) ephKey[31] |= 0x80;

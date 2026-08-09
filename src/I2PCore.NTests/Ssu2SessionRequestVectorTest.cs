@@ -1,6 +1,7 @@
 using System;
 using I2PCore.Crypto;
 using I2PCore.Crypto.Noise;
+using I2PCore.TransportLayer.SSU2;
 using I2PCore.TransportLayer.SSU2.Messages;
 using I2PCore.Utils;
 using NUnit.Framework;
@@ -106,6 +107,75 @@ public class Ssu2SessionRequestVectorTest
         {
             Assert.That(payload[0], Is.EqualTo(0), "first payload block is DateTime (type 0)");
             Assert.That((payload[1] << 8) | payload[2], Is.EqualTo(4), "DateTime block is 4 bytes");
+        });
+    }
+
+    /// <summary>
+    ///     Batch 4-0i. i2pd's handshake payload is SSU2 <b>blocks</b>, and ours must be read as
+    ///     such. This decrypts the captured Session Request exactly as the production receive
+    ///     path does, then hands the authenticated plaintext to the production payload parser.
+    ///
+    ///     <para>
+    ///         <b>The timestamp asserted here is i2pd's, not ours.</b> Its payload is
+    ///         <c>00 0004 6a77a32d | fe 001a 00…</c> — a DateTime block then a Padding block —
+    ///         while <c>BuildRequestPayload</c> wrote a bare timestamp and both handlers read one
+    ///         back, agreeing with each other and with nothing on the network. Read the old way,
+    ///         i2pd's DateTime block decodes as a timestamp of <c>0x00000406</c>: a router forty
+    ///         years in the past, which the clock-skew check would reject even if nothing else
+    ///         did.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public void I2pdsHandshakePayloadParsesAsBlocks()
+    {
+        var vector = GoldenVectors.Read(GoldenVectors.Ssu2SessionRequest);
+        var packet = (byte[])vector["packet"].Clone();
+        var introKey = vector["intro_key"];
+
+        SSU2HeaderEncryption.DecryptLongHeaderComplete(packet, 0, introKey, introKey);
+
+        var header = new byte[32];
+        Array.Copy(packet, 0, header, 0, 32);
+
+        var obfuscatedX = new byte[32];
+        Array.Copy(packet, 32, obfuscatedX, 0, 32);
+
+        var encryptedPayload = new byte[packet.Length - 64];
+        Array.Copy(packet, 64, encryptedPayload, 0, encryptedPayload.Length);
+
+        var noise = new NoiseXK(NoiseXK.PROTOCOL_NAME_SSU2);
+        noise.InitializeAsBob(vector["static_private"], vector["static_public"]);
+
+        var payload = noise.ProcessMessage1WithHeader(
+            header, SSU2HeaderEncryption.DeobfuscateEphemeralKey(obfuscatedX, introKey), encryptedPayload);
+
+        var parsed = SSU2HandshakePayload.Parse(payload);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(parsed.Timestamp, Is.EqualTo(0x6a77a32du),
+                "the DateTime block i2pd sent must be read as a DateTime block");
+            Assert.That(parsed.PaddingLength, Is.EqualTo(26), "the Padding block that follows it");
+        });
+    }
+
+    /// <summary>
+    ///     The send side of the same convention: what we build must parse as the blocks a peer
+    ///     expects, with the timestamp we put in it.
+    /// </summary>
+    [Test]
+    public void OurHandshakePayloadIsBlockFramed()
+    {
+        var built = SSU2HandshakePayload.Build(0x12345678, 16);
+
+        Assert.That(built[0], Is.EqualTo((byte)SSU2BlockType.DateTime), "first block is DateTime");
+
+        var parsed = SSU2HandshakePayload.Parse(built);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(parsed.Timestamp, Is.EqualTo(0x12345678u));
+            Assert.That(parsed.PaddingLength, Is.EqualTo(16));
         });
     }
 
