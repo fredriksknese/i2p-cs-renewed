@@ -480,6 +480,11 @@ public class SSU2Session : ITransport
         return FreenetBase64.Decode(base64Key.ToString());
     }
 
+    /// <summary>Batch 4-2b: how many Retries this session has acted on. See ProcessRetry.</summary>
+    private const int MaxRetriesAccepted = 1;
+
+    private int _retriesAccepted;
+
     private void SendSessionRequest()
     {
         // Get Bob's intro key for header encryption
@@ -490,6 +495,11 @@ public class SSU2Session : ITransport
         // Re-initialize Noise
         InitializeNoiseAsAlice();
 
+        // Batch 4-2b: present the token the peer issued us, or 0 for "I hold none" — which is
+        // the correct on-the-wire value, not an error. A responder that requires one answers a
+        // token-less request with a Retry, which ProcessRetry below turns into a second attempt.
+        var token = Host.Tokens.GetOutgoing(RemoteEndpoint);
+
         // Build header (plaintext initially)
         var header = new SSU2Header
         {
@@ -497,6 +507,7 @@ public class SSU2Session : ITransport
             Type = SSU2Header.TYPE_SESSION_REQUEST,
             Version = 2,
             NetId = (byte)I2PConstants.I2PNetworkId,
+            Token = token,
             DestinationConnectionId = RemoteConnectionId,
             SourceConnectionId = LocalConnectionId,
             PacketNumber = BufUtils.RandomUint() // Random for handshake packets
@@ -615,6 +626,10 @@ public class SSU2Session : ITransport
                     ProcessSessionCreated(packetData);
                     break;
 
+                case SSU2Header.TYPE_RETRY:
+                    ProcessRetry(packetData);
+                    break;
+
                 case SSU2Header.TYPE_SESSION_CONFIRMED:
                     ProcessSessionConfirmed(packetData);
                     break;
@@ -716,6 +731,63 @@ public class SSU2Session : ITransport
         return trial[12];
     }
 
+    /// <summary>
+    ///     A Retry: the responder declined our Session Request for want of a valid token, and has
+    ///     issued one. Store it and try again.
+    ///
+    ///     <para>
+    ///         Batch 4-2b (docs/PRODUCTION-PLAN.md). Type 9 used to reach the dispatch's default
+    ///         arm and log "Unknown packet type 9", so a token-enforcing peer — which is i2pd's
+    ///         normal configuration — could never be dialled: it answered every Session Request
+    ///         with a Retry we ignored.
+    ///     </para>
+    ///     <para>
+    ///         <b>Capped at one re-send.</b> Without that, a hostile or confused peer can answer
+    ///         each Session Request with another Retry and keep the session in that loop for the
+    ///         whole handshake window.
+    ///     </para>
+    /// </summary>
+    private void ProcessRetry(byte[] packetData)
+    {
+        if (State != SessionState.SessionRequestSent)
+        {
+            Logging.LogDebug($"{DebugId}: Retry in state {State}; ignoring");
+            return;
+        }
+
+        if (_retriesAccepted >= MaxRetriesAccepted)
+        {
+            Logging.LogWarning(
+                $"{DebugId}: peer sent more than {MaxRetriesAccepted} Retry; giving up");
+            Terminate("Too many SSU2 Retries");
+            return;
+        }
+
+        // A Retry is masked and authenticated with Bob's intro key, exactly like the
+        // TokenRequest it answers.
+        if (!Retry.TryOpen(packetData, GetRemoteIntroKey(), SSU2Header.TYPE_RETRY,
+                out var header, out _))
+        {
+            Logging.LogWarning($"{DebugId}: Retry did not authenticate; ignoring");
+            return;
+        }
+
+        if (header.Token == 0)
+        {
+            Logging.LogWarning($"{DebugId}: Retry carried no token; ignoring");
+            return;
+        }
+
+        _retriesAccepted++;
+        Host.Tokens.StoreReceived(RemoteEndpoint, header.Token);
+
+        Logging.LogDebug($"{DebugId}: accepted a Retry token; re-sending Session Request");
+
+        // SendSessionRequest re-runs InitializeNoiseAsAlice, so the Noise state is clean for the
+        // second attempt rather than carrying the abandoned one.
+        SendSessionRequest();
+    }
+
     private void ProcessSessionRequest(byte[] packetData)
     {
         if (State != SessionState.Initial)
@@ -761,6 +833,27 @@ public class SSU2Session : ITransport
         {
             Logging.LogWarning($"{DebugId}: Invalid version or network ID");
             Terminate($"Invalid SSU2 version ({header.Version}) or network ID ({header.NetId})");
+            return;
+        }
+
+        // Batch 4-2b: require a token we issued to this endpoint, and answer a request without
+        // one by issuing a Retry.
+        //
+        // Deliberately NOT Terminate(): the peer is expected to re-send its Session Request with
+        // the new token, and a terminated session lingers in SSU2Host.Sessions until the worker
+        // tick reaps it -- DispatchPacket would route the second request into the dead one.
+        // Leaving State at Initial means the re-sent request passes the state guard above and
+        // re-runs InitializeNoiseAsBob, so the Noise state is clean rather than half-used.
+        if (!Host.Tokens.IsOurs(RemoteEndpoint, header.Token))
+        {
+            var issued = Host.Tokens.Issue(RemoteEndpoint);
+            if (issued != 0)
+            {
+                Host.SendPacket(RemoteEndpoint, Retry.Build(header, issued, ourIntroKey, RemoteEndpoint));
+                Logging.LogDebug(
+                    $"{DebugId}: Session Request carried no token we issued; sent a Retry");
+            }
+
             return;
         }
 
@@ -1372,6 +1465,12 @@ public class SSU2Session : ITransport
                         var reader2 = new I2PBufferCursor(block.Data);
                         var tokenExpiry = reader2.ReadUInt32BigEndian();
                         var token = reader2.ReadUInt64BigEndian();
+
+                        // Batch 4-2b: this was parsed and then dropped on the floor, so a token
+                        // offered mid-session was thrown away and the next dial to this peer
+                        // started from a TokenRequest again.
+                        Host.Tokens.StoreReceived(RemoteEndpoint, token);
+
                         Logging.LogDebug($"{DebugId}: Received new token, expires {tokenExpiry}");
                     }
 

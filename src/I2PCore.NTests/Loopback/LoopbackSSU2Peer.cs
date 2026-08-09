@@ -35,6 +35,13 @@ public sealed class LoopbackSSU2Peer
 {
     private readonly LoopbackSSU2Host _host;
 
+    /// <summary>
+    ///     Batch 4-2b: the host behind this peer, so a test can inspect state that is not
+    ///     observable from the wire — the token cache in particular. Same kind of seam as the
+    ///     internal constructor and DispatchPacket that batch 3-3 added.
+    /// </summary>
+    internal SSU2Host Host => _host;
+
     private LoopbackSSU2Peer(string name, RouterContext routerContext, IPEndPoint endpoint,
         LossyChannel channel, byte[] priv, byte[] pub, byte[] introKey)
     {

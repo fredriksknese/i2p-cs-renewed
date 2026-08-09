@@ -73,6 +73,12 @@ internal sealed class SSU2TokenCache
     /// </summary>
     internal ulong Issue( IPEndPoint remote )
     {
+        // Idempotent while the token is still valid. Minting a fresh one on every ask would
+        // invalidate a token already in flight: a peer that re-sends a Session Request before our
+        // Retry reaches it would then present a token we had just replaced, and be answered with
+        // yet another Retry. Observed exactly that as a token exchange that never converged.
+        if ( TryGet( _issued, remote, _issuedLifetime, out var existing ) ) return existing;
+
         if ( _issued.Count >= MaxEntries && !_issued.ContainsKey( remote ) )
         {
             Logging.LogDebug(
