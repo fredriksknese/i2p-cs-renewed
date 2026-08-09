@@ -1263,11 +1263,26 @@ SSU2: Session with 127.0.0.1:29260 terminated
 - **i2pd parsed our handshake payload block by block**: `Block type 0 of size 4 / Datetime`, then `Block type 254 of size 17 / Padding`. That is 4-0i's framing and 4-0l's padding read correctly by the implementation they were written for. The 17 is ours — `MinimumPadding` 8 plus a random amount under 24.
 - **4-0m is not implicated.** Our netid and i2pd's are both 99 here, so the added version/netid check accepts what it should.
 
-**The new blocker: we receive i2pd's Session Created and do nothing with it.** `Resending 4` twenty-two times is i2pd retransmitting a message we never answer, and our own session stayed in `SessionRequestSent` while 24 datagrams arrived. So the packets reach us and are dropped.
+**The new blocker, and our own log names it exactly.** `Resending 4` twenty-two times is i2pd retransmitting a Session Created we never answer. We do not drop it — **we decrypt it, authenticate it, and then throw while parsing its blocks**:
 
-**Next batch (4-0n): find out why the Session Created is dropped, and do it from the evidence rather than by guessing.** The two candidates, in order of how cheaply they can be told apart:
+```
+SSU2-Out-6A4CC6E0: ProcessReceivedPacket failed: System.Exception: Invalid Address block size: 29260
+   at AddressBlock.Parse(I2PBufferCursor data)          SSU2Blocks.cs:182
+   at SSU2Session.ParseSessionCreatedBlocks(...)         SSU2Session.cs:2026
+   at SSU2Session.ProcessSessionCreated(Byte[])          SSU2Session.cs:1229
+```
 
-1. **`k_header_2` for the Session Created diverges from i2pd's.** We derive it as `HKDF(chainKey, "SessCreateHeader")` — the question is *which* chainKey, since a Retry restarts the handshake and 4-0h already found one bug of exactly this shape on our own side (the key derived after `se` had been mixed).
-2. **The peek rejects it.** If (1) is wrong the type byte is random, `TrialLongHeaderType` returns `TYPE_UNRECOGNISED`, and the packet reaches the `default` arm.
+**Reaching `ParseSessionCreatedBlocks` at all is a large result**: the Session Created header key derivation, the header unmasking, the ephemeral key and the AEAD tag are all correct against a real i2pd. Everything from 4-0 through 4-0m holds on the wire. What is left is one block parser.
 
-These are distinguishable without a network: the live test already captures the datagrams, so decrypt a captured Session Created offline with each candidate chaining key and see which one unmasks a header reading `type=1 version=2 netid=99`. **Do not change the derivation until one of them does** — this plan has paid for guessing between plausible explanations before.
+#### Batch 4-0n, already diagnosed — the Address block, and the seventh instance of the signature defect
+
+`29260` is not a length. **It is our own SSU2 port**, which is what i2pd puts in the Address block when it tells us the address it sees us on.
+
+- `ParseSessionCreatedBlocks` reads the type and the two-byte size itself, then hands `AddressBlock.Parse` **the payload only**.
+- `AddressBlock.Parse` opens by reading a two-byte size **again**, so it consumes the first two payload bytes as a length.
+- The SSU2 Address block is **port first, then IP**. So the two bytes it eats are the port: `0x724C` = 29260, and it throws on a size that is neither 6 nor 18.
+- Our `AddressBlock.Serialize` writes **IP first, then port**, and writes the size field its own `Parse` then re-reads. **The pair round-trips perfectly against itself and matches nothing on the network** — 4-0b, 4-0h, 4-0i, 4-0k, 4-0l and 4-0m were all this same shape.
+
+So the fix is two things that must move together: drop the redundant size read in `Parse`, and swap the field order in both `Parse` and `Serialize` so the block is port-then-IP.
+
+**A round-trip test cannot catch this** — it is what hid it. The guard has to be i2pd's bytes: the Address block from a real Session Created, asserting the parsed value is our own `127.0.0.1:29260`. The live test does **not** currently record datagrams (an earlier draft of this note claimed it did; it does not), so 4-0n's first move is to have it write the received Session Created to `TestData/` the way `SSU2GoldenVectorCapture` already writes the others, and the workflow already uploads `ssu2_*.txt`.
