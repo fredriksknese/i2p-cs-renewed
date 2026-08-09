@@ -15,8 +15,11 @@ namespace I2PTests;
 public class SafeDefaultsTest
 {
     /// <summary>
-    ///     SSU2 has no ACK/retransmit path wired up (SSU2AckManager is never instantiated by
-    ///     production code) and no Retry/token handling. Phase 4 owns turning this back on.
+    ///     SSU2 stays opt-in. The reasons have changed rather than gone away: batch 4-1 wired up
+    ///     ACK and retransmit and 4-2a/4-2b the token handling, and the handshake completes
+    ///     C#-to-C# as of 4-0h — but **it has never completed against i2pd**, and batch 4-0i has
+    ///     evidence it cannot until the handshake payload is block-framed. Turning this on is the
+    ///     Phase 4 gate, not a side effect of the batches that got us here.
     /// </summary>
     [Test]
     public void Ssu2IsDisabledByDefault()
