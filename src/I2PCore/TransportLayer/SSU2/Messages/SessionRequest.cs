@@ -45,8 +45,10 @@ public class SessionRequest
         var kHeader1 = bobIntroKey;
         var kHeader2 = bobIntroKey;
 
-        // Decrypt header in place using IVs from packet end
-        SSU2HeaderEncryption.DecryptLongHeaderInPacket(fullPacket, 0, kHeader1, kHeader2);
+        // Decrypt header in place: bytes 0-15 from the packet-end IVs, bytes 16-31 from the
+        // zero-nonce pass that also covers the ephemeral key below. Batch 4-0b — this used to
+        // stop at byte 16, so it was not the inverse of ToByteArray.
+        SSU2HeaderEncryption.DecryptLongHeaderComplete(fullPacket, 0, kHeader1, kHeader2);
 
         // Parse decrypted header from packet
         request.Header = SSU2Header.ParseLongHeader(new I2PBufferCursor(fullPacket));
@@ -86,8 +88,9 @@ public class SessionRequest
             Array.Copy(padding, 0, packet, header.Length + obfuscatedX.Length + encryptedPayload.Length,
                 padding.Length);
 
-        // Encrypt header in place using IVs from packet end
-        SSU2HeaderEncryption.EncryptLongHeaderInPacket(packet, 0, kHeader1, kHeader2);
+        // Encrypt header in place, bytes 0-31. Batch 4-0b: bytes 16-31 are the source connection
+        // ID and the token, and they were going out unmasked.
+        SSU2HeaderEncryption.EncryptLongHeaderComplete(packet, 0, kHeader1, kHeader2);
 
         return packet;
     }

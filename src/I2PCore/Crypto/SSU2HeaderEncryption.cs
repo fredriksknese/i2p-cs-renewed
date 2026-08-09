@@ -29,10 +29,9 @@ namespace I2PCore.Crypto;
 ///     </list>
 ///
 ///     <para>
-///         <b>Known remaining divergence from i2pd — batch 4-0b, not fixed here.</b> For Session
-///         Request and Session Created, i2pd encrypts packet bytes <b>16..64 as a single
-///         48-byte ChaCha20 pass</b> — header bytes 16-31 (source connection ID and token) plus
-///         the 32-byte ephemeral key, one keystream, zero nonce:
+///         <b>Bytes 16..64 of a Session Request or Session Created are one 48-byte ChaCha20
+///         pass</b> — header bytes 16-31 (source connection ID and token) plus the 32-byte
+///         ephemeral key, one keystream, zero nonce. From i2pd:
 ///     </para>
 ///     <code>
 ///         // SSU2Session.cpp SendSessionRequest / ProcessSessionRequest
@@ -40,44 +39,41 @@ namespace I2PCore.Crypto;
 ///         m_Server.ChaCha20 (buf + 16, 48, i2p::context.GetSSU2IntroKey (), nonce, headerX);
 ///     </code>
 ///     <para>
-///         We instead treat those as two independent keystreams — <see cref="EncryptLongHeaderComplete" />
-///         for bytes 16-31 and <see cref="ObfuscateEphemeralKey" /> for the key, each restarting
-///         at the beginning — so the ephemeral key is XORed with keystream bytes 0..32 where
-///         i2pd uses 16..48. Worse, <c>SessionRequest.ToByteArray</c> calls
-///         <see cref="EncryptLongHeaderInPacket" /> and never covers bytes 16-31 at all, so the
-///         source connection ID and token go out in the clear.
+///         Batch 4-0b, against a Session Request i2pd 2.61.0 really sent. This is expressed here
+///         as <see cref="EncryptLongHeaderComplete" /> (bytes 0..16 of that pass, over header
+///         bytes 16-31) followed by <see cref="ObfuscateEphemeralKey" /> (bytes 16..48, over the
+///         key). The composition is byte-identical to i2pd's single call — 48 bytes fit in one
+///         ChaCha20 block and both halves use the zero nonce — and it keeps the 16-byte form
+///         intact for TokenRequest, Retry and PeerTest, which carry no ephemeral key and share
+///         <see cref="EncryptLongHeaderComplete" />.
 ///     </para>
 ///     <para>
-///         <b>That same asymmetry is batch 3-3's unexplained AEAD failure.</b> Measured during
-///         4-0, not inferred: <c>SSU2Session.SendSessionRequest</c> encrypts with
-///         <see cref="EncryptLongHeaderInPacket" /> (bytes 0-15), while
-///         <c>SSU2Host.DispatchPacket</c> decrypts with <see cref="DecryptLongHeaderComplete" />
-///         (bytes 0-31). The receiver therefore XORs 16 bytes the sender never masked, so the
-///         header Bob hashes differs from the one Alice hashed and the Noise AEAD tag fails.
-///         Switching that one call to <see cref="EncryptLongHeaderComplete" /> takes the
-///         loopback fixture from <c>sent=1</c> to <c>sent=2</c> — Bob accepts the Session Request
-///         and replies. Not applied here, because the correct fix is 4-0b's single 48-byte pass,
-///         which subsumes it; landing the interim form would be writing code 4-0b immediately
-///         rewrites.
+///         <b>It was one defect, not two.</b> Batch 3-3's unexplained C#-to-C# AEAD failure was
+///         the same divergence seen from inside: <c>SendSessionRequest</c> masked bytes 0-15 with
+///         <see cref="EncryptLongHeaderInPacket" /> while <c>SSU2Host.DispatchPacket</c> unmasked
+///         0-31, so the receiver XORed 16 bytes the sender never masked and the header Bob hashed
+///         was not the one Alice hashed. Both send paths now use
+///         <see cref="EncryptLongHeaderComplete" />, which is also what makes the source
+///         connection ID and token stop going out in the clear.
 ///     </para>
 ///     <para>
-///         So 3-3's C#-to-C# failure and this i2pd interop divergence are <b>one defect</b>, and
-///         4-0b closes both. That is worth knowing before Phase 4 spends a session treating them
-///         as separate.
-///     </para>
-///     <para>
-///         Left for 4-0b deliberately: there is no captured i2pd Session Request to verify the
-///         48-byte form against, because i2pd opens with a TokenRequest we cannot yet answer
-///         (batch 3-5, finding 1), so batch 4-2 unblocks the reference bytes.
-///         <c>Ssu2HeaderLayoutTest</c> pins the divergence as quarantined red tests meanwhile.
-///         The 16-byte form used here <i>is</i> correct for TokenRequest, Retry and PeerTest,
-///         which carry no ephemeral key.
+///         <b>Do not verify a change here against this repository alone.</b> Every SSU2
+///         convention defect found so far — the block counter, this pass, the data-phase header —
+///         round-tripped perfectly against itself. The tests that matter are
+///         <c>Ssu2SessionRequestVectorTest</c> and <c>Ssu2GoldenVectorTest</c>, which measure
+///         against captured i2pd bytes.
 ///     </para>
 /// </summary>
 public static class SSU2HeaderEncryption
 {
     /// <summary>ChaCha20 operates on 64-byte blocks; block 0 is discarded to start at block 1.</summary>
     private const int ChaCha20BlockSize = 64;
+
+    /// <summary>
+    ///     Where the ephemeral key sits in the 48-byte pass over packet bytes 16..64: after the
+    ///     16 bytes that cover header bytes 16-31. Batch 4-0b.
+    /// </summary>
+    private const int EphemeralKeyOffsetInPass = 16;
 
     /// <summary>
     ///     Derive k_header_2 for Session Created
@@ -231,9 +227,30 @@ public static class SSU2HeaderEncryption
     }
 
     /// <summary>
-    ///     Obfuscate ephemeral key with ChaCha20 (for Session Request/Created)
-    ///     Per spec lines 788-790: Uses k_header_2 with ZERO IV (all zeros nonce)
-    ///     This is part of the header bytes 16-63 encryption
+    ///     Obfuscate the ephemeral key of a Session Request or Session Created — packet bytes
+    ///     32-63, the <b>second half</b> of the 48-byte pass that starts at packet byte 16.
+    ///
+    ///     <para>
+    ///         Batch 4-0b. This used to restart the keystream, XORing the key with bytes 0..32
+    ///         where i2pd uses 16..48 of the same stream, so the key we sent was unreadable to
+    ///         i2pd and the key we read from i2pd was noise. It is a 48-byte pass and not two,
+    ///         per <c>libi2pd/SSU2Session.cpp</c>:
+    ///     </para>
+    ///     <code>
+    ///         m_Server.ChaCha20 (buf + 16, 48, i2p::context.GetSSU2IntroKey (), nonce, headerX);
+    ///     </code>
+    ///     <para>
+    ///         Header bytes 16-31 keep taking bytes 0..16 of that same stream, which is what
+    ///         <see cref="EncryptLongHeaderComplete" /> already does — so that method is unchanged
+    ///         and the TokenRequest, Retry and PeerTest paths sharing it are untouched. Composing
+    ///         the two therefore produces i2pd's single pass byte for byte, because 48 bytes fit
+    ///         inside one ChaCha20 block and the nonce is zero in both halves.
+    ///     </para>
+    ///     <para>
+    ///         Verified against a Session Request i2pd 2.61.0 really sent (batch 4-2c's vector):
+    ///         the recovered key makes the Noise AEAD tag verify, which no other value can —
+    ///         <c>Ssu2SessionRequestVectorTest</c>.
+    ///     </para>
     /// </summary>
     public static byte[] ObfuscateEphemeralKey(byte[] ephemeralKey, byte[] kHeader2)
     {
@@ -242,13 +259,14 @@ public static class SSU2HeaderEncryption
         if (kHeader2 == null || kHeader2.Length != 32)
             throw new ArgumentException("k_header_2 must be 32 bytes", nameof(kHeader2));
 
-        // Per spec: IV is zero for ephemeral key obfuscation
+        // Zero nonce, and 48 bytes of it: the first 16 cover header bytes 16-31 and are consumed
+        // by EncryptLongHeaderComplete, leaving 16..48 for the key.
         var zeroIV = new byte[12];
+        var mask = GenerateChaCha20Mask(kHeader2, zeroIV, EphemeralKeyOffsetInPass + 32);
 
-        // Generate ChaCha20 keystream and XOR with ephemeral key
-        var mask = GenerateChaCha20Mask(kHeader2, zeroIV, 32);
         var obfuscated = new byte[32];
-        for (var i = 0; i < 32; i++) obfuscated[i] = (byte)(ephemeralKey[i] ^ mask[i]);
+        for (var i = 0; i < 32; i++)
+            obfuscated[i] = (byte)(ephemeralKey[i] ^ mask[EphemeralKeyOffsetInPass + i]);
 
         return obfuscated;
     }
