@@ -698,19 +698,25 @@ public class SSU2Session : ITransport
                     return SSU2Header.TYPE_SESSION_CONFIRMED;
                 break;
             }
+
+            // Established: a data packet under the data-phase header key. Batch 4-1b — this used
+            // to be reached only *after* a long-header trial with the intro key, which no data
+            // packet is masked with, so the type byte read there was uniformly random. Three of
+            // the 256 values are long-header types, and those bypassed this path entirely and
+            // went to a handshake handler that dropped them. About 1.2% of every data packet
+            // ever sent, silently, and invisibly to the sender.
+            case SessionState.Established when packetData.Length >= SSU2Header.SHORT_HEADER_SIZE:
+            {
+                if (TrialShortHeaderType(packetData, kHeader1, ReceiveHeaderKey2) == SSU2Header.TYPE_DATA)
+                    return SSU2Header.TYPE_DATA;
+                break;
+            }
         }
 
-        var type = TrialLongHeaderType(packetData, kHeader1, kHeader1);
-
-        // Not a long-header type, so it may be a data packet under the data-phase header key.
-        if (type > SSU2Header.TYPE_SESSION_CONFIRMED && type != SSU2Header.TYPE_DATA
-                                                     && State == SessionState.Established)
-            // Batch 4-1a: this passed the whole packet to DecryptShortHeader, which throws
-            // unless the array is exactly 16 bytes — so every data packet larger than its own
-            // header threw into the outer catch and was dropped.
-            type = TrialShortHeaderType(packetData, kHeader1, ReceiveHeaderKey2);
-
-        return type;
+        // Everything else — Session Request, Retry, Token Request, Peer Test — is masked with
+        // the intro key, and so is a late handshake retransmission arriving after this session
+        // moved on.
+        return TrialLongHeaderType(packetData, kHeader1, kHeader1);
     }
 
     /// <summary>Type byte of a long header, unmasked on a copy so the packet is left as sent.</summary>

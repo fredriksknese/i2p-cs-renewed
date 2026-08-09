@@ -22,10 +22,11 @@ namespace I2PTests.Loopback;
 ///         because SSU2 has been off by default since batch 0-4.
 ///     </para>
 ///     <para>
-///         Every test here was red when written. <b>The handshake ones are green as of batch
-///         4-0h</b>; what remains quarantined is the data phase, which now fails on its own
-///         merits — 99 of 100 messages on a clean channel, and no retransmission at all — rather
-///         than being skipped because no session could be established.
+///         Every test here was red when written. <b>The handshake is green as of batch 4-0h and
+///         the clean-channel data phase as of 4-1b</b> — 100 of 100, the gate batch 3-3 was
+///         written to measure. One test remains quarantined: 5% loss still loses exactly what
+///         the channel drops, because nothing retransmits. That is batch 4-1, and it is now the
+///         only thing between here and a working SSU2 data phase.
 ///     </para>
 ///     <para>
 ///         <b>Quarantined, not deleted</b> — each names the batch that owns it, per
@@ -43,6 +44,9 @@ namespace I2PTests.Loopback;
 public class SSU2LoopbackTest
 {
     private const int MessageCount = 100;
+
+    /// <summary>Sized so a 1.2%-per-packet defect cannot pass by luck — see the test that uses it.</summary>
+    private const int MistypeSampleSize = 1000;
     private const int AlicePort = 41000;
     private const int BobPort = 41001;
 
@@ -157,19 +161,61 @@ public class SSU2LoopbackTest
     }
 
     /// <summary>
-    ///     The plan's stated 3-3 gate: 0% loss delivers 100/100. **No longer blocked** — as of
-    ///     4-0h the handshake completes, so this measures the data phase for the first time
-    ///     rather than being skipped by its own <c>Assume</c>.
+    ///     Batch 4-1b. A data packet must be dispatched as data however its bytes happen to
+    ///     decrypt under the intro key.
     ///
     ///     <para>
-    ///         It delivers <b>99 of 100</b> on a lossless channel, which is a far narrower defect
-    ///         than "no data phase". One message in a hundred is lost with nothing dropping it —
-    ///         `sent=104 delivered=104 lost=0`. Owner: batch 4-1, which has to explain that one
-    ///         before it can claim anything about retransmission.
+    ///         <b>The defect this pins is a coincidence, so the test is sized to make the
+    ///         coincidence certain.</b> In <c>Established</c> the dispatcher trial-decrypted with
+    ///         the intro key, which no data packet is masked with, so the type byte it read was
+    ///         uniformly random. Three of the 256 values — Session Request, Created and
+    ///         Confirmed — are long-header types, and those skipped the short-header path
+    ///         entirely and went to a handshake handler, which dropped them
+    ///         (<c>Received SessionCreated in state Established</c>). That is 3/256 ≈ 1.2% of
+    ///         every data packet ever sent, silently.
+    ///     </para>
+    ///     <para>
+    ///         With <see cref="MistypeSampleSize" /> messages the chance of *not* hitting it is
+    ///         (253/256)^1000 ≈ 8 in a million, so a regression cannot hide behind luck. At the
+    ///         hundred of <see cref="CleanChannelDeliversEveryMessage" /> it would have gone
+    ///         unnoticed roughly one run in three — which is exactly how it presented: 99, then
+    ///         97, then 100.
     ///     </para>
     /// </summary>
     [Test]
-    [Category(TestCategories.Experimental)]
+    public void EveryDataPacketIsTypedAsDataWhateverTheIntroKeyWouldSay()
+    {
+        var (channel, alice, bob) = BuildPair();
+
+        var session = alice.ConnectTo(bob);
+        channel.PumpUntilIdle();
+        bob.ObserveNewSessions();
+
+        Assume.That(alice.Established, Is.Not.Empty, "Handshake did not complete.");
+
+        for (var i = 0; i < MistypeSampleSize; i++)
+            session.Send(BuildMessage(i));
+
+        channel.PumpUntilIdle(MistypeSampleSize + 200);
+
+        Assert.That(bob.Received.Count, Is.EqualTo(MistypeSampleSize),
+            $"data packets were dispatched as something other than data. {channel}");
+    }
+
+    /// <summary>
+    ///     <b>The plan's 3-3 gate, and green as of batch 4-1b: 0% loss delivers 100/100.</b>
+    ///
+    ///     <para>
+    ///         It was skipped by its own <c>Assume</c> until 4-0h gave it a handshake, then
+    ///         measured 99 of 100 with <c>lost=0</c> — every datagram arriving and one message
+    ///         never appearing. That was the mistyped-data defect
+    ///         (<see cref="EveryDataPacketIsTypedAsDataWhateverTheIntroKeyWouldSay" />), which at
+    ///         a hundred messages would have looked green about one run in three. <b>A test that
+    ///         only sometimes catches a defect is worth less than the arithmetic that says
+    ///         how often</b> — hence the thousand-message test next to it.
+    ///     </para>
+    /// </summary>
+    [Test]
     public void CleanChannelDeliversEveryMessage()
     {
         var (channel, alice, bob) = BuildPair();
@@ -194,8 +240,10 @@ public class SSU2LoopbackTest
     ///     The 4-1 defect. SSU2 has no ACK or retransmit path in production code:
     ///     <c>SSU2AckManager</c> is a complete, unit-tested class nothing instantiates, and the
     ///     ACK block case in <c>SSU2Session</c> is empty — so a dropped datagram is simply gone.
-    ///     As of 4-0h this reaches the data phase and measures exactly that: 6 datagrams lost,
-    ///     6 messages never delivered, nothing retransmitted. Owner: batch 4-1.
+    ///     As of 4-0h this reaches the data phase and measures exactly that: 6 datagrams
+    ///     dropped by the channel, 6 messages never delivered, nothing retransmitted. With 4-1b
+    ///     in place the loss is now *only* the channel's — no message goes missing on its own.
+    ///     Owner: batch 4-1.
     /// </summary>
     [Test]
     [Category(TestCategories.Experimental)]
