@@ -158,32 +158,45 @@ public class AddressBlock : SSU2Block
     public byte[] IPAddress { get; set; } // 4 bytes (IPv4) or 16 bytes (IPv6)
     public ushort Port { get; set; }
 
+    /// <summary>
+    ///     Batch 4-0n: <b>port first, then the address.</b> This wrote the address first, and
+    ///     <see cref="Parse" /> read it back the same way, so the pair agreed with itself and with
+    ///     nothing on the network. Every Retry we send carries one of these.
+    /// </summary>
     public override byte[] Serialize()
     {
         var isIPv6 = IPAddress.Length == 16;
-        var size = isIPv6 ? 18 : 6; // IPv6: 16+2, IPv4: 4+2
+        var size = isIPv6 ? 18 : 6; // 2-byte port plus a 4- or 16-byte address
         var result = new byte[3 + size];
 
         result[0] = (byte)BlockType;
         result[1] = (byte)(size >> 8);
         result[2] = (byte)(size & 0xFF);
 
-        Array.Copy(IPAddress, 0, result, 3, IPAddress.Length);
         var portBytes = BufUtils.Flip16B(Port);
-        Array.Copy(portBytes, 0, result, 3 + IPAddress.Length, 2);
+        Array.Copy(portBytes, 0, result, 3, 2);
+        Array.Copy(IPAddress, 0, result, 5, IPAddress.Length);
 
         return result;
     }
 
+    /// <summary>
+    ///     Batch 4-0n. <b>Callers hand this the block payload, not the block.</b> It used to open
+    ///     by reading a two-byte size that its caller had already consumed, so it ate the port and
+    ///     rejected it as a length — <c>Invalid Address block size: 29260</c> against a real i2pd,
+    ///     29260 being our own listening port echoed back to us.
+    /// </summary>
     public override void Parse(I2PBufferCursor data)
     {
-        var size = data.ReadUInt16BigEndian();
-        if (size != 6 && size != 18)
-            throw new Exception($"Invalid Address block size: {size}");
-
-        var ipLen = size - 2;
-        IPAddress = data.ReadBlock(ipLen).ToByteArray();
         Port = data.ReadUInt16BigEndian();
+
+        // What remains is the address, and its length is what distinguishes v4 from v6. There is
+        // no size field to consult here: the caller read it to slice this payload out.
+        var ipLen = data.Remaining;
+        if (ipLen != 4 && ipLen != 16)
+            throw new Exception($"Invalid Address block size: {ipLen + 2}");
+
+        IPAddress = data.ReadBlock(ipLen).ToByteArray();
     }
 }
 

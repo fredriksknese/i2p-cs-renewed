@@ -1286,3 +1286,30 @@ SSU2-Out-6A4CC6E0: ProcessReceivedPacket failed: System.Exception: Invalid Addre
 So the fix is two things that must move together: drop the redundant size read in `Parse`, and swap the field order in both `Parse` and `Serialize` so the block is port-then-IP.
 
 **A round-trip test cannot catch this** — it is what hid it. The guard has to be i2pd's bytes: the Address block from a real Session Created, asserting the parsed value is our own `127.0.0.1:29260`. The live test does **not** currently record datagrams (an earlier draft of this note claimed it did; it does not), so 4-0n's first move is to have it write the received Session Created to `TestData/` the way `SSU2GoldenVectorCapture` already writes the others, and the workflow already uploads `ssu2_*.txt`.
+
+### Session 6 (continued) — batches 4-0n, 4-0d-fix2 and 5-2 — **the Address block, and two small debts**
+
+**Unit suite 315 passed / 0 failed / 1 skipped** (316 total), Release build 0 errors. Merged straight to `github-master` — the whole branch backlog was already squash-merged, so PR #41 was the only outstanding work and it fast-forwarded.
+
+#### 4-0n — the Address block agreed with itself and with nothing else
+
+Diagnosed entirely from the CI log of PR #41, which is worth stating because the previous three SSU2 batches each needed a round trip through CI to find their next fact and this one needed none. `AddressBlock` had **two** defects that cancel:
+
+- `ParseSessionCreatedBlocks` consumes the block type and two-byte size, then hands `Parse` the **payload**. `Parse` opened by reading a two-byte size **again**.
+- The wire layout is **port then address**. `Serialize` wrote address then port, so the bytes `Parse` ate were the port: `Invalid Address block size: 29260`, our own listening port.
+
+Together they round-trip perfectly. **That is exactly why nothing caught it**, and it is the seventh instance of this plan's signature defect. The tests are therefore byte-literal — `72 4C 7F 00 00 01` parsed to port 29260 and 127.0.0.1, and the serialiser asserted against `0D 00 06 72 4C 7F 00 00 01` — rather than a round trip, which passes on the broken code.
+
+The blast radius is wider than the Session Created: `Retry.BuildPayload` puts an Address block in **every Retry we send**, so i2pd has been mis-reading our reported address the whole time as well.
+
+#### 4-0d-fix2 — already fixed, and now self-checking
+
+The row was stale: batch 4-0d-fix (#32) added `StripComment` to `CsprngGuardTest.ScanFor`. What remained was the workaround it left behind — `SSU2TokenCache.NewToken`'s doc comment was written *around* the banned constructor and said so. It now names `new Random(` plainly, which makes the file a live check that the scan still strips comments: if that regresses, `NoSystemRandomUnderI2PCore` goes red on its own documentation.
+
+#### 5-2 — the level was only half of it
+
+Both ECIES handshake diagnostics ran at `LogInformation`, the default level, on every session establishment in both directions. **Lowering the level alone would have fixed nothing measurable**: each site builds its fingerprints — and one performs an `Elligator2.Decode` — into locals *before* the call, and CLAUDE.md's interpolated-string handler can only skip formatting it is handed, never an argument already evaluated. Both are now behind `Logging.IsEnabled(Debug)`.
+
+**The guard is a source scan, and deliberately.** These lines sit on the hybrid post-quantum path, and nothing in the repository can drive one: `ECIESPump` pairs two classical key managers, so a behavioural test would have passed without executing the code it claimed to cover. A vacuous test is worse than an honest scan — the scan carries its own "did it read anything" check, which this plan has now had to add three times.
+
+**Next: 4-0n needs the live test to confirm it**, the same way 4-0l did. The handshake got as far as parsing blocks in the Session Created, so the next CI run says whether that was the last thing between us and an established SSU2 session with i2pd.

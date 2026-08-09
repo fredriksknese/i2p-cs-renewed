@@ -214,11 +214,17 @@ public class ECIESSession
             var (ephemeralPublic, encryptedKemPublicKey, encryptedStatic, encryptedPayload) =
                 _noiseIKhfs.WriteMessageA(payload);
 
-            // Diagnostic: log the encoded ephemeral key and the actual X25519 key for comparison
-            var ephEncFp = BitConverter.ToString(ephemeralPublic, 0, 8);
-            var ephRawFp = _noiseIKhfs.LocalEphemeralPublicKey != null
-                ? BitConverter.ToString(_noiseIKhfs.LocalEphemeralPublicKey, 0, 8) : "NULL";
-            Logging.LogInformation($"CreateNewSessionMessage: {_kemVariant} ephemeral encoded=[{ephEncFp}] raw_x25519=[{ephRawFp}]");
+            // Diagnostic: the encoded ephemeral key against the actual X25519 key. Batch 5-2 —
+            // this ran at Information, so every session establishment printed it by default. The
+            // guard is not redundant with the level: both fingerprints are built before the call,
+            // and an argument already evaluated is one no log handler can skip.
+            if (Logging.IsEnabled(Logging.LogLevels.Debug))
+            {
+                var ephEncFp = BitConverter.ToString(ephemeralPublic, 0, 8);
+                var ephRawFp = _noiseIKhfs.LocalEphemeralPublicKey != null
+                    ? BitConverter.ToString(_noiseIKhfs.LocalEphemeralPublicKey, 0, 8) : "NULL";
+                Logging.LogDebug($"CreateNewSessionMessage: {_kemVariant} ephemeral encoded=[{ephEncFp}] raw_x25519=[{ephRawFp}]");
+            }
 
             var hybridMsg = new ECIESHybridNewSessionMessage
             {

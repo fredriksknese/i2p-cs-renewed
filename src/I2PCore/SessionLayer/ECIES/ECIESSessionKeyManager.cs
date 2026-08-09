@@ -449,11 +449,16 @@ public class ECIESSessionKeyManager
             {
                 var hybridMsg = ECIESHybridNewSessionMessage.Parse(message, variant);
 
-                // Diagnostic: test Elligator2 decode of the ephemeral key
-                var ephDecoded = Crypto.Elligator2.Decode(hybridMsg.EphemeralPublicKey);
-                var ephFp = ephDecoded != null ? BitConverter.ToString(ephDecoded, 0, Math.Min(8, ephDecoded.Length)) : "NULL";
-                var ephEncFp = BitConverter.ToString(hybridMsg.EphemeralPublicKey, 0, 8);
-                Logging.LogInformation($"ProcessNewSessionMessage: {variant} ephemeral encoded=[{ephEncFp}] decoded=[{ephFp}] decodedLen={ephDecoded?.Length ?? -1}");
+                // Diagnostic: test Elligator2 decode of the ephemeral key. Batch 5-2 — this ran at
+                // Information on every inbound session, and the decode itself is real work done
+                // solely to print it, so the guard covers the computation and not just the write.
+                if (Logging.IsEnabled(Logging.LogLevels.Debug))
+                {
+                    var ephDecoded = Crypto.Elligator2.Decode(hybridMsg.EphemeralPublicKey);
+                    var ephFp = ephDecoded != null ? BitConverter.ToString(ephDecoded, 0, Math.Min(8, ephDecoded.Length)) : "NULL";
+                    var ephEncFp = BitConverter.ToString(hybridMsg.EphemeralPublicKey, 0, 8);
+                    Logging.LogDebug($"ProcessNewSessionMessage: {variant} ephemeral encoded=[{ephEncFp}] decoded=[{ephFp}] decodedLen={ephDecoded?.Length ?? -1}");
+                }
 
                 var (payload, remoteStaticKey, remoteKemPublicKey) = hybridMsg.Decrypt(
                     _localStaticPrivateKey, _localStaticPublicKey, variant);

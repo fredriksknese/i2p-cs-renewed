@@ -162,14 +162,16 @@ internal sealed class SSU2TokenCache
 
     /// <summary>
     ///     CSPRNG, the same idiom as <c>SSU2Session.LocalConnectionId</c>. A token is
-    ///     unauthenticated anti-replay state, so it must not come from a predictable source;
-    ///     batch 1-3's <c>NoSystemRandomUnderI2PCore</c> scan enforces that repo-wide. Zero means
-    ///     "no token" on the wire, so it is regenerated rather than issued.
+    ///     unauthenticated anti-replay state, so it must not come from <c>new Random(</c>) or any
+    ///     other predictable source; batch 1-3's <c>NoSystemRandomUnderI2PCore</c> scan enforces
+    ///     that repo-wide. Zero means "no token" on the wire, so it is regenerated rather than
+    ///     issued.
     ///
     ///     <para>
-    ///         The wording here avoids naming the banned constructor literally: that scan does not
-    ///         strip comments, so prose describing the rule trips it. Recorded as a follow-up in
-    ///         docs/PRODUCTION-PLAN.md rather than widening this batch.
+    ///         Batch 4-0d-fix2: this sentence used to be written around the banned constructor
+    ///         rather than naming it, because the scan matched its own documentation. It strips
+    ///         line comments as of 4-0d-fix, so the prose above is now both accurate and a live
+    ///         check that it still does — the guard goes red here if that regresses.
     ///     </para>
     /// </summary>
     private static ulong NewToken()
