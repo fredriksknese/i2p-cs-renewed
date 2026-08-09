@@ -24,6 +24,14 @@ public static class GoldenVectors
     public const string Ssu2TokenRequest = "ssu2_tokenrequest_i2pd.txt";
 
     /// <summary>
+    ///     Batch 4-2c. i2pd's Session Request, which it only sends after a Retry it accepted — so
+    ///     the existence of this file is itself evidence that our Retry is correct. It carries the
+    ///     ephemeral key, and is therefore the reference batch 4-0b needs to settle whether bytes
+    ///     16..64 are one 48-byte ChaCha20 pass or two restarted ones.
+    /// </summary>
+    public const string Ssu2SessionRequest = "ssu2_sessionrequest_i2pd.txt";
+
+    /// <summary>
     ///     The <c>TestData</c> directory next to the test assembly. Files there are copied to the
     ///     output directory by the csproj, so this works from the build output rather than
     ///     depending on where the repository happens to sit.
