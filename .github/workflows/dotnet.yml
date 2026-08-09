@@ -63,10 +63,18 @@ jobs:
     runs-on: ubuntu-24.04
 
     # The suite runs strictly serially — fixtures share the Router and
-    # TransportProvider singletons and fixed ports 29000-29039 — and takes
-    # ~24 min locally. Generous headroom over that, but bounded, because a hung
-    # fixture would otherwise burn the full 6 h runner limit.
-    timeout-minutes: 60
+    # TransportProvider singletons and fixed ports 29000-29039. Bounded, because a
+    # hung fixture would otherwise burn the full 6 h runner limit.
+    #
+    # Batch 4-0g capped every test at ~5 minutes. Measured beforehand: 37.7 min of
+    # test time, of which TestBidirectional5MB alone was 946s — and it failed. The
+    # slowest *passing* test takes 120s, so the cap costs no coverage.
+    #
+    # NUnit.DefaultTimeout below is a backstop that *reports* at 5 min; it cannot
+    # stop the work, because NUnit's timeout cancels a CancellationToken that none
+    # of these tests declares as a parameter (batch 4-0f, cause 2). The real bound
+    # is the internal wait constants, which is why those were cut as well.
+    timeout-minutes: 45
 
     env:
       # Pinned upstream release rather than the distro package. Ubuntu and
@@ -160,6 +168,7 @@ jobs:
         --filter "TestCategory=Integration&TestCategory!=Experimental"
         --logger "trx;LogFileName=integration-tests.trx"
         --results-directory TestResults
+        -- NUnit.DefaultTimeout=300000
 
     # The console output of `dotnet test` cannot be trusted here: it rewrites
     # lines with \r, and a crashed test host prints "Passed!" next to a non-zero
