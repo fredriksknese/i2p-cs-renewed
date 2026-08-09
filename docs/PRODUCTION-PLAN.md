@@ -1081,7 +1081,6 @@ At 100 messages this defect shows up as green about **one run in three** — whi
 #34's extra failure was `CaptureSessionRequestByAnsweringTheTokenRequest` and **#35's failure list is byte-identical to #30's** — same twenty tests, none new, none fixed. So the capture is flaky rather than regressed, and 4-0b and 4-0h changed the integration suite by nothing at all. That is the expected result: SSU2 is off by default there, so neither batch is exercised.
 
 **Compare against the baseline before attributing a failure** — this is the second time this session that doing so turned an apparent regression into noise, and the first time (session 4) that skipping it cost two CI runs.
-<<<<<<< HEAD
 
 ### Session 5 (continued) — 2026-08-09 — batch 4-1 — PR #37 — **SSU2 delivers 100/100 through 5% loss**
 
@@ -1106,7 +1105,6 @@ ACK delay is 500 ms and the RTO 1 s, so the two new tests sleep. **There is no t
 #### What is still not true
 
 **SSU2 stays off by default, and this batch does not change that.** The handshake has never completed against i2pd, and 4-0i has direct evidence it cannot until the handshake payload is block-framed. Everything green here is C#-to-C#. The next thing that matters is not more SSU2 features — it is **4-0i**, and then a capture proving a real i2pd session.
-=======
 ### Session 5 (continued) — 2026-08-09 — batch 4-0i — PR #38 — **the handshake payload is finally framed the way the network frames it**
 
 **Unit suite 302 passed / 0 failed / 1 skipped**, Release build 0 errors.
@@ -1124,4 +1122,25 @@ The PQ appendix — a version byte and a raw ML-KEM key with no block header —
 `ParseSessionCreatedBlocks` used to be handed a slice starting after a fixed 8-byte prefix that does not exist on the wire. It walks type/size pairs itself, so it now gets the whole payload and sees blocks that used to sit before the old offset.
 
 **Next: the thing this unblocks is a capture.** Every SSU2 batch since 4-0b has been verified against a *stored* i2pd packet or against ourselves. What none of them can prove is that a full session establishes with a live i2pd — and that is now worth attempting directly, since the four defects known to prevent it are all fixed.
->>>>>>> ab79902 (4-0i: frame the handshake payload as SSU2 blocks)
+<<<<<<< HEAD
+=======
+
+#### Addendum — trying it against a live i2pd, and what the local run actually measured
+
+`SSU2LiveHandshakeTest` dials a real i2pd over SSU2 through a socket-backed `SSU2Host` — the loopback fixture's peer with the channel replaced by a UDP socket, so the bytes on the wire are the bytes production sends. **We dial i2pd rather than the reverse**, because the outbound direction depends on nothing but i2pd listening.
+
+**Locally it proves nothing, and the test now says so itself.** i2pd 2.45.1 answers our Session Request with:
+
+```
+SSU2: Incoming packet received from invalid endpoint 127.0.0.1:29260
+```
+
+That is an endpoint check, and it fires **before any decryption**. Established directly rather than inferred:
+
+- Firing **87, 200 and 1300 bytes of random data** at it produced the identical rejection three times, so it is not a size guard and not a crypto failure.
+- Repeating from a **non-loopback** address (172.26.70.175) produced the same rejection, so it is not loopback-specific — it is the reserved-range check, and `reservedrange = false` does not take effect in that build.
+
+So the local run measured i2pd's ACL, not our protocol. **A test that reported this as "handshake failed" would be worse than no test**, so it inspects i2pd's log and `Assert.Ignore`s with the reason when it sees that line. CI runs 2.61.0, which batch 4-2c already showed will dial us over loopback and accept a Retry — that is where this test gets to answer the question.
+
+**Risk R4 in the plan is now concrete rather than theoretical:** the locally installed i2pd cannot exercise SSU2 interop at all, in either direction, so every SSU2 interop claim has to come from CI.
+>>>>>>> 85dbca6 (4-0i: dial a live i2pd over SSU2, and report honestly when it will not answer)
