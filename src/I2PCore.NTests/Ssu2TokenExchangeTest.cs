@@ -16,10 +16,13 @@ namespace I2PTests;
 ///         it answered every Session Request with a Retry we ignored.
 ///     </para>
 ///     <para>
-///         <b>These assert on the token exchange, not on a session being established.</b>
-///         Establishment is still blocked by batch 4-0b's header defect, and a test that waited
-///         for it would be red for a reason that has nothing to do with tokens. The exchange
-///         completes strictly before the Noise AEAD step that 4-0b owns, so it is measurable now.
+///         <b>These assert on the token exchange, not on a session being established.</b> When
+///         they were written, establishment was blocked by batch 4-0b's header defect and a test
+///         that waited for it would have been red for a reason that has nothing to do with
+///         tokens. **4-0b and 4-0h have since landed and the handshake completes**, but the
+///         narrower assertions are kept deliberately: a token test that passes only because the
+///         whole handshake works tells you less, not more, and it goes red for every reason under
+///         the sun.
 ///     </para>
 /// </summary>
 [TestFixture]
@@ -111,6 +114,22 @@ public class Ssu2TokenExchangeTest
     /// <summary>
     ///     A peer that answers every Session Request with another Retry must not be able to keep
     ///     us in that loop for the whole handshake window.
+    ///
+    ///     <para>
+    ///         <b>This counted every datagram Alice sent, and batch 4-0h invalidated that
+    ///         proxy.</b> While the handshake stalled at the Session Created, "datagrams from
+    ///         Alice" and "Session Requests from Alice" were the same number; now that it
+    ///         completes, Alice also sends a Session Confirmed across two fragments and the count
+    ///         reached 4 against a cap of 3 — with the Retry cap working perfectly. A test whose
+    ///         measurement stops meaning what its name says is worse than no test, so it now
+    ///         counts what it claims to.
+    ///     </para>
+    ///     <para>
+    ///         Identified by type <em>and</em> version <em>and</em> netid rather than type alone:
+    ///         a Session Confirmed is a short header masked with a different key, so decoding it
+    ///         this way yields a random type byte that would read as a Session Request once in
+    ///         256. Three agreeing fields make that one in sixteen million.
+    ///     </para>
     /// </summary>
     [Test]
     public void TheInitiatorStopsAfterOneRetry()
@@ -122,13 +141,24 @@ public class Ssu2TokenExchangeTest
         var sessionRequests = 0;
         channel.Tap = ( from, to, data ) =>
         {
-            if ( Equals( from, alice.Endpoint ) ) sessionRequests++;
+            if ( !Equals( from, alice.Endpoint ) ) return;
+
+            var probe = (byte[])data.Clone();
+            I2PCore.Crypto.SSU2HeaderEncryption.DecryptLongHeaderComplete(
+                probe, 0, bob.IntroKey, bob.IntroKey );
+
+            var header = SSU2Header.ParseLongHeader( new I2PCore.Utils.I2PBufferCursor( probe ) );
+
+            if ( header.Type == SSU2Header.TYPE_SESSION_REQUEST
+                 && header.Version == 2
+                 && header.NetId == (byte)I2PCore.Data.I2PConstants.I2PNetworkId ) sessionRequests++;
         };
 
         alice.ConnectTo( bob );
         channel.PumpUntilIdle();
 
-        ClassicAssert.LessOrEqual( sessionRequests, 3,
-            "Alice sent an unbounded number of Session Requests; the Retry cap is not holding" );
+        ClassicAssert.LessOrEqual( sessionRequests, 2,
+            "Alice sent more than the original Session Request and one re-send; the Retry cap "
+            + "is not holding" );
     }
 }
