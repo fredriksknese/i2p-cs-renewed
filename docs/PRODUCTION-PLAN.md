@@ -1163,3 +1163,18 @@ The outbound constructor now generates **both** connection IDs. The responder ad
 **Asserted on the wire, not on the property.** `TheSessionRequestAddressesANonZeroConnectionId` taps the first datagram, decrypts it the way Bob does, and checks the header — because a property agreeing with itself is precisely what hid this for the whole life of the code. Confirmed red first.
 
 **What this does not yet prove.** i2pd may now answer, or it may answer with a Retry we then have to complete, or it may still be silent for a further reason. The live test is the only thing that can say, and it can only say it in CI. **Do not record this as interop working until that test does something other than fail.**
+
+#### Verified on the socket path, and the one remaining difference from i2pd
+
+Capturing the outbound Session Request from the live test and decoding it independently now gives `destConnId=c519c3342d5b78b6`, `srcConnId=9102fd92a2d464a7` — non-zero and independent, `type=0 version=2 netid=99`. The batch's first gate is met on the real wire, not only in the loopback.
+
+**`token` is still zero, and that is the next thing to check — with evidence already in hand.** `Ssu2GoldenVectorTest.I2pdOpensWithATokenRequest` records, from a captured packet, that **i2pd's first message to a peer it holds no token for is a TokenRequest (type 10), not a Session Request with a zero token.** We do the opposite: we send a Session Request with token 0 and rely on the responder answering with a Retry.
+
+The SSU2 responder rules say a bad token draws a Retry, so ours may be answered — but **i2pd's observed behaviour is the stronger evidence about what i2pd accepts**, and 4-2a exists precisely because i2pd opens that way.
+
+So the decision tree for the next session is already determined by the CI run of PR #40, and neither branch requires guessing:
+
+- **i2pd replies** (Retry or Session Created) → the token flow works; carry on from whatever it sends.
+- **i2pd is still silent** → batch **4-2d**: send a TokenRequest first when we hold no token, mirroring what i2pd itself does. The producer in `SSU2GoldenVectorCapture` already builds and reads that message type, so the pieces exist.
+
+The live test now prints i2pd's own SSU2 log lines on failure, so the run will show which of these it is rather than leaving it to be inferred.
