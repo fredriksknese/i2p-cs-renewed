@@ -1123,8 +1123,6 @@ The PQ appendix — a version byte and a raw ML-KEM key with no block header —
 `ParseSessionCreatedBlocks` used to be handed a slice starting after a fixed 8-byte prefix that does not exist on the wire. It walks type/size pairs itself, so it now gets the whole payload and sees blocks that used to sit before the old offset.
 
 **Next: the thing this unblocks is a capture.** Every SSU2 batch since 4-0b has been verified against a *stored* i2pd packet or against ourselves. What none of them can prove is that a full session establishes with a live i2pd — and that is now worth attempting directly, since the four defects known to prevent it are all fixed.
-<<<<<<< HEAD
-=======
 
 #### Addendum — trying it against a live i2pd, and what the local run actually measured
 
@@ -1144,7 +1142,6 @@ That is an endpoint check, and it fires **before any decryption**. Established d
 So the local run measured i2pd's ACL, not our protocol. **A test that reported this as "handshake failed" would be worse than no test**, so it inspects i2pd's log and `Assert.Ignore`s with the reason when it sees that line. CI runs 2.61.0, which batch 4-2c already showed will dial us over loopback and accept a Retry — that is where this test gets to answer the question.
 
 **Risk R4 in the plan is now concrete rather than theoretical:** the locally installed i2pd cannot exercise SSU2 interop at all, in either direction, so every SSU2 interop claim has to come from CI.
->>>>>>> 85dbca6 (4-0i: dial a live i2pd over SSU2, and report honestly when it will not answer)
 
 #### Addendum — the live test ran against i2pd 2.61.0 in CI, and the answer is no
 
@@ -1198,3 +1195,48 @@ The full unit suite failed once (1 of 309) and passed on re-run, and a fixture l
 The suspect is `I2PConstants.I2PNetworkId`, a mutable process-wide static that `SessionRequestAnnouncesTheConfiguredNetworkId` sets to 3 and restores: any handshake running concurrently would be rejected by its own netid validator and its `Assume` would fire. That is a hypothesis with a mechanism, not a diagnosis — **it has not been confirmed, and this batch must not be recorded as clean until it is.** Phase 2 removed mutable static config elsewhere for exactly this reason (batch 2-6); this one survived in the test suite.
 
 **Next: confirm or refute that before merging 4-0l**, then re-run the live test — a padded Session Request is the first one i2pd has had no stated reason to reject.
+
+### Session 6 — 2026-08-09 — batch 4-0m — **the 4-0l flake, diagnosed: a Retry read as a Session Created**
+
+**Unit suite 309 passed / 0 failed / 1 skipped, twelve consecutive runs**, Release build 0 errors. The same twelve-run protocol before the fix produced one failure, so this is measured against its own baseline rather than against a single green run.
+
+#### The suspect named by 4-0l was wrong, and refuting it took a measurement rather than an argument
+
+`I2PConstants.I2PNetworkId` could only cause this if two fixtures ran at once. **They never do:** the `.trx` records a start and end time per test, and across 309 tests there are **zero overlapping intervals**. There is no `[Parallelizable]` in the assembly, no `.runsettings`, and nothing in the workflow that asks for parallelism. The three fixtures that mutate the netid all restore it in a `OneTimeTearDown` `finally`, and the loopback fixture has no background threads to leak.
+
+**"Only when fixtures run together" was an inference from eight clean fixture-only runs, and eight runs cannot see a 1-in-300 event.** The conclusion was drawn from a sample too small to support it, and it pointed the next session at the wrong file.
+
+#### What it actually is
+
+Reproduced by running the unit suite twelve times with `--logger trx`: `ARetryTeachesTheInitiatorATokenItThenPresents` failed once, and the captured stdout named the cause outright —
+
+```
+SSU2-In-777BE6D0: Session Request carried no token we issued; sent a Retry
+SSU2-Out-40D9682D: ProcessReceivedPacket failed: System.Exception: AEAD authentication failed
+   at SSU2Session.ProcessSessionCreated(Byte[] packetData)
+```
+
+Bob sent a **Retry**; Alice ran it through **ProcessSessionCreated**. `PeekMessageType` identifies a message by its type byte alone. In `SessionRequestSent` it trial-decrypts with the derived `SessCreateHeader` key first, and that key is wrong for a Retry — so the type byte is **uniformly random**, and one value in 256 is `TYPE_SESSION_CREATED`. The token is then never learned. **Against a token-enforcing peer, which is i2pd's normal configuration, that is not a flaky test — it is a handshake that fails outright.**
+
+Batch 4-0h introduced the ordering and reasoned about exactly this, then stopped one step short: trying the expected message first lowers the odds from one in sixty to one in 256. It does not remove them.
+
+#### The remedy was already written down, in a test, in the same file as the failure
+
+`Ssu2TokenExchangeTest.TheInitiatorStopsAfterOneRetry` has identified messages by type *and* version *and* netid since 4-2b, and its comment states the arithmetic: *"decoding it this way yields a random type byte that would read as a Session Request once in 256. Three agreeing fields make that one in sixteen million."*
+
+Version and netid sit at offsets 13 and 14, **inside the same eight bytes the type byte is recovered from** — the trial already had them and threw them away. So the fix is one condition in `TrialLongHeaderType`, and it is this plan's signature defect one level up: not "our two halves agree with each other and with nothing else", but **our test knows something our production code does not**.
+
+#### The test states its own error rate, because it is a statistical test
+
+`ARetryIsNeverMistakenForASessionCreated` drives 3000 Retries into a fresh session each and counts how many reach `ProcessRetry`, measured by consequence — a consumed Retry re-sends the Session Request, so one datagram leaves Alice. **The first attempt at this test passed against the broken code**: it counted `ConnectionException`, and `ProcessSessionCreated` rejects a garbage header quietly rather than throwing. A test that measures the wrong signal is indistinguishable from a fixed bug.
+
+Confirmed red at 9 of 3000, then 6 of 3000 with the fix reverted — against a predicted 11.7. It tolerates one miss: fixed, three fields coincide at 1 in 16.7 million, so demanding a clean sweep would make the test itself fail about one run in 5600; broken, it still goes red 99.99% of the time.
+
+#### Not fixed here, and deliberately
+
+- **Short-header trials cannot be strengthened this way.** A short header carries no version or netid, so the `Established` and `SessionCreatedSent` cases keep a 1-in-256 exposure. The consequence is milder — a handshake retransmission eaten as data — but it is the same defect and has no test.
+- **`SSU2Host.DispatchPacket` runs the same unvalidated trial** for packets from unknown endpoints, so roughly 3 random datagrams in 256 create an inbound session or enter the peer-test path. That is a DoS surface rather than a correctness bug, it predates this batch, and it wants its own failing test.
+
+Also removed: `docs/PRODUCTION-PLAN.md` carried **committed merge-conflict markers** at the 4-0i addendum, one side empty. The addendum was kept.
+
+**Next is unchanged from 4-0l: re-run the live test.** A padded Session Request is still the first one i2pd has had no stated reason to reject, and that answer can only come from CI — the locally installed i2pd 2.45.1 refuses SSU2 at its endpoint check.

@@ -34,6 +34,14 @@ public class SSU2Header
     public const byte TYPE_TOKEN_REQUEST = 10;
     public const byte TYPE_HOLE_PUNCH = 11;
 
+    /// <summary>
+    ///     Not a wire type: what a trial decryption reports when the header it recovered is not
+    ///     self-consistent, so the key it guessed at was the wrong one. Batch 4-0m. Distinct from
+    ///     every assigned type above, and safe to leave assigned as long as SSU2 defines no
+    ///     type 255.
+    /// </summary>
+    public const byte TYPE_UNRECOGNISED = 0xFF;
+
     public ulong DestinationConnectionId { get; set; }
     public uint PacketNumber { get; set; } // FIXED: 4 bytes, not 8
     public byte Type { get; set; }

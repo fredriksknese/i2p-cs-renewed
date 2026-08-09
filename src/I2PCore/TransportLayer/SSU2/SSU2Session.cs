@@ -830,13 +830,36 @@ public class SSU2Session : ITransport
         return TrialLongHeaderType(packetData, kHeader1, kHeader1);
     }
 
-    /// <summary>Type byte of a long header, unmasked on a copy so the packet is left as sent.</summary>
+    /// <summary>
+    ///     Type byte of a long header, unmasked on a copy so the packet is left as sent.
+    ///
+    ///     <para>
+    ///         <b>Batch 4-0m: the type byte alone does not identify a message.</b> A trial with
+    ///         the wrong key yields a uniformly random type, so it agrees with whatever was
+    ///         guessed once in 256 — which is not a theoretical rate. It is what made
+    ///         <c>ARetryTeachesTheInitiatorATokenItThenPresents</c> fail once in twelve full-suite
+    ///         runs: Bob's Retry read as a Session Created, went to the wrong handler, and the
+    ///         token was never learned. Against a token-enforcing peer, which is i2pd's normal
+    ///         configuration, that is a handshake that fails outright.
+    ///     </para>
+    ///     <para>
+    ///         Version and netid sit at offsets 13 and 14, inside the same eight bytes the type
+    ///         byte comes from, so they are recovered by the same decryption and cost nothing to
+    ///         check. Three agreeing fields make a coincidence one in sixteen million.
+    ///         <c>Ssu2TokenExchangeTest.TheInitiatorStopsAfterOneRetry</c> has identified messages
+    ///         this way since 4-2b; only the dispatcher did not.
+    ///     </para>
+    /// </summary>
     private static byte TrialLongHeaderType(byte[] packetData, byte[] kHeader1, byte[] kHeader2)
     {
         var trial = (byte[])packetData.Clone();
         SSU2HeaderEncryption.DecryptLongHeaderComplete(trial, 0, kHeader1, kHeader2);
 
-        return SSU2Header.ParseLongHeader(new I2PBufferCursor(trial)).Type;
+        var header = SSU2Header.ParseLongHeader(new I2PBufferCursor(trial));
+
+        return SSU2SecurityValidator.ValidateVersionAndNetId(header.Version, header.NetId)
+            ? header.Type
+            : SSU2Header.TYPE_UNRECOGNISED;
     }
 
     /// <summary>Type byte of a short header — same offset 12, different masking.</summary>

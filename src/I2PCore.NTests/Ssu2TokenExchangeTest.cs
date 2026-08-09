@@ -112,6 +112,82 @@ public class Ssu2TokenExchangeTest
     }
 
     /// <summary>
+    ///     <b>The 4-0m defect, and the cause of the intermittent failure recorded against
+    ///     4-0l.</b> <c>ARetryTeachesTheInitiatorATokenItThenPresents</c> failed once in twelve
+    ///     full-suite runs with <c>ProcessSessionCreated ... AEAD authentication failed</c>: Bob's
+    ///     Retry was dispatched to the Session Created handler.
+    ///
+    ///     <para>
+    ///         In state <c>SessionRequestSent</c>, <c>PeekMessageType</c> trial-decrypts with the
+    ///         derived <c>SessCreateHeader</c> key first. That key is wrong for a Retry, so the
+    ///         type byte it reads is <b>uniformly random</b> — and one value in 256 is
+    ///         <c>TYPE_SESSION_CREATED</c>. Ordering the trials, which batch 4-0h did, lowers the
+    ///         odds from one in sixty to one in 256; it does not remove them. The token is then
+    ///         never learned and the session stalls, which against a token-enforcing peer — i2pd's
+    ///         normal configuration — is a handshake that fails outright.
+    ///     </para>
+    ///     <para>
+    ///         <b>The remedy was already written down next door.</b>
+    ///         <see cref="TheInitiatorStopsAfterOneRetry" /> identifies a message by type
+    ///         <em>and</em> version <em>and</em> netid precisely because one field decoded under
+    ///         the wrong key agrees once in 256. The production dispatcher checked one field.
+    ///     </para>
+    ///     <para>
+    ///         <b>Measured by consequence, not by exception.</b> A Retry that reaches
+    ///         <c>ProcessRetry</c> makes Alice re-send her Session Request with the new token, so
+    ///         one extra datagram leaves her. A mis-dispatched one produces nothing at all —
+    ///         <c>ProcessSessionCreated</c> rejects the garbage header quietly rather than
+    ///         throwing, which is why counting exceptions measures nothing. A fresh session per
+    ///         iteration keeps the one-Retry budget from being spent and gives each sample an
+    ///         independent chaining key. The channel is never pumped, so Bob stays out of it.
+    ///     </para>
+    /// </summary>
+    [Test]
+    public void ARetryIsNeverMistakenForASessionCreated()
+    {
+        const int samples = 3000;
+
+        var channel = new LossyChannel( seed: 5150 );
+        var alice = LoopbackSSU2Peer.Create( "alice", 29419, channel );
+        var bob = LoopbackSSU2Peer.Create( "bob", 29420, channel );
+
+        var consumed = 0;
+
+        for ( var i = 0; i < samples; i++ )
+        {
+            var session = alice.ConnectTo( bob );
+
+            var request = new SSU2Header
+            {
+                IsLongHeader = true,
+                Type = SSU2Header.TYPE_SESSION_REQUEST,
+                Version = 2,
+                NetId = (byte)I2PCore.Data.I2PConstants.I2PNetworkId,
+                DestinationConnectionId = 0x4242_0000_0000_0000UL | (uint)i,
+                SourceConnectionId = 0x8888_0000_0000_0000UL | (uint)i,
+                PacketNumber = (uint)i
+            };
+
+            var packet = Retry.Build( request, 0x1234_5678UL + (ulong)i, bob.IntroKey, bob.Endpoint );
+
+            var before = channel.SentCount;
+            session.ProcessReceivedPacket( packet );
+            if ( channel.SentCount > before ) consumed++;
+        }
+
+        // One tolerated, and the arithmetic is the reason rather than a shrug. Fixed, a false
+        // match needs type *and* version *and* netid to agree at 1 in 16.7 million, so 3000
+        // samples miss 1.8e-4 times: demanding a clean sweep would make this test itself fail
+        // about one run in 5600. Broken, the rate is 1 in 256 and the expected count is 11.7, so
+        // a regression still shows up here 99.99% of the time.
+        ClassicAssert.GreaterOrEqual( consumed, samples - 1,
+            $"{samples - consumed} of {samples} Retries never reached ProcessRetry. The "
+            + "SessCreateHeader key is wrong for a Retry, so the type byte it yields is random "
+            + "and matches TYPE_SESSION_CREATED once in 256. Require version and netid to agree "
+            + "as well, as TheInitiatorStopsAfterOneRetry already does." );
+    }
+
+    /// <summary>
     ///     A peer that answers every Session Request with another Retry must not be able to keep
     ///     us in that loop for the whole handshake window.
     ///
