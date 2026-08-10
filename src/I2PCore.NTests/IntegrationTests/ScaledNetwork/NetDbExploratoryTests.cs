@@ -359,14 +359,11 @@ public class NetDbExploratoryTests
         // Give the session time to publish its LeaseSet to floodfills
         await Task.Delay(30000);
 
-        // Now do an explicit LeaseSet lookup from C# Router 0 via exploratory tunnels
-        // First, decode the SAM destination to get the ident hash
-        // SAM destinations are base64-encoded full Destination (keys+cert)
-        // We need the SHA-256 hash of the destination to look it up
-        var destBytes = FreenetBase64.Decode(destBase64);
-        var destHash = new I2PIdentHash(
-            new I2PBufferCursor(
-                I2PHashSha256.GetHash(destBytes, 0, destBytes.Length)));
+        // Now do an explicit LeaseSet lookup from C# Router 0 via exploratory tunnels.
+        // What SESSION CREATE returned is the session's private keys, destination-first —
+        // hashing the whole string yields the hash of a key blob no router has ever seen.
+        // See SAMHelper.DestinationOf (batch 3-8).
+        var destHash = SAMHelper.IdentHashOf(destBase64);
 
         Logging.LogInformation($"Looking up LeaseSet for {destHash.Id32Short}...");
 
@@ -528,11 +525,9 @@ public class NetDbExploratoryTests
             300_000);
         Logging.LogInformation("Sender session created on C# 0");
 
-        // Step 3: Verify the receiver's LeaseSet is discoverable
-        var recvDestBytes = FreenetBase64.Decode(recvDest);
-        var recvHash = new I2PIdentHash(
-            new I2PBufferCursor(
-                I2PHashSha256.GetHash(recvDestBytes, 0, recvDestBytes.Length)));
+        // Step 3: Verify the receiver's LeaseSet is discoverable. The SESSION CREATE reply is
+        // the session's private keys with the destination on the front (batch 3-8).
+        var recvHash = SAMHelper.IdentHashOf(recvDest);
 
         var lsFound = false;
         for (var i = 0; i < 10; ++i)

@@ -124,6 +124,7 @@ Order is driven by one question: what must exist before SSU2/ECIES repair is eve
 | 3-6 | `p3/catch-audit-protocol-scope` | ✅ **Done** (PR #22). All 31 catch sites audited; rule recorded on `ProtocolCatchAuditTest` and enforced there. Also added `Logging.LogError` — the level existed and was selectable but no helper emitted at it. | ✅ Zero bare catches in those two directories, guarded by a test confirmed to fail with the defect reinstated |
 
 | 3-7 | `p3/sam-accept-destination-line` | ✅ **Done.** SAM v3 STREAM ACCEPT, both sides. `SAMHelper.StreamAcceptAsync` read only `STREAM STATUS` and left the peer-destination line — which a non-silent bridge writes as the first bytes of the *data* stream — to be consumed as payload; since the callers read a fixed byte count, that is a byte-exact transfer with a shifted body. `SAMBridge` never wrote that line at all, and deferred `STREAM STATUS` until a peer connected. | `SamAcceptDestinationLineTest` (unit, fake bridge on loopback — red before, green after); integration `TestSend5MB_I2pd2_To_I2pd3` in CI |
+| 3-8 | `p3/sam-session-destination-keys` | ✅ **Done.** `SESSION STATUS ... DESTINATION=` carries the session's **private keys**, destination-first — i2pd sends 884 base64 characters where a bare destination is 524. Two NetDb tests took `SHA256` over the whole decoded string and asserted the network could find a LeaseSet for the result; every floodfill answered "Requested LeaseSet not found", correctly. `SAMBridge` sent the bare destination instead of the keys, discarding a `privKeyBase64` it had already computed. | `SamSessionDestinationTest` (unit); integration `LeaseSetLookupAndEncryptionVerification` and `SamDataTransferWithLeaseSetLookup` in CI |
 
 3-6 runs last in Phase 3. It is the difference between debugging SSU2 and debugging it blindfolded.
 
@@ -1528,3 +1529,75 @@ TestSend5MB_I2pd0_To_CSharp0 — System.OperationCanceledException
 That is not a regression — the same tests failed in the previous run for the same underlying reason — but it relocates the report to a more informative place. **A 120-second wait for a peer destination that never arrives means no stream was ever accepted**, so for the C#-receiver cases it points at our own accept path or the LeaseSet the sender needs, not at the transfer.
 
 **Next, and it is not 6-2.** Nineteen failures are dominated by one signature: `CANT_REACH_PEER MESSAGE="LeaseSet not found"` / `"Destination not found"` at `STREAM CONNECT`, plus `LeaseSetLookupAndEncryptionVerification` and `SamDataTransferWithLeaseSetLookup` failing their lookups outright. LeaseSet publication and lookup in the scaled fixture gates almost everything left in Phases 5 and 6 — including every transfer that involves one of our endpoints, which is now the only category of 5 MB test still failing.
+
+### Session 7 (continued) — batch 3-8 — **the LeaseSet the network was asked for did not exist**
+
+Nineteen integration failures were dominated by LeaseSet lookups, and the two most direct — `LeaseSetLookupAndEncryptionVerification` and `SamDataTransferWithLeaseSetLookup` — were **asking every floodfill in the network for a hash that is not an identity**.
+
+**Unit suite 322 passed / 0 failed / 1 skipped** (323 total), Release build 0 errors.
+
+#### The evidence came from both ends of the same lookup
+
+Our router's log, ten times, fifteen seconds apart:
+
+```
+IdentResolver: Starting lookup of LeaseSet for [ck2hk].
+IdentResolver: ECIES garlic-wrapped DLM for [ck2hk] to ff [yekl3]
+```
+
+and the floodfill's log — the CI artifacts include every i2pd's debug log, which is what made this quick:
+
+```
+06:10:32@510/debug - NetDb: Requested LeaseSet not found for ck2hke3b5mpmlwyc5bryyoc5eb2g4vxvj7o6ev5djuxw3txsprxa
+```
+
+**Our DatabaseLookup arrives, is parsed, and is answered.** The garlic wrapping, the reply tunnel, the tunnel-borne lookup path — all working. i2pd simply does not have that LeaseSet. Neither does the router **hosting** the destination, which answers "not found" for it too.
+
+That last detail is the one that gives it away: a router always knows its own client's LeaseSet. So the hash being asked for is not that destination's hash.
+
+#### What `SESSION STATUS` actually returns
+
+```cpp
+std::string priv = session->GetLocalDestination ()->GetPrivateKeys ().ToBase64 ();
+snprintf (m_Buffer, ..., SAM_SESSION_CREATE_REPLY_OK, priv.c_str ());
+```
+
+The **private keys**, destination-first — not the destination. Both tests did:
+
+```csharp
+// SAM destinations are base64-encoded full Destination (keys+cert)
+var destBytes = FreenetBase64.Decode(destBase64);
+var destHash = SHA256(destBytes, 0, destBytes.Length);
+```
+
+The comment states the belief the code depends on, and it is wrong. `SHA256` over a key blob is not a routable identity, so **no answer existed to be found** — which is exactly what 150 seconds of correct floodfill responses reported.
+
+**The lengths were in the log the whole time**, printed by the harness itself:
+
+```
+[C# 0 → i2pd 0]      Receiver session created (884 chars)
+[i2pd 0 → C# 0]      Receiver session created (524 chars)
+```
+
+884 against 524. Two different contracts from the same field, logged side by side, for as long as the tests have existed.
+
+#### Our bridge sent the wrong one, and had already computed the right one
+
+`SAMBridge` replied with the bare 391-byte destination. Three lines above the reply:
+
+```csharp
+var privKeyBase64 = destInfo.ToBase64();   // computed, never used
+```
+
+So the conformant value was sitting there unused, and a SAM client of ours could not persist a TRANSIENT destination across reconnects — the entire reason the field carries keys.
+
+#### Two design decisions worth stating
+
+- **`StreamConnectAsync` now normalises whatever it is handed down to a destination.** Callers pass the SESSION CREATE reply, and CONNECT takes a destination. Both i2pd and our bridge happen to parse the identity off the front of a longer blob, so this worked by tolerance on both sides — the harness should not be resting on that, and after the bridge change the blob would have got longer.
+- **The unit guard asserts the negative as well as the positive.** `HashingTheWholeBlobYieldsSomethingThatIsNotTheDestination` states the defect as a test, because the failure mode is not "wrong answer" but "a question with no answer" — indistinguishable, from the caller's side, from a network that cannot look anything up.
+
+#### What this does not settle
+
+**It does not mean LeaseSet lookup works.** It means two of the tests that said it does not were asking an unanswerable question. The remaining `CANT_REACH_PEER` failures at `STREAM CONNECT` are unaffected by this batch — those pass a real destination — and they stay the open question. The MultiHop fixture is the sharper case there: `TestSend5MB_I2pdA_To_I2pdB_MultiHop` is **i2pd to i2pd** and still fails with `LeaseSet not found`, which points at that fixture's network rather than at our router, exactly as the scaled fixture's equivalent test did before 3-7 fixed the harness.
+
+**Next: CI, then the MultiHop fixture's LeaseSet publication** — and the discriminator is already known, so it need not be guessed at: if i2pd cannot reach i2pd there, the fixture is the suspect before we are.

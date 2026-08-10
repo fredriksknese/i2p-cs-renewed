@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using I2PCore.Data;
 using I2PCore.Utils;
 
 namespace I2PTests.IntegrationTests.Infrastructure;
@@ -132,8 +133,14 @@ public class SAMHelper : IDisposable
     public async Task StreamConnectAsync(
         string sessionId, string destination)
     {
+        // Batch 3-8: callers hand this whatever SESSION CREATE returned, which is a private key
+        // blob. CONNECT takes a *destination*; that both peers happen to tolerate the longer
+        // form by parsing its prefix is not something to depend on. Normalise here, once.
+        var dest = FreenetBase64.Encode(
+            new I2PByteBlock(DestinationOf(destination).ToByteArray()));
+
         await SendLineAsync(
-            $"STREAM CONNECT ID={sessionId} DESTINATION={destination}");
+            $"STREAM CONNECT ID={sessionId} DESTINATION={dest}");
         var reply = await ReadLineAsync(120000);
 
         if (!reply.Contains("RESULT=OK"))
@@ -246,6 +253,33 @@ public class SAMHelper : IDisposable
     public NetworkStream GetStream()
     {
         return _stream;
+    }
+
+    /// <summary>
+    ///     Parse the destination out of what <c>SESSION CREATE</c> returned.
+    /// </summary>
+    /// <remarks>
+    ///     Batch 3-8 (docs/PRODUCTION-PLAN.md). `SESSION STATUS ... DESTINATION=` carries the
+    ///     session's **private keys**, not its destination — i2pd sends 884 base64 characters
+    ///     where a destination is 524. The identity is the front of that blob, so it has to be
+    ///     parsed out structurally; `SHA256` over the decoded string is the hash of a private
+    ///     key blob, which no router in the network has ever heard of. Two NetDb tests did
+    ///     exactly that and then asserted the network could find a LeaseSet for it — the
+    ///     floodfills answered "Requested LeaseSet not found", correctly, for 150 seconds.
+    /// </remarks>
+    public static I2PDestination DestinationOf(string samSessionDestination)
+    {
+        var bytes = FreenetBase64.Decode(samSessionDestination);
+        return new I2PDestination(new I2PBufferCursor(bytes));
+    }
+
+    /// <summary>
+    ///     The ident hash of what <c>SESSION CREATE</c> returned — the value a LeaseSet lookup
+    ///     is keyed by. See <see cref="DestinationOf" /> for why this is not a hash of the string.
+    /// </summary>
+    public static I2PIdentHash IdentHashOf(string samSessionDestination)
+    {
+        return DestinationOf(samSessionDestination).IdentHash;
     }
 
     /// <summary>

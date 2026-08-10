@@ -1230,13 +1230,17 @@ internal class SAMClientHandler
             session.DatagramEndpoint = new IPEndPoint(IPAddress.Parse(host), port);
         }
 
-        var destBase64 = destInfo.Destination.ToByteArray();
-        var destB64Str = FreenetBase64.Encode(new I2PByteBlock(destBase64));
-
+        // Batch 3-8 (docs/PRODUCTION-PLAN.md). SAM v3 puts the session's *private keys* here,
+        // not its destination — that is how a client keeps a TRANSIENT destination across
+        // reconnects. i2pd sends GetPrivateKeys().ToBase64() (SAM.cpp, ProcessSessionCreate);
+        // ours sent the bare 391-byte destination, 524 base64 characters against i2pd's 884.
+        // The layout is destination-first (I2PDestinationInfo.ToByteArray), so a client that
+        // parses the identity out of the front still gets the destination — which is exactly
+        // what a client must do, and what hashing the whole string does not.
         var privKeyBase64 = destInfo.ToBase64();
 
         await SendReplyAsync(
-            $"SESSION STATUS RESULT=OK DESTINATION={destB64Str}");
+            $"SESSION STATUS RESULT=OK DESTINATION={privKeyBase64}");
 
         Logging.LogInformation(
             $"SAMBridge: Session '{sessionId}' created, style={style}, " +
