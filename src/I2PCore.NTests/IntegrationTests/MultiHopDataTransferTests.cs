@@ -91,8 +91,9 @@ public class MultiHopDataTransferTests
             "127.0.0.1", receiverSamPort);
         var acceptTask = Task.Run(async () =>
         {
-            await recvData.StreamAcceptAsync($"recv{sessionSuffix}");
-            Logging.LogInformation($"[{testName}] STREAM ACCEPT completed");
+            var peer = await recvData.StreamAcceptAsync($"recv{sessionSuffix}");
+            Logging.LogInformation(
+                $"[{testName}] STREAM ACCEPT completed, peer {peer[..16]}...");
         });
 
         await Task.Delay(2000);

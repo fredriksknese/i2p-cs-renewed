@@ -123,6 +123,8 @@ Order is driven by one question: what must exist before SSU2/ECIES repair is eve
 | 3-5 | `p3/i2pd-golden-vectors` | ✅ **Done** (PR #21), one SSU2 vector. Reusable capture harness + a checked-in i2pd **TokenRequest**. SessionRequest/Retry/Data and the ECIES vectors are blocked, not skipped — see session 3. | Gate met: the byte diff is the deliverable. Found the ChaCha20 block-counter divergence and that i2pd opens with TokenRequest. |
 | 3-6 | `p3/catch-audit-protocol-scope` | ✅ **Done** (PR #22). All 31 catch sites audited; rule recorded on `ProtocolCatchAuditTest` and enforced there. Also added `Logging.LogError` — the level existed and was selectable but no helper emitted at it. | ✅ Zero bare catches in those two directories, guarded by a test confirmed to fail with the defect reinstated |
 
+| 3-7 | `p3/sam-accept-destination-line` | ✅ **Done.** SAM v3 STREAM ACCEPT, both sides. `SAMHelper.StreamAcceptAsync` read only `STREAM STATUS` and left the peer-destination line — which a non-silent bridge writes as the first bytes of the *data* stream — to be consumed as payload; since the callers read a fixed byte count, that is a byte-exact transfer with a shifted body. `SAMBridge` never wrote that line at all, and deferred `STREAM STATUS` until a peer connected. | `SamAcceptDestinationLineTest` (unit, fake bridge on loopback — red before, green after); integration `TestSend5MB_I2pd2_To_I2pd3` in CI |
+
 3-6 runs last in Phase 3. It is the difference between debugging SSU2 and debugging it blindfolded.
 
 ### Phase 4 — SSU2 classical parity
@@ -1440,3 +1442,65 @@ Every byte arrives, and the count is exact — so streaming, tunnel build, Lease
 So the conclusion inverts. These are not fixture noise to be explained away before Phase 5 — **they are the sharpest measurement of the transit-tunnel defect in the whole suite**, because they isolate our code as the only non-reference component. 6-2 previously said "static reading found no defect"; this is the dynamic evidence it lacked, and the 5 MB transfers that involve our *endpoints* rather than our *hops* should be read only after it is fixed, since they cannot distinguish the two.
 
 **Next: batch 6-2, driven by this.** A hop that preserves length and destroys content narrows it a long way — it is not routing, not reassembly boundaries and not tunnel build; it is layer encryption or fragment ordering inside a tunnel we participate in.
+
+### Session 7 — batch 3-7 — **the corruption was ours, but it was in the harness**
+
+The entry above says the 5 MB SHA-256 mismatch is "the sharpest measurement of the transit-tunnel defect in the whole suite". **It is not a measurement of the tunnel layer at all.** The receiving side of the test harness was counting a protocol line as payload.
+
+**Unit suite 318 passed / 0 failed / 1 skipped** (319 total), Release build 0 errors.
+
+#### What the reference implementation does, and what we did with it
+
+On `STREAM ACCEPT` with `SILENT=false` — the default, and what `SAMHelper` sends — a SAM v3 bridge writes the peer's destination, base64 and newline-terminated, as **the first bytes of the data stream**. Not a reply: the head of the payload. i2pd, `SAM.cpp`, `SAMSocket::HandleI2PAccept`:
+
+```cpp
+auto ident = std::make_shared<std::string>(stream->GetRemoteIdentity()->ToBase64 ());
+ident->push_back ('\n');
+// send remote peer address back to client like received from stream
+boost::asio::async_write (m_Socket, boost::asio::buffer (ident->data (), ident->size ()), ...
+```
+
+`SAMHelper.StreamAcceptAsync` read the `STREAM STATUS` line and stopped. `ReceiveDataAsync(expectedSize)` then read **exactly** `expectedSize` bytes from the same socket, the first ~517 of which were that destination line.
+
+So the two observations the previous entry reasoned from —
+
+```
+Sent 5242880 bytes
+Received 5242880 bytes
+SHA-256 mismatch!
+```
+
+— are not two facts. **The byte count is not an observation**: the harness reads a fixed count by construction, and would report it against a black hole that emitted anything at all. The only fact is the mismatch, and a body shifted by one line explains it without involving a tunnel.
+
+#### The inference that failed, and it is the same one twice
+
+The previous entry inverted an earlier conclusion by reading the test's *doc comment* ("C# routers serve as tunnel participants … proves C# routers correctly relay tunnel traffic") and concluding our router was the only variable. Two things were wrong with that:
+
+- **The fixture is one C# router and nine i2pd.** Whether our router appears in a 2-hop tunnel is i2pd's peer-selection decision, not the fixture's. "C# as hops" is a hope the test name states as a fact.
+- **The harness is ours too.** "Our code is the only non-reference component in the path" was true, and the component it indicted was the one nobody was looking at, because the path was assumed to end at the SAM socket.
+
+Worth naming plainly, because this plan keeps meeting it: **the test's name and comment were treated as evidence of what the test measures.**
+
+#### And the CI run said something else again
+
+The entry above attributes corruption to both i2pd→i2pd tests. In the run it was written from (`31352682437`), `TestSend5MB_I2pd0_To_I2pd1` failed with `CANT_REACH_PEER MESSAGE="LeaseSet not found"` — it never transferred a byte. **Exactly one test in the entire suite reached the hash comparison**, `TestSend5MB_I2pd2_To_I2pd3`, and it is the one with an i2pd receiver. Every other 5 MB test died earlier, at `STREAM CONNECT`.
+
+#### Our own bridge had the mirror defect, twice
+
+`SAMBridge.HandleStreamAcceptAsync` never wrote the destination line — the `if (!silent)` branch and its `else` were **identical**, with a comment describing the behaviour the code did not have. So a conforming SAM client talking to us consumes our first ~517 payload bytes as a destination and shifts everything after. Symmetric to the harness bug, and undetectable by our own tests, because our harness and our bridge agreed with each other and with nothing else — the eighth instance of this plan's signature defect.
+
+The same handler also deferred `STREAM STATUS RESULT=OK` until a peer connected. i2pd sends it immediately (`ProcessStreamAccept`: reply, *then* arm `AcceptOnce`), and the spec makes it the answer to the command. A client that waits for the status before telling its peer to connect deadlocks against us. Both are fixed here, plus the same destination line on `STREAM FORWARD`.
+
+#### The guard runs in the unit suite, and it was red first
+
+`SamAcceptDestinationLineTest` pairs `SAMHelper` with a fake SAM bridge on a loopback `TcpListener` — no i2pd, no I2P network, 160 ms. Two tests: a bridge that sends the line, asserting the payload starts after it; and a bridge that omits it, asserting the helper **rejects** that rather than shifting silently. Both were confirmed red against the previous behaviour before the fix went in.
+
+The helper checks the *shape* of the line (≥516 base64 characters), not merely that a line arrived. Against a bridge that omits it, a length check is the difference between failing here and failing 5 MB later: the read would otherwise return whatever payload precedes the first `0x0A` byte and look like a short destination.
+
+#### What this does not settle
+
+- **It does not mean transit tunnels work.** It means the evidence that they are broken has been withdrawn. README's "Outbound Endpoint: Broken / Inbound Gateway: Broken" is back to being an unmeasured claim inherited from the original author, and 6-2 is back to having no dynamic evidence — as it was before the previous entry, not worse.
+- **It does not predict a green `TestSend5MB_I2pd2_To_I2pd3`.** It removes one cause of failure from a test that has never got past it. Anything the transfer hits after byte 517 is now visible for the first time.
+- **A local reproduction was attempted and failed.** Three attempts at a private netid-99 network (one i2pd, then two cross-seeded, then two destinations inside one router) all died at `Remote LeaseSet not found` before delivering a byte, so the byte-level shape of the corruption is *not* confirmed by observation here. What is confirmed is i2pd's source, which is the code that produced the failing run.
+
+**Next: CI on this branch.** `TestSend5MB_I2pd2_To_I2pd3` is the one test that reaches a hash comparison, and its next failure — or pass — is the first honest reading the 5 MB path has had.
