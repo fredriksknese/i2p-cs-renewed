@@ -1417,3 +1417,26 @@ TestSend5MB_I2pd2_To_I2pd3
 That is worth its own batch before Phase 5 work is scoped off these numbers: this plan has twice recorded a failure as ours that turned out to be the fixture's (batch 4-0c, batch 4-0f), and the cheapest way to avoid a third is to explain the two failures we provably did not cause.
 
 **Next: explain `TestSend5MB_I2pd0_To_I2pd1` before treating any 5 MB failure as a product defect.**
+
+#### Correction, same session — the two i2pd-to-i2pd failures *are* ours, and they are the most informative failures in the suite
+
+The note above says our router is not in the path for `TestSend5MB_I2pd0_To_I2pd1` and that the failures therefore cannot be ours. **That is wrong**, and reading the test rather than its name says so plainly:
+
+> i2pd 0 sends 5MB to i2pd 1. Both endpoints are i2pd; **C# routers serve as tunnel participants.**
+> This is the critical test: proves C# routers correctly relay tunnel traffic as intermediate hops for i2pd.
+
+Both endpoints being i2pd is exactly what makes our router the *only* variable: everything else in the path is a reference implementation.
+
+**And the failure mode is corruption, not loss:**
+
+```
+Sent 5242880 bytes
+Received 5242880 bytes
+SHA-256 mismatch!
+```
+
+Every byte arrives, and the count is exact — so streaming, tunnel build, LeaseSet lookup and reassembly all work end to end. What comes out the other side is not what went in. **A length-preserving content mismatch through a hop is the signature of the tunnel layer's own crypto or fragment handling**, which is precisely what the README already records as broken (Outbound Endpoint, Inbound Gateway) and what batch 6-2 owns.
+
+So the conclusion inverts. These are not fixture noise to be explained away before Phase 5 — **they are the sharpest measurement of the transit-tunnel defect in the whole suite**, because they isolate our code as the only non-reference component. 6-2 previously said "static reading found no defect"; this is the dynamic evidence it lacked, and the 5 MB transfers that involve our *endpoints* rather than our *hops* should be read only after it is fixed, since they cannot distinguish the two.
+
+**Next: batch 6-2, driven by this.** A hop that preserves length and destroys content narrows it a long way — it is not routing, not reassembly boundaries and not tunnel build; it is layer encryption or fragment ordering inside a tunnel we participate in.
