@@ -168,7 +168,7 @@ public class ECIESSessionKeyManager
                 Logging.LogDebug($"ECIESSessionKeyManager.ProcessNewSession: Handled hybrid variant {variant} for {remoteHash.Id32Short}");
 
                 var reply = session.CreateNewSessionReply(messageData, replyPayload, out _, out _);
-                foreach (var tag in session.InboundTags) _tagToDestination.TryAdd(tag, remoteHash);
+                TrackInboundTags(session, remoteHash);
 
                 return (payload, reply);
             }
@@ -205,7 +205,7 @@ public class ECIESSessionKeyManager
             Logging.LogDebug($"ECIESSessionKeyManager.ProcessNewSession: Handled standard IK for {remoteHash.Id32Short}");
 
             var reply = session.CreateNewSessionReply(messageData, replyPayload, out _, out _);
-            foreach (var tag in session.InboundTags) _tagToDestination.TryAdd(tag, remoteHash);
+            TrackInboundTags(session, remoteHash);
 
             return (payload, reply);
         }
@@ -298,7 +298,7 @@ public class ECIESSessionKeyManager
                     var payload = sess.ProcessNewSessionReply(message);
 
                     // Register deterministic handshake tags for this session
-                    foreach (var tag in sess.InboundTags) _tagToDestination[tag] = sess.RemoteHash;
+                    TrackInboundTags(sess, sess.RemoteHash);
 
                     Logging.LogDebug($"ECIESSessionKeyManager: Step 3 matched hybrid reply for {sess.RemoteHash?.Id32Short}");
                     return new ProcessedDestinationMessage
@@ -365,7 +365,7 @@ public class ECIESSessionKeyManager
             var payload = session.ProcessNewSessionReply(message);
 
             // Register deterministic handshake tags for this session
-            foreach (var tag in session.InboundTags) _tagToDestination[tag] = remoteHash;
+            TrackInboundTags(session, remoteHash);
 
             return new ProcessedDestinationMessage
             {
@@ -546,6 +546,71 @@ public class ECIESSessionKeyManager
     }
 
     /// <summary>
+    ///     Seed the tag routing table from a session, and keep it seeded. Batch 5-3.
+    ///
+    ///     <para>
+    ///         Five call sites used to copy <c>session.InboundTags</c> into
+    ///         <c>_tagToDestination</c> once and never again, which was correct only while the
+    ///         session's tags were a fixed block generated at handshake time. With a sliding
+    ///         window that snapshot routes the first 5000 messages and drops everything after —
+    ///         and it fails as an unrecognised tag, so it looks like a crypto fault rather than a
+    ///         bookkeeping one. That is how it presented while 5-3 was being written.
+    ///     </para>
+    ///     <para>
+    ///         The hash is resolved when a tag is added rather than captured here, because
+    ///         <see cref="ConfirmRemoteHash" /> replaces a responder's temporary ident hash with
+    ///         the real one part-way through a session's life.
+    ///     </para>
+    /// </summary>
+    private void TrackInboundTags(ECIESSession session, I2PIdentHash remoteHash)
+    {
+        if (session == null) return;
+
+        lock (_trackedSessions)
+        {
+            if (_trackedSessions.Add(session))
+            {
+                session.InboundTagAdded += tag =>
+                    _tagToDestination[tag] = CurrentHashFor(session, remoteHash);
+                session.InboundTagExpired += tag => _tagToDestination.TryRemove(tag, out _);
+            }
+        }
+
+        foreach (var tag in session.InboundTags) _tagToDestination[tag] = remoteHash;
+    }
+
+    /// <summary>Sessions whose tag events are already wired, by reference.</summary>
+    private readonly HashSet<ECIESSession> _trackedSessions = new();
+
+    /// <summary>
+    ///     The key <paramref name="session" /> is currently filed under in <c>_sessions</c>, which
+    ///     is what a tag must route to. Batch 5-3.
+    ///
+    ///     <para>
+    ///         It is not simply <c>session.RemoteHash</c>: a responder's session carries a
+    ///         *temporary* hash derived straight from the remote static key, while the dictionary
+    ///         is keyed by <see cref="GetRemoteHash" />, which may already know the real one.
+    ///         Routing tags to the temporary hash makes them resolve to no session at all, which
+    ///         surfaces as "Session not found" — a message that reads like a lost session rather
+    ///         than a misfiled tag, and cost a debugging round to tell apart.
+    ///     </para>
+    ///     <para>
+    ///         <see cref="ConfirmRemoteHash" /> re-keys the dictionary and updates
+    ///         <c>RemoteHash</c> together, so once it has run the two agree and this returns the
+    ///         real hash.
+    ///     </para>
+    /// </summary>
+    private I2PIdentHash CurrentHashFor(ECIESSession session, I2PIdentHash fallback)
+    {
+        if (session.RemoteHash != null
+            && _sessions.TryGetValue(session.RemoteHash, out var filed)
+            && ReferenceEquals(filed, session))
+            return session.RemoteHash;
+
+        return fallback;
+    }
+
+    /// <summary>
     ///     Register a session tag for inbound messages
     /// </summary>
     public void RegisterTag(SessionTag tag, I2PIdentHash destination)
@@ -607,7 +672,7 @@ public class ECIESSessionKeyManager
         var reply = session.CreateNewSessionReply(newSessionData, replyPayload, out _, out _);
         
         // Register tags derived during reply generation
-        foreach (var tag in session.InboundTags) _tagToDestination.TryAdd(tag, remoteHash);
+        TrackInboundTags(session, remoteHash);
         
         return reply;
     }

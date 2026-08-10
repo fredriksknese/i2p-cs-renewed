@@ -1366,3 +1366,25 @@ final state Established after 4 sent / 2 received
 **The observable is i2pd's acknowledgement, not our own send returning.** Zero unacked means i2pd received the datagram, accepted it under the data-phase keys, and said so in an ACK block we then parsed. A test asserting only that `Send` was called would have passed against a black hole, which is exactly what the four CI runs before 4-0n were.
 
 The establishment path is now shared by both tests, on separate ports and separate i2pd instances, so neither depends on the other's teardown. Locally both still `Assert.Ignore` — i2pd 2.45.1 refuses us at its endpoint check — so **this answer comes from CI, like every SSU2 interop claim before it.**
+
+### Session 6 (continued) — batch 5-3 — **the tag window is a window now**
+
+**Unit suite 316 passed / 0 failed / 1 skipped** (317 total). `SustainedTrafficExceedingTheTagWindow` is **un-quarantined and green**: 100000 messages in 2.5 seconds, where it previously stopped dead at 5000.
+
+`InitializeBiDirectionalTags` drained two `ECIESTagSet` generators into a fixed block and dropped them. They are now kept alive, the initial block becomes the width of a window, and each consumed tag generates exactly one more — so the cost is O(1) per message rather than a bigger block. Expiry behind is bounded and only sweeps when the set has actually grown past its bound, because an O(n) sweep per message at 100000 messages is its own defect.
+
+#### The half that was not in the plan's description, and cost a round to find
+
+The plan scoped this as `ECIESSessions.cs:373-400`. Sliding the session's own window was not enough: **`ECIESSessionKeyManager` snapshots `session.InboundTags` into `_tagToDestination` at five separate call sites**, once, at handshake time. That snapshot is correct only while the tags are a fixed block. With a window, message 5001 arrives with a perfectly valid tag that routes nowhere.
+
+It fails as an *unrecognised tag*, so the symptom was `All variants failed: [IK:ArgumentException...]` — the message being retried as a fresh handshake. **A bookkeeping bug wearing a crypto bug's clothes**, and the second one this session (`Invalid Address block size` was the first).
+
+The five sites are now one `TrackInboundTags` that seeds *and* subscribes, and the session raises `InboundTagAdded` / `InboundTagExpired` as the window moves.
+
+#### And a second, subtler misfiling underneath it
+
+Routing the new tags to `session.RemoteHash` produced `Session not found`. A responder's session carries a **temporary** ident hash derived straight from the remote static key, while `_sessions` is keyed by `GetRemoteHash`, which may already know the real one. `CurrentHashFor` therefore returns `RemoteHash` only when the session is actually filed under it, and the captured hash otherwise — the two converge once `ConfirmRemoteHash` re-keys both together.
+
+#### What this does not do
+
+**It does not make a session immortal, and Gate 5 should not be read as met.** A window that always slides forward has no upper bound on how far the two sides may drift apart if messages are lost, and there is still no DH ratchet — that is 5-4, and `RatchetTagSet.NextKeyHandler` is kept for it (batch 5-1). What this buys is that ">10 MB sustained" is no longer arithmetically impossible.

@@ -17,11 +17,12 @@ namespace I2PTests.Loopback;
 public class ECIESPumpTest
 {
     /// <summary>
-    ///     The number of Existing Session messages a session survives before
-    ///     <c>ECIESSession.CreateExistingSessionMessage</c> throws. It is
-    ///     <c>ECIESSessions.TagsPerDirection</c>, pre-generated once at handshake time and never
-    ///     replenished. Asserted rather than merely described, so that if batch 5-3 changes the
-    ///     strategy this test says so instead of silently passing.
+    ///     <c>ECIESSessions.TagsPerDirection</c>: how many unused tags each direction keeps
+    ///     available. Batch 5-3 changed what this number means. It used to be the number of
+    ///     Existing Session messages a session survived *in total* — generated once at handshake
+    ///     time, never replenished, and <c>CreateExistingSessionMessage</c> threw on the next one.
+    ///     It is now the width of a sliding window, so crossing it is unremarkable and the tests
+    ///     below say so.
     /// </summary>
     private const int TagWindow = 5000;
 
@@ -75,25 +76,29 @@ public class ECIESPumpTest
     }
 
     /// <summary>
-    ///     Pins the boundary itself. Green today, and it is what turns "5-3 changed something"
-    ///     into a visible event rather than a silent one: whichever way batch 5-3 goes, this
-    ///     assertion has to be revisited deliberately.
+    ///     <b>Revisited by batch 5-3, deliberately, which is what this test existed to force.</b>
+    ///     It used to assert the opposite — that delivery stopped at exactly
+    ///     <c>TagWindow</c> with "No available outbound tags" — and pinning that boundary is what
+    ///     turned 5-3 into a visible change rather than a silent one.
+    ///
+    ///     <para>
+    ///         The window is now a window rather than a quota: crossing it is the interesting
+    ///         moment, so it keeps its own small test next to the 100000-message one. A session
+    ///         that survives 100000 but stumbles at 5001 would otherwise report a single number
+    ///         and leave you to guess where it broke.
+    ///     </para>
     /// </summary>
     [Test]
-    public void TheTagWindowIsExactlyTheGeneratedTagCount()
+    public void TrafficCrossingTheInitialTagWindowKeepsFlowing()
     {
         var pump = ECIESPump.Create();
         pump.Handshake(new byte[] { 1 }, new byte[] { 2 });
 
         var (delivered, stoppedBecause) = pump.SendMany(pump.Alice, pump.Bob, TagWindow + 1);
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(delivered, Is.EqualTo(TagWindow),
-                "the session did not stop at the pre-generated tag count");
-            Assert.That(stoppedBecause, Does.Contain("No available outbound tags"),
-                "the session stopped for a different reason than tag exhaustion");
-        });
+        Assert.That(delivered, Is.EqualTo(TagWindow + 1),
+            $"the session stopped at the initial tag block instead of generating past it: "
+            + $"{stoppedBecause}");
     }
 
     /// <summary>
@@ -110,13 +115,13 @@ public class ECIESPumpTest
     ///         session outlive any window at all.
     ///     </para>
     ///     <para>
-    ///         Quarantined, owner batch 5-3, which un-quarantines it. The plan's stated 3-4
-    ///         verification is N=5001; this runs to 100000 so that a fix producing a *bigger*
-    ///         fixed block rather than a genuine window still fails here.
+    ///         <b>Un-quarantined by batch 5-3.</b> The plan's stated 3-4 verification is N=5001;
+    ///         this runs to 100000 so that a fix producing a *bigger fixed block* rather than a
+    ///         genuine window still fails here — which is the mistake the number is chosen to
+    ///         catch, since 5-3 would look fixed at any N below the new block size.
     ///     </para>
     /// </summary>
     [Test]
-    [Category(TestCategories.Experimental)]
     public void SustainedTrafficExceedingTheTagWindow()
     {
         const int count = 100000;

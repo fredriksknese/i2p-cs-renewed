@@ -164,6 +164,15 @@ public class ECIESSession
 
     public byte[] RemoteStaticKey { get; private set; }
 
+    /// <summary>
+    ///     Batch 5-3. Inbound tags are no longer a block generated once at handshake time, so a
+    ///     key manager that snapshotted <see cref="InboundTags" /> would be able to route the
+    ///     first 5000 messages and nothing after. These fire as the window slides.
+    /// </summary>
+    public event Action<SessionTag> InboundTagAdded;
+
+    public event Action<SessionTag> InboundTagExpired;
+
     public bool IsEstablished => _sendKey != null;
     public bool IsHybridWaitingForReply => _kemVariant.HasValue && !IsEstablished;
 
@@ -391,7 +400,30 @@ public class ECIESSession
         return message;
     }
 
+    /// <summary>
+    ///     How many unused tags each direction keeps available. Batch 5-3 — this used to be the
+    ///     total a session would ever have: <c>InitializeBiDirectionalTags</c> generated exactly
+    ///     this many once and never another, so message 5001 threw "No available outbound tags"
+    ///     and the destination went mute. At 1 KB a message that is about 5 MB, under half of
+    ///     Gate 5's ">10 MB sustained without a session reset".
+    /// </summary>
     private const int TagsPerDirection = 5000;
+
+    /// <summary>
+    ///     How far behind the newest inbound tag a straggler is still accepted. Tags are consumed
+    ///     out of order whenever the network reorders or drops, so the unconsumed ones must not be
+    ///     dropped the moment the window moves past them — the point of expiring behind is to
+    ///     bound memory on a long session, not to enforce ordering.
+    /// </summary>
+    private const int InboundTagsKeptBehind = TagsPerDirection;
+
+    // The generators, kept alive rather than drained. Both sides walk the same deterministic KDF
+    // chain, so as long as each keeps consuming in order the indices stay aligned however long
+    // the session lives.
+    private ECIESTagSet _inboundTagSet;
+    private ECIESTagSet _outboundTagSet;
+    private int _nextInboundIndex;
+    private int _nextOutboundIndex;
 
     private void InitializeBiDirectionalTags()
     {
@@ -400,21 +432,55 @@ public class ECIESSession
             _inboundTags.Clear();
             _outboundTags.Clear();
 
-            // Inbound tags: derived from ck and our receive key (what we expect from remote)
-            var inboundTagSet = new ECIESTagSet(_ck, _receiveKey);
-            for (var i = 0; i < TagsPerDirection; i++)
-            {
-                var (tag, key) = inboundTagSet.ConsumeNext();
-                _inboundTags[tag] = new TagInfo { Key = key, Index = i, Created = DateTime.UtcNow };
-            }
+            // Inbound: derived from ck and our receive key (what we expect from remote).
+            // Outbound: from ck and our send key.
+            _inboundTagSet = new ECIESTagSet(_ck, _receiveKey);
+            _outboundTagSet = new ECIESTagSet(_ck, _sendKey);
+            _nextInboundIndex = 0;
+            _nextOutboundIndex = 0;
 
-            // Outbound tags: derived from ck and our send key (what we send to remote)
-            var outboundTagSet = new ECIESTagSet(_ck, _sendKey);
-            for (var i = 0; i < TagsPerDirection; i++)
+            GenerateInboundTags(TagsPerDirection);
+            GenerateOutboundTags(TagsPerDirection);
+        }
+    }
+
+    /// <summary>Generate ahead. Callers hold <c>_sessionLock</c>.</summary>
+    private void GenerateInboundTags(int count)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            var (tag, key) = _inboundTagSet.ConsumeNext();
+            _inboundTags[tag] = new TagInfo
             {
-                var (tag, key) = outboundTagSet.ConsumeNext();
-                _outboundTags.Enqueue((tag, new TagInfo { Key = key, Index = i, Created = DateTime.UtcNow }));
-            }
+                Key = key, Index = _nextInboundIndex++, Created = DateTime.UtcNow
+            };
+            InboundTagAdded?.Invoke(tag);
+        }
+
+        // Expire behind, but only when the set has actually grown past its bound. In the normal
+        // case one tag is consumed for every one generated, so the count is flat and this is a
+        // single comparison — the sweep below is O(n) and must not run per message.
+        if (_inboundTags.Count <= TagsPerDirection + InboundTagsKeptBehind) return;
+
+        var cutoff = _nextInboundIndex - (TagsPerDirection + InboundTagsKeptBehind);
+        foreach (var stale in _inboundTags.Where(kv => kv.Value.Index < cutoff)
+                     .Select(kv => kv.Key).ToList())
+        {
+            _inboundTags.Remove(stale);
+            InboundTagExpired?.Invoke(stale);
+        }
+    }
+
+    /// <summary>Generate ahead. Callers hold <c>_sessionLock</c>.</summary>
+    private void GenerateOutboundTags(int count)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            var (tag, key) = _outboundTagSet.ConsumeNext();
+            _outboundTags.Enqueue((tag, new TagInfo
+            {
+                Key = key, Index = _nextOutboundIndex++, Created = DateTime.UtcNow
+            }));
         }
     }
 
@@ -429,6 +495,11 @@ public class ECIESSession
                 throw new InvalidOperationException($"Unknown or expired tag: {message.Tag}");
 
             _inboundTags.Remove(message.Tag);
+
+            // Batch 5-3: slide the window forward by exactly what was consumed, so the peer never
+            // catches up with the end of what we have derived.
+            GenerateInboundTags(1);
+
             LastUsed = DateTime.UtcNow;
         }
 
@@ -444,13 +515,17 @@ public class ECIESSession
 
         lock (_sessionLock)
         {
-            if (_outboundTags.Count == 0)
-                throw new InvalidOperationException("No available outbound tags");
-
             if (_sendKey == null)
                 throw new InvalidOperationException("Session not established");
 
+            // Batch 5-3: an empty queue is no longer the end of the session. It used to throw
+            // "No available outbound tags" on message 5001; the generator is still here, so the
+            // window simply slides.
+            if (_outboundTags.Count == 0) GenerateOutboundTags(TagsPerDirection);
+
             (tag, tagInfo) = _outboundTags.Dequeue();
+            GenerateOutboundTags(1);
+
             LastUsed = DateTime.UtcNow;
         }
 
