@@ -130,7 +130,11 @@ public partial class NetDb
                 ++ix;
             }
 
-#if DEBUG
+        // Batch 3-10: runtime-gated, not build-gated. The block samples the wheel and formats
+        // before it logs, so it is guarded by the level rather than left to the interpolated
+        // string handler, which can only skip formatting it is handed.
+        if (!Logging.IsEnabled(Logging.LogLevels.Debug)) return;
+
         var delta = roulette.AbsDevFit / 2;
         var min = roulette.Wheel.Where(sp => Math.Abs(sp.Fit - roulette.MinFit) < delta).Take(10);
         var avg = roulette.Wheel.Where(sp => Math.Abs(sp.Fit - roulette.AverageFit) < delta).Take(10);
@@ -165,6 +169,5 @@ public partial class NetDb
             Logging.LogDebug($"Med example: Space {medexinst.Space,10:F2} {medex}");
             Logging.LogDebug($"Max example: Space {maxexinst.Space,10:F2} {maxex}");
         }
-#endif
     }
 }
