@@ -125,6 +125,7 @@ Order is driven by one question: what must exist before SSU2/ECIES repair is eve
 
 | 3-7 | `p3/sam-accept-destination-line` | ✅ **Done.** SAM v3 STREAM ACCEPT, both sides. `SAMHelper.StreamAcceptAsync` read only `STREAM STATUS` and left the peer-destination line — which a non-silent bridge writes as the first bytes of the *data* stream — to be consumed as payload; since the callers read a fixed byte count, that is a byte-exact transfer with a shifted body. `SAMBridge` never wrote that line at all, and deferred `STREAM STATUS` until a peer connected. | `SamAcceptDestinationLineTest` (unit, fake bridge on loopback — red before, green after); integration `TestSend5MB_I2pd2_To_I2pd3` in CI |
 | 3-8 | `p3/sam-session-destination-keys` | ✅ **Done.** `SESSION STATUS ... DESTINATION=` carries the session's **private keys**, destination-first — i2pd sends 884 base64 characters where a bare destination is 524. Two NetDb tests took `SHA256` over the whole decoded string and asserted the network could find a LeaseSet for the result; every floodfill answered "Requested LeaseSet not found", correctly. `SAMBridge` sent the bare destination instead of the keys, discarding a `privKeyBase64` it had already computed. | `SamSessionDestinationTest` (unit); integration `LeaseSetLookupAndEncryptionVerification` and `SamDataTransferWithLeaseSetLookup` in CI |
+| 3-9 | `p3/floodfill-selection-honesty` | ✅ **Done.** A request for a floodfill could be answered with a router that is not one. `GetRandomRouter`'s `exploratory` branch ignored the roulette it was handed and drew from every known router; both fallbacks did the same when the roulette was empty. `FloodfillUpdater` asks with `exploratory: true`, so a router knowing no floodfills published its LeaseSets to arbitrary peers that discard them — while logging "Publishing LS to ECIES FF". Also: an empty roulette threw `NullReferenceException` out of `GetWeightedRandom`, and `GetRandomRouter` NRE'd before the transport layer started. | `FloodfillSelectionTest` (unit, isolated NetDb — red before, green after); `FloodfillRecognitionTest` against a real i2pd floodfill RouterInfo |
 
 3-6 runs last in Phase 3. It is the difference between debugging SSU2 and debugging it blindfolded.
 
@@ -1635,3 +1636,70 @@ Three facts, none of them inferred:
 So two components disagree about whether this router knows any floodfills, and the one that says "none" is the one that answers `STREAM CONNECT`. That is the single largest remaining signature in the integration suite: every `CANT_REACH_PEER MESSAGE="Destination not found"` is this.
 
 **A decision is needed before the obvious fix.** The shortest path — answer a client's lookup from the LeaseSet we already hold in our own floodfill store — is precisely what `CLAUDE.md` forbids: *"Do not 'fix' a missing-LeaseSet bug by reaching for the global NetDb."* The invariant is deliberate and about anonymity, so it is not for an executing session to overturn. **The empty candidate set is a defect on its own terms** and can be fixed without touching the invariant; that is the batch. Whether a floodfill router may serve its own clients from its own store is a separate question, and it belongs to whoever owns the invariant.
+
+### Session 7 (continued) — batch 3-9 — **asking for a floodfill and being handed something else**
+
+The previous entry left a decision pending: whether a floodfill router may serve its own clients from its own store. **It turned out not to be the question.**
+
+**Unit suite 328 passed / 0 failed / 1 skipped** (329 total), Release build 0 errors.
+
+#### What the protocol actually says
+
+`geti2p.net/en/docs/how/network-database`, section *Network Database Segmentation — Sub-Databases*, states the invariant `CLAUDE.md` carries, and gives the reason:
+
+> …to prevent a class of attacks where a malicious actor can try to associate a client tunnel with a router by sending a store to a client tunnel, then requesting it back directly from the suspected "Host" of the client tunnel.
+
+> **A client should never answer queries with an entry from the main netDb, only it's own client network database.**
+
+So the invariant is spec-backed and stands. **But it is narrower than it reads**: it governs *LeaseSets*, and it governs *answering*. RouterInfos are explicitly not segmented — the same section says the main netDb is used "for direct lookups **and floodfill operations** first", and Java's client sub-database refuses to hold RouterInfos at all:
+
+```java
+public RouterInfo lookupRouterInfoLocally(Hash key) {
+    // Client netDb shouldn't have RI, search for RI in the floodfill netDb.
+    if (isClientDb()) { ... return null; }
+```
+
+`OutboundClientMessageOneShotJob` shows the split in one file: the LeaseSet from `ctx.clientNetDb(_from).lookupLeaseSetLocally(...)`, the lease's gateway RouterInfo from `getContext().netDb()`. i2pd matches — `LeaseSetDestination::FindLeaseSet` reads a per-destination map with no main-netdb fallback, while RouterInfo requests go to `i2p::data::netdb`.
+
+**Floodfill selection is a RouterInfo operation.** No decision was needed; the shortcut that needed permission was never the one that had to be taken.
+
+#### Following the asymmetry rather than the theory
+
+The batch was scoped from a wrong guess and corrected twice by measurement, which is worth recording as the method:
+
+1. *"The `/24` IP-diversity filter collapses the candidate list on a loopback network."* Plausible, and wrong — the filter always admits its first candidate, so it cannot produce zero.
+2. *"`FloodfillInfos` is empty."* The NetDb report prints `Floodfill routers` with no rows, so this looked settled — until `FloodfillUpdater` was seen publishing to **six distinct floodfills** in a network that has two, minutes after that empty report.
+
+The second observation is the one that pays. Six floodfills cannot come from a set of two, so the selector was not returning floodfills at all:
+
+```csharp
+private I2PIdentHash GetRandomRouter(
+    RouletteSelection<...> r,          // the floodfill roulette, for a floodfill request
+    ...
+    if (exploratory)
+    {
+        var subset = RouterInfos.Values   // and here it is ignored
+```
+
+Three paths did this: the `exploratory` branch unconditionally, its own empty-subset fallback, and the non-exploratory fallback when the roulette came up empty. **Every route to a floodfill could return a router that is not one**, and the caller had no way to know — `FloodfillUpdater` logs `Publishing LS to ECIES FF [x]` either way.
+
+#### Why that is the other half of the suite
+
+A LeaseSet published to a non-floodfill is discarded. From every other router, that is indistinguishable from a destination whose LeaseSet cannot be found — which is exactly what i2pd reports for our destinations in `TestSend5MB_I2pd0_To_CSharp0`, `TestSend5MB_I2pdToCSharp_SAM`, `TestBidirectional5MB_SAM` and `TestSend5MB_I2pdB_To_CSharpA_MultiHop`. **The failures are on the publish side, not the lookup side**, which is not where two sessions of evidence pointed.
+
+#### Two more defects found by writing the test rather than by reading
+
+- `RouletteSelection.GetWeightedRandom` ends in `Wheel.Random().Id`, and `Random()` on an empty wheel returns null — so *any* non-exploratory floodfill request threw `NullReferenceException` once the floodfill set was empty. Guarded at the call site on the roulette's own `Count`.
+- `GetRandomRouter` dereferenced `TransportProvider.Inst` unconditionally, so a NetDb query before the transport layer starts threw. Reachable in production during startup, and it made the code untestable without a full router.
+
+Neither was visible from reading; both appeared the moment a test drove the function with an empty NetDb.
+
+#### The guard, and what it asserts
+
+`FloodfillSelectionTest` starts an isolated NetDb, adds signed RouterInfos with real `caps` values, and asserts (a) with no floodfills known, every form of the request returns **nothing** rather than a substitute, and (b) with three known among nine routers, forty draws on each of the exploratory and non-exploratory paths are all floodfills. Confirmed red first: `selected [dezjn] has caps 'X', which is not a floodfill (exploratory=True)`.
+
+`FloodfillRecognitionTest` pins the layer underneath against **a real i2pd 2.45.1 floodfill RouterInfo** checked in as `TestData/routerinfo_floodfill_i2pd.dat` — caps parsed, `f` recognised, signature verified. That fixture exists because the first hypothesis was "we misparse i2pd's caps"; it is checked in rather than discarded, because the next reader deserves the answer to that question without re-deriving it.
+
+#### What this does not settle
+
+**It does not explain why the floodfill set is empty in the first place.** The scaled fixture starts two floodfill i2pds and injects their RouterInfos, and by the time of the failures our NetDb held 8 routers with **none** classified as floodfill. Parsing is now proven innocent, so the remaining candidates are the injection path, an update replacing those entries with something lacking `caps=f`, or eviction. That is the next batch, and the new `LogWarning` in `GetRandomRouter` — floodfills known, routers known, excluded — is there to name it in the next CI run.
