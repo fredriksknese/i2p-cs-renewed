@@ -64,14 +64,18 @@ shown. Until Gate 6, do not run this on the live network (netid 2) — use `--ne
   * Inbound: Totally broken
   * Outbound: Totally broken
 * Transit Tunnels:
-  * 'middle hop': 70%? working? maybe fully working?
+  * **'middle hop': working, measured in CI as of batch 3-7.** `TestSend5MB_I2pd2_To_I2pd3`
+    and `TestSend5MB_I2pd0_To_I2pd1` move 5 MB between two i2pd endpoints across the
+    10-router scaled network with a matching SHA-256. Our router is a candidate hop there
+    rather than a guaranteed one — it is one router among ten and i2pd picks the path — so
+    this is evidence that relaying does not corrupt traffic, not proof it was exercised
   * Outbound Endpoint: Broken *(unverified — see below)*
   * Inbound Gateway: Broken *(unverified — see below)*
-  * The 5 MB SHA-256 mismatch that was read as evidence of tunnel-layer corruption is
-    **explained by the test harness** (batch 3-7): the receiving side counted the SAM
-    peer-destination line as payload, so the transfer was byte-exact and content-shifted no
-    matter what the tunnels did. These two "Broken" entries are back to being unmeasured
-    claims inherited from the original author
+  * The 5 MB SHA-256 mismatch previously read as evidence of tunnel-layer corruption was
+    **the test harness** (batch 3-7): the receiving side counted the SAM peer-destination
+    line as payload, so the transfer was byte-exact and content-shifted no matter what the
+    tunnels did. With that fixed, both transfers pass. These two "Broken" entries are back
+    to being unmeasured claims inherited from the original author
 * Reseed / bootstrap: **working and authenticated** (measured, batches 1-1 and 1-2)
   * TLS certificates validated against the system trust store
   * SU3 signatures verified against the 14 pinned reseed certificates; a failed or

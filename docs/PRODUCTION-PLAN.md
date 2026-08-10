@@ -1504,3 +1504,27 @@ The helper checks the *shape* of the line (≥516 base64 characters), not merely
 - **A local reproduction was attempted and failed.** Three attempts at a private netid-99 network (one i2pd, then two cross-seeded, then two destinations inside one router) all died at `Remote LeaseSet not found` before delivering a byte, so the byte-level shape of the corruption is *not* confirmed by observation here. What is confirmed is i2pd's source, which is the code that produced the failing run.
 
 **Next: CI on this branch.** `TestSend5MB_I2pd2_To_I2pd3` is the one test that reaches a hash comparison, and its next failure — or pass — is the first honest reading the 5 MB path has had.
+
+#### Addendum, same session — CI answered, and the answer is unambiguous
+
+PR #42, run `31359793794`: build green, unit **318 / 0 / 1**, integration **33 passed / 19 failed / 3 skipped** (was 32 / 20 / 3).
+
+**`TestSend5MB_I2pd2_To_I2pd3` passes. So does `TestSend5MB_I2pd0_To_I2pd1`.** Both are absent from the failed list, the totals are unchanged at 55, and nothing was newly skipped. Five megabytes now cross the scaled network between two i2pd endpoints with a matching SHA-256.
+
+So the "length-preserving content mismatch, the signature of tunnel-layer crypto" was a missing `ReadLine`. **Nothing in `TunnelLayer` was touched by this batch**, which is the whole point: had 6-2 been executed as scoped, it would have been a search for a defect in code that was working, guided by a measurement that was not one.
+
+One test moved the other way — `CaptureSessionRequestByAnsweringTheTokenRequest`, the flake already recorded against runs #34 and `b71f8cc`, which fails on the first datagram i2pd sends before we transmit anything. Net −2 +1 = 19.
+
+#### The failure mode of the rest changed, and that is the next lead
+
+Nine tests that used to die at `STREAM CONNECT` with `CANT_REACH_PEER` now die *later*, and several die inside the new destination-line read:
+
+```
+TestSend5MB_I2pd0_To_CSharp0 — System.OperationCanceledException
+   at SAMHelper.ReadLineAsync(Int32 timeoutMs)
+   at SAMHelper.StreamAcceptAsync(String sessionId)
+```
+
+That is not a regression — the same tests failed in the previous run for the same underlying reason — but it relocates the report to a more informative place. **A 120-second wait for a peer destination that never arrives means no stream was ever accepted**, so for the C#-receiver cases it points at our own accept path or the LeaseSet the sender needs, not at the transfer.
+
+**Next, and it is not 6-2.** Nineteen failures are dominated by one signature: `CANT_REACH_PEER MESSAGE="LeaseSet not found"` / `"Destination not found"` at `STREAM CONNECT`, plus `LeaseSetLookupAndEncryptionVerification` and `SamDataTransferWithLeaseSetLookup` failing their lookups outright. LeaseSet publication and lookup in the scaled fixture gates almost everything left in Phases 5 and 6 — including every transfer that involves one of our endpoints, which is now the only category of 5 MB test still failing.
