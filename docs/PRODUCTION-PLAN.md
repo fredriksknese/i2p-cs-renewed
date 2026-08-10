@@ -1703,3 +1703,44 @@ Neither was visible from reading; both appeared the moment a test drove the func
 #### What this does not settle
 
 **It does not explain why the floodfill set is empty in the first place.** The scaled fixture starts two floodfill i2pds and injects their RouterInfos, and by the time of the failures our NetDb held 8 routers with **none** classified as floodfill. Parsing is now proven innocent, so the remaining candidates are the injection path, an update replacing those entries with something lacking `caps=f`, or eviction. That is the next batch, and the new `LogWarning` in `GetRandomRouter` — floodfills known, routers known, excluded — is there to name it in the next CI run.
+
+#### Addendum — CI on 3-9, and the diagnostic answering on its first run
+
+PR #44, run `31393168558`. Build green, unit **328 / 0 / 1**, integration **34 passed / 18 failed** — inside the 33–35 band three runs of near-identical commits have now established, so no movement attributable either way.
+
+The batch's purpose was the warning, and it fired **120 times**:
+
+```
+FloodfillUpdater: no floodfill to publish [yfsog] to. Floodfills known: 0, routers known: 8
+```
+
+**Zero floodfills, eight routers.** Our LeaseSets were never published anywhere, by anyone, for the whole run. That is the publish-side half of the suite, now measured rather than argued.
+
+And the layer under it is visible in the same log. We *do* receive floodfill RouterInfos —
+
+```
+I2PMapping: Pairs: ->(caps:XfR)(netId:99)(router.version:0.9.69)<-
+Imported RouterInfo [yta3m] from /tmp/i2pd_scaled_0_.../router.info
+Imported RouterInfo [wy4is] from /tmp/i2pd_scaled_1_.../router.info
+```
+
+— both floodfills, imported at 13:43:51, and gone from the index by 13:49:58.
+
+### The next batch — **the floodfill index is a cache with different lifetime rules from its source**
+
+```csharp
+public void RemoveRouterInfo(I2PIdentHash hash)
+{
+    if (RouterInfos.TryGetValue(hash, out var p)) p.Meta.Deleted = true;   // soft, reversible
+    FloodfillInfos.TryRemove(hash, out _);                                 // hard, and only an
+                                                                           // update restores it
+```
+
+Both overloads do this, and the only caller that matters is `RemoveOldRouterInfos()` → `Statistics.GetInactive()` → everything `NodeInactive` judges idle. In this fixture we reach the floodfills *through tunnels* rather than by direct transport, so "inactive" is exactly what they look like.
+
+`AddRouterInfo` does put a floodfill back — but only on the update branch, which requires a RouterInfo more than two seconds newer than the one we hold. Between sweeps, nothing restores it.
+
+**Two things to settle before touching it, in this order:**
+
+1. **Are the other 8 marked `Deleted` too?** `RouterCount` counts entries including deleted ones, so "8 routers known" may itself be overstating what we can use. Deletion is filtered at read time in the roulette and in `GetRandomRouter`, but **not** in `GetClosestFloodfill` — three readers, two rules.
+2. **Why does `NodeInactive` fire on peers we are actively using?** That is the actual question, and the answer is currently unreadable in CI: `RoutersStatistics.GetInactive` reports its reasons under `#if DEBUG`, so a Release run cannot say why anything was swept. This is the plan's founding complaint — an undiagnosable Release build — surviving in one more place, and it should be fixed first for the same reason batch 0-1 came first.
