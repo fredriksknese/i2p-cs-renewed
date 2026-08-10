@@ -1601,3 +1601,37 @@ So the conformant value was sitting there unused, and a SAM client of ours could
 **It does not mean LeaseSet lookup works.** It means two of the tests that said it does not were asking an unanswerable question. The remaining `CANT_REACH_PEER` failures at `STREAM CONNECT` are unaffected by this batch — those pass a real destination — and they stay the open question. The MultiHop fixture is the sharper case there: `TestSend5MB_I2pdA_To_I2pdB_MultiHop` is **i2pd to i2pd** and still fails with `LeaseSet not found`, which points at that fixture's network rather than at our router, exactly as the scaled fixture's equivalent test did before 3-7 fixed the harness.
 
 **Next: CI, then the MultiHop fixture's LeaseSet publication** — and the discriminator is already known, so it need not be guessed at: if i2pd cannot reach i2pd there, the fixture is the suspect before we are.
+
+#### Addendum — CI on 3-8, and the alternating test settled by running the same commit twice
+
+PR #43, run `31371030221`. Build green, unit **322 / 0 / 1**. Integration, **two runs of the identical commit**:
+
+| | passed | failed |
+|---|---|---|
+| run 1 | 34 | 18 |
+| run 2 | 35 | 17 |
+
+`TestSend5MB_I2pd2_To_I2pd3` failed in the first and passed in the second. **Same commit, so it is fixture flakiness, not a regression** — and it is worth having spent the 30 minutes to establish that rather than reasoning about it, because the batch had changed the very string that test passes to `STREAM CONNECT`. (The other half of the argument: `TestSend5MB_I2pd0_To_I2pd1` passed in run 1 through the identical normalisation, and a malformed destination draws `INVALID_KEY`, not `LeaseSet not found`.)
+
+3-8 did what it was for: `LeaseSetLookupAndEncryptionVerification` **passes**, and `SamDataTransferWithLeaseSetLookup` now gets *past* the LeaseSet assertion — `Receiver LeaseSet found: I2PLeaseSet2, 2 leases` — before failing three seconds later at `STREAM CONNECT`.
+
+### The next batch, diagnosed but not implemented — **client-scoped lookups never ask anyone**
+
+From the C# router's own log in that run:
+
+```
+09:31:35  FloodfillServer: Storing LeaseSet for [nhlto] (Type LeaseSet2)
+09:32:05  FloodfillServer: Storing LeaseSet for [nhlto] (Type LeaseSet2)
+09:32:10  IdentResolver: Starting lookup of LeaseSet for [nhlto].
+09:32:11  IdentResolver: Lookup of LeaseSet [nhlto] failed: no more floodfills to try
+```
+
+Three facts, none of them inferred:
+
+- **We are the floodfill that holds it.** i2pd published that exact LeaseSet to us twice in the preceding 35 seconds and we stored it.
+- **No DatabaseLookup was ever sent.** There is not one `LS lookup … -> ff …` line between the start and the failure — in fact **zero in the entire run**. `GetClosestFloodfill` returned an empty candidate set, so `ToTry` stayed empty and the next timeout tick failed the lookup one second later.
+- **It is not LeaseSet-specific and not client-specific in its mechanism.** RouterInfo lookups fail the same way later in the run, and the NetDb report prints its `Floodfill routers` header with **no rows under it** — while `FloodfillUpdater: Publishing LS to ECIES FF [epfpe]` succeeds two seconds before the failed lookup.
+
+So two components disagree about whether this router knows any floodfills, and the one that says "none" is the one that answers `STREAM CONNECT`. That is the single largest remaining signature in the integration suite: every `CANT_REACH_PEER MESSAGE="Destination not found"` is this.
+
+**A decision is needed before the obvious fix.** The shortest path — answer a client's lookup from the LeaseSet we already hold in our own floodfill store — is precisely what `CLAUDE.md` forbids: *"Do not 'fix' a missing-LeaseSet bug by reaching for the global NetDb."* The invariant is deliberate and about anonymity, so it is not for an executing session to overturn. **The empty candidate set is a defect on its own terms** and can be fixed without touching the invariant; that is the batch. Whether a floodfill router may serve its own clients from its own store is a separate question, and it belongs to whoever owns the invariant.
