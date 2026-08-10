@@ -489,6 +489,17 @@ public class FloodfillUpdater
             NetDb.Inst.Statistics[i].Score
         }).ToHashSet();
 
+        // Batch 3-9: both sources can now legitimately come back empty, because a request for a
+        // floodfill no longer answers with a router that is not one. RandomWeighted on an empty
+        // set throws, and publishing nowhere is the honest outcome — the caller retries.
+        if (p.Count == 0)
+        {
+            Logging.LogWarning(
+                $"FloodfillUpdater: no floodfill to publish {id.Id32Short} to. " +
+                $"Floodfills known: {NetDb.Inst.FloodfillCount}, routers known: {NetDb.Inst.RouterCount}");
+            return Enumerable.Empty<I2PIdentHash>();
+        }
+
         var result = new List<I2PIdentHash>();
 
         var i = 0;

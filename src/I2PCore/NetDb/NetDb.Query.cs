@@ -14,19 +14,34 @@ public partial class NetDb
     public int RouterCount => RouterInfos.Count;
     public int FloodfillCount => FloodfillInfos.Count;
 
+    /// <summary>
+    ///     Pick a router at random, weighted by the supplied roulette.
+    /// </summary>
+    /// <param name="floodfillOnly">
+    ///     Batch 3-9 (docs/PRODUCTION-PLAN.md). The roulette argument alone did not constrain the
+    ///     answer: the <c>exploratory</c> branch ignored it and drew from every known router, and
+    ///     both fallbacks did the same when the roulette came up empty. So every call asking for a
+    ///     floodfill could return a router that is not one, and the callers had no way to tell —
+    ///     <c>FloodfillUpdater</c> logged "Publishing LS to ECIES FF [x]" while publishing our
+    ///     LeaseSet to peers that simply discard it, which is indistinguishable, from the outside,
+    ///     from a router whose LeaseSets cannot be found. This flag keeps every path inside the
+    ///     floodfill population, and an empty population returns null rather than a wrong answer.
+    /// </param>
     private I2PIdentHash GetRandomRouter(
         RouletteSelection<I2PRouterInfo, I2PIdentHash> r,
         ICollection<I2PIdentHash> exclude,
-        bool exploratory)
+        bool exploratory,
+        bool floodfillOnly = false)
     {
         I2PIdentHash result;
         var me = RouterContext.Inst.MyRouterIdentity.IdentHash;
+        var population = floodfillOnly ? FloodfillInfos : RouterInfos;
 
         var retries = 0;
 
         if (exploratory)
         {
-            var subset = RouterInfos.Values
+            var subset = population.Values
                 .Where(rp =>
                 {
                     var ok = !rp.Meta.Deleted &&
@@ -62,7 +77,9 @@ public partial class NetDb
                     // Relax further filters during bootstrapping (connected count < 10)
                     // or if we have no exploratory tunnels yet.
                     var established = Router.ExplorationTunnelMgr?.InboundExploratory.EstablishedCount ?? 0;
-                    if (TransportProvider.Inst.ConnectedRoutersCount < 10 || established < 2) return true;
+                    // Batch 3-9: null before the transport layer starts. A NetDb query is
+                    // reachable then -- and throwing here reads as "no routers", not as a crash.
+                    if ((TransportProvider.Inst?.ConnectedRoutersCount ?? 0) < 10 || established < 2) return true;
 
                     // Use NodeInactive for exploratory to allow more routers
                     return !Statistics.NodeInactive(st);
@@ -71,15 +88,15 @@ public partial class NetDb
                 {
                     var established = Router.ExplorationTunnelMgr?.InboundExploratory.EstablishedCount ?? 0;
                     return established < 2 &&
-                           TransportProvider.Inst.IsRouterConnected(rp.Router.Identity.IdentHash, out _);
+                           (TransportProvider.Inst?.IsRouterConnected(rp.Router.Identity.IdentHash, out _) ?? false);
                 })
                 .ThenBy(rp => BufUtils.RandomInt(1000))
                 .Take(100)
                 .ToArray();
 
             if (subset.Length == 0)
-                // Fallback to anything if we have no good routers
-                subset = RouterInfos.Values
+                // Fallback to anything in the population if we have no good routers
+                subset = population.Values
                     .Where(rp =>
                         !rp.Meta.Deleted &&
                         (exclude is null || !exclude.Contains(rp.Router.Identity.IdentHash)) &&
@@ -103,7 +120,10 @@ public partial class NetDb
         bool tryagain;
         do
         {
-            result = r?.GetWeightedRandom(exclude);
+            // Batch 3-9: GetWeightedRandom dereferences the result of Random() on its wheel, so
+            // an empty roulette throws rather than returning nothing. Skip straight to the
+            // fallback below, which is now confined to the right population.
+            result = r is null || r.Count == 0 ? null : r.GetWeightedRandom(exclude);
             tryagain = result == me;
 
             // 20-second cooldown + IsBad check for non-exploratory too
@@ -127,7 +147,7 @@ public partial class NetDb
         {
             // Fallback for non-exploratory if roulette failed
             // Apply the same address reachability filter as exploratory and roulette construction
-            var subset = RouterInfos.Values
+            var subset = population.Values
                 .Where(rp =>
                     !rp.Meta.Deleted &&
                     (exclude is null || !exclude.Contains(rp.Router.Identity.IdentHash)) &&
@@ -141,7 +161,14 @@ public partial class NetDb
             if (subset.Length > 0) result = subset.Random().Router.Identity.IdentHash;
         }
 
-        if (result == null && !exploratory)
+        if (result == null && floodfillOnly)
+            // Warning, not Debug: with no floodfill we cannot publish a LeaseSet or look one up,
+            // so every client of this router is about to be unreachable. Silence here is what
+            // let "no more floodfills to try" read as a lookup problem for two sessions.
+            Logging.LogWarning(
+                $"GetRandomRouter: no floodfill available. Floodfills known: {FloodfillInfos.Count}, " +
+                $"routers known: {RouterInfos.Count}, excluded: {exclude?.Count() ?? 0}");
+        else if (result == null && !exploratory)
             Logging.LogDebug(
                 $"GetRandomRouter: FAILED to find any non-exploratory router. Total known: {RouterInfos.Count}. Excluded: {exclude?.Count() ?? 0}");
 
@@ -241,24 +268,41 @@ public partial class NetDb
 
     public I2PRouterInfo GetRandomFloodfillRouterInfo(bool exploratory)
     {
-        return GetRandomRouterInfo(RouletteFloodFill, exploratory);
+        var hash = GetRandomFloodfillRouter(exploratory);
+        return hash is null ? null : this[hash];
     }
 
     private readonly ItemFilterWindow<I2PIdentHash> RecentlyUsedForFf = new(TickSpan.Minutes(15), 2);
 
     public I2PIdentHash GetRandomFloodfillRouter(bool exploratory)
     {
-        return GetRandomRouter(RouletteFloodFill, RecentlyUsedForFf.ToHashSet(), exploratory);
+        return GetRandomRouter(RouletteFloodFill, RecentlyUsedForFf.ToHashSet(), exploratory, true);
     }
 
+    /// <summary>
+    ///     Up to <paramref name="count" /> floodfills. Yields nothing when none are known — the
+    ///     callers treat this as a list of floodfills, so a null in it would be published to.
+    /// </summary>
     public IEnumerable<I2PIdentHash> GetRandomFloodfillRouter(bool exploratory, int count)
     {
-        for (var i = 0; i < count; ++i) yield return GetRandomFloodfillRouter(exploratory);
+        for (var i = 0; i < count; ++i)
+        {
+            var hash = GetRandomFloodfillRouter(exploratory);
+            if (hash is null) yield break;
+
+            yield return hash;
+        }
     }
 
     public IEnumerable<I2PRouterInfo> GetRandomFloodfillRouterInfo(bool exploratory, int count)
     {
-        for (var i = 0; i < count; ++i) yield return GetRandomFloodfillRouterInfo(exploratory);
+        for (var i = 0; i < count; ++i)
+        {
+            var ri = GetRandomFloodfillRouterInfo(exploratory);
+            if (ri is null) yield break;
+
+            yield return ri;
+        }
     }
 
     public IEnumerable<I2PRouterInfo> GetRandomNonFloodfillRouterInfo(bool exploratory, int count)
