@@ -1388,3 +1388,32 @@ Routing the new tags to `session.RemoteHash` produced `Session not found`. A res
 #### What this does not do
 
 **It does not make a session immortal, and Gate 5 should not be read as met.** A window that always slides forward has no upper bound on how far the two sides may drift apart if messages are lost, and there is still no DH ratchet — that is 5-4, and `RatchetTagSet.NextKeyHandler` is kept for it (batch 5-1). What this buys is that ">10 MB sustained" is no longer arithmetically impossible.
+
+### Session 6 (continued) — **4-1c answered: the session carries traffic**
+
+CI on `84a4e7a`:
+
+```
+SSU2-Out-D62FC7A2: Session established
+final state Established after 4 sent / 2 received
+after send: 0 unacked, 8 sent / 16 received
+```
+
+`CSharpDeliversAnI2npMessageToI2pdOverSsu2` **passed**. i2pd acknowledged our I2NP message, so the data-phase keys, the short header, the packet numbering and our ACK parsing all agree with a real peer — not just the handshake. Integration moved **30 passed / 21 failed → 32 / 20** (one test added).
+
+**SSU2 still stays off by default.** Inbound sessions *from* i2pd remain untested and sustained transfer is unmeasured; 4-5's gate is the suite, and the suite is not green.
+
+#### The remaining 20 failures, and a hard look at what they are
+
+Almost none of them are SSU2. They are 5 MB transfers, SAM sessions, streaming and LeaseSet publication — Phase 5 and Phase 6 territory. **Two of them deserve to change how the rest are read:**
+
+```
+TestSend5MB_I2pd0_To_I2pd1
+TestSend5MB_I2pd2_To_I2pd3
+```
+
+**Those are i2pd talking to i2pd. Our router is not in the path.** Whatever makes them fail is the fixture, the tunnel setup, the netid, or the environment — it cannot be our transport or our streaming code. Until that is explained, **every conclusion drawn from the other five-megabyte tests is suspect**, because they share the same harness and the same tunnel plumbing with two tests that fail without us.
+
+That is worth its own batch before Phase 5 work is scoped off these numbers: this plan has twice recorded a failure as ours that turned out to be the fixture's (batch 4-0c, batch 4-0f), and the cheapest way to avoid a third is to explain the two failures we provably did not cause.
+
+**Next: explain `TestSend5MB_I2pd0_To_I2pd1` before treating any 5 MB failure as a product defect.**

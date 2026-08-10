@@ -54,9 +54,12 @@ shown. Until Gate 6, do not run this on the live network (netid 2) — use `--ne
     the retried one. This is the first SSU2 session this router has established with another
     implementation
   * Outbound/Inbound C#-to-C#: handshake completes (batch 4-0h); data phase delivers 100 of 100 on a lossless channel (batch 4-1b) and 100 of 100 through 5% loss (batch 4-1, ACK and retransmit)
-  * **Why it is still off**: an established handshake is not a working transport. Carrying I2NP
-    traffic to i2pd over that session is unmeasured, inbound sessions *from* i2pd are untested, and
-    21 of 54 integration tests still fail. Batch 4-5 turns it on, and only after the suite says so
+  * **Data phase with i2pd: working, measured in CI as of batch 4-1c.** An I2NP message sent over
+    the established session is acknowledged by i2pd (`0 unacked`), so the data-phase keys, short
+    header, packet numbering and ACK parsing all agree with a real peer
+  * **Why it is still off**: inbound sessions *from* i2pd are untested, sustained transfer is not
+    measured, and 20 of 55 integration tests still fail. Batch 4-5 turns it on, and only after the
+    suite says so
 * SSU2-PQ: *(off by default)*
   * Inbound: Totally broken
   * Outbound: Totally broken
