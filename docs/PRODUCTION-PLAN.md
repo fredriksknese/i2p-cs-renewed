@@ -1330,3 +1330,29 @@ Each was checked for references before removal rather than trusted from the plan
 #### The README said something that is no longer true
 
 Not batch 6-3, which rewrites the whole board from measurement; this is the narrower obligation CLAUDE.md sets, to keep the status current when a batch changes it. The SSU2 entry claimed we had "never yet completed a handshake with i2pd, though the four defects known to prevent it are fixed". After PR #41 that understates it in one direction and overstates it in another, so it now records what was actually measured against i2pd 2.61.0 — Session Request accepted, Retry issued and consumed, our blocks parsed, its Session Created decrypted and authenticated — and states plainly that **no session with another implementation has been established**, so the detail cannot be read as SSU2 working.
+
+### Session 6 (continued) — **an SSU2 session with i2pd, established**
+
+The CI run of `github-master` at `b71f8cc` (batch 4-0n) reports:
+
+```
+SSU2-Out-2CCFB0CA: Session established
+final state Established after 4 sent / 2 received
+```
+
+`CSharpEstablishesAnSSU2SessionWithI2pd` **passed**. This is the first SSU2 session this repository has established with another implementation, and it closes a run of eight batches — 4-0, 4-0b, 4-0d, 4-0h, 4-0i, 4-0k, 4-0l, 4-0n — every one of which was necessary and none of which was sufficient.
+
+**Four datagrams sent and two received is the whole exchange including the token round trip**: Session Request, Retry back, Session Request again with the token, then a Session Confirmed across two fragments, with i2pd's Session Created as the second thing received.
+
+#### What this does and does not license
+
+- **It does not mean SSU2 works.** A handshake is not a transport. Carrying I2NP traffic to i2pd over that session is unmeasured, inbound sessions *from* i2pd are untested, and the integration suite is still 30 passed / 21 failed. **4-5 does not become available because of this**, and SSU2 stays off by default.
+- **It does retire the plan's biggest open question.** Every SSU2 batch since 4-0b was verified against a stored packet or against ourselves, and R4 said interop claims could only come from CI. They now have.
+
+#### The one outcome that moved the other way, and why it is not 4-0n
+
+`CaptureSessionRequestByAnsweringTheTokenRequest` went Passed → Failed in the same run. 4-0n changes `Retry.BuildPayload`, and that test answers a TokenRequest with a Retry, so the causal link had to be checked rather than assumed.
+
+**It is not the cause.** The test fails on the *first datagram it receives*, before it sends anything at all — it publishes a RouterInfo, starts i2pd, and waits. Nothing we build can influence what i2pd opens with. It is the flake already recorded against run #34, and the new detail worth keeping is the number: the first datagram was **63 bytes**, one byte under `SSU2Host.DispatchPacket`'s 64-byte floor, so whatever it is, it is not the TokenRequest the test wants and our own dispatcher would drop it too.
+
+**Next, in order:** carry an I2NP message to i2pd over the established session — that is the measurement 4-5 actually depends on, and nothing before it should be read as SSU2 being usable.

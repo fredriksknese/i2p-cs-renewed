@@ -47,10 +47,16 @@ shown. Until Gate 6, do not run this on the live network (netid 2) — use `--ne
 * NTCP2-PQ: *(off by default — handshake tests are quarantined, see batch 9-3)*
   * Inbound: 50%? working
   * Outbound: 50%? working
-* SSU2: *(off by default — no session has yet been established with i2pd, but the handshake now gets most of the way there and each remaining step is measured, not guessed)*
-  * Outbound against **real i2pd 2.61.0**, measured in CI: i2pd accepts our Session Request, answers `token mismatch. Retry`, accepts the retried request and logs our DateTime and Padding blocks by type and size, and we decrypt and authenticate its Session Created. The last measured failure was parsing that message's Address block (fixed in batch 4-0n; awaiting the next CI run to confirm)
+* SSU2: *(still off by default — the handshake now completes against i2pd, but the data phase with i2pd is not yet demonstrated)*
+  * **Outbound handshake with real i2pd 2.61.0: working, measured in CI as of batch 4-0n.**
+    `CSharpEstablishesAnSSU2SessionWithI2pd` reaches `Established` in 4 datagrams sent / 2 received,
+    including the token exchange — i2pd answers our first Session Request with a Retry and accepts
+    the retried one. This is the first SSU2 session this router has established with another
+    implementation
   * Outbound/Inbound C#-to-C#: handshake completes (batch 4-0h); data phase delivers 100 of 100 on a lossless channel (batch 4-1b) and 100 of 100 through 5% loss (batch 4-1, ACK and retransmit)
-  * **What "off by default" still means**: no end-to-end session with another implementation has been observed. Do not read the above as SSU2 working
+  * **Why it is still off**: an established handshake is not a working transport. Carrying I2NP
+    traffic to i2pd over that session is unmeasured, inbound sessions *from* i2pd are untested, and
+    21 of 54 integration tests still fail. Batch 4-5 turns it on, and only after the suite says so
 * SSU2-PQ: *(off by default)*
   * Inbound: Totally broken
   * Outbound: Totally broken
