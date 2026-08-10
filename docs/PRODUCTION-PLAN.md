@@ -1356,3 +1356,13 @@ final state Established after 4 sent / 2 received
 **It is not the cause.** The test fails on the *first datagram it receives*, before it sends anything at all — it publishes a RouterInfo, starts i2pd, and waits. Nothing we build can influence what i2pd opens with. It is the flake already recorded against run #34, and the new detail worth keeping is the number: the first datagram was **63 bytes**, one byte under `SSU2Host.DispatchPacket`'s 64-byte floor, so whatever it is, it is not the TokenRequest the test wants and our own dispatcher would drop it too.
 
 **Next, in order:** carry an I2NP message to i2pd over the established session — that is the measurement 4-5 actually depends on, and nothing before it should be read as SSU2 being usable.
+
+### Session 6 (continued) — batch 4-1c — **does the session actually carry anything?**
+
+4-0n established a session with i2pd. **That is not the same as a transport**, and the gap matters because 4-5 turns SSU2 on by default: the data phase uses different keys, a short header, and its own packet-number and ACK bookkeeping, none of which a handshake exercises.
+
+`CSharpDeliversAnI2npMessageToI2pdOverSsu2` sends a DatabaseStore of our own RouterInfo — what a real router sends first on a new session, so a rejection is about our framing and not about i2pd objecting to something it never asked for — and waits for `UnackedPacketCount` to return to zero.
+
+**The observable is i2pd's acknowledgement, not our own send returning.** Zero unacked means i2pd received the datagram, accepted it under the data-phase keys, and said so in an ACK block we then parsed. A test asserting only that `Send` was called would have passed against a black hole, which is exactly what the four CI runs before 4-0n were.
+
+The establishment path is now shared by both tests, on separate ports and separate i2pd instances, so neither depends on the other's teardown. Locally both still `Assert.Ignore` — i2pd 2.45.1 refuses us at its endpoint check — so **this answer comes from CI, like every SSU2 interop claim before it.**
