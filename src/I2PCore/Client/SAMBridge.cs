@@ -1526,6 +1526,12 @@ internal class SAMClientHandler
         var silent = parameters.GetValueOrDefault("SILENT", "false")
             .Equals("true", StringComparison.OrdinalIgnoreCase);
 
+        // SAM v3: STREAM STATUS answers the ACCEPT *command*, so it goes out now, before we
+        // block waiting for a peer. i2pd does the same (SAM.cpp, ProcessStreamAccept: the
+        // reply is sent, then AcceptOnce is armed). Deferring it until a stream arrives
+        // deadlocks any client that waits for the status before telling its peer to connect.
+        await SendReplyAsync("STREAM STATUS RESULT=OK");
+
         I2PStream i2pStream;
         try
         {
@@ -1536,19 +1542,24 @@ internal class SAMClientHandler
         {
             return;
         }
+        catch (Exception ex)
+        {
+            // Not reported in-band: the status line is spent, so anything written here would
+            // land in the client's data stream. Fail quietly, exactly as i2pd does.
+            Logging.LogWarning(
+                $"SAMBridge: STREAM ACCEPT in session '{sessionId}' failed: {ex}");
+            return;
+        }
 
         if (i2pStream == null)
         {
-            await SendReplyAsync("STREAM STATUS RESULT=I2P_ERROR MESSAGE=\"Accept failed\"");
+            Logging.LogWarning(
+                $"SAMBridge: STREAM ACCEPT in session '{sessionId}' produced no stream");
             return;
         }
 
         if (!silent)
-            // Send the remote destination before entering relay mode
-            // In the SAM spec, the destination is sent as the first line after OK
-            await SendReplyAsync("STREAM STATUS RESULT=OK");
-        else
-            await SendReplyAsync("STREAM STATUS RESULT=OK");
+            await SendPeerDestinationAsync(i2pStream.RemoteDestination);
 
         Logging.LogDebug(
             $"SAMBridge: STREAM ACCEPT in session '{sessionId}', stream {i2pStream.RecvStreamId:X8}");
@@ -1625,6 +1636,16 @@ internal class SAMClientHandler
                                 using (var tcpStream = tcpClient.GetStream())
                                 using (i2pStream)
                                 {
+                                    // Same contract as STREAM ACCEPT: unless SILENT, the peer's
+                                    // destination is the first line of the forwarded stream.
+                                    if (!silent && i2pStream.RemoteDestination is not null)
+                                    {
+                                        var head = Encoding.ASCII.GetBytes(
+                                            FreenetBase64.Encode(
+                                                new I2PByteBlock(i2pStream.RemoteDestination.ToByteArray())) + "\n");
+                                        await tcpStream.WriteAsync(head, 0, head.Length, _ct);
+                                    }
+
                                     await RelayForwardedStreamAsync(i2pStream, tcpStream);
                                 }
                             }
@@ -1810,6 +1831,30 @@ internal class SAMClientHandler
         {
             _streamLock.Release();
         }
+    }
+
+    /// <summary>
+    ///     Write the peer's destination, base64 and newline-terminated, as the first bytes of
+    ///     an accepted (or forwarded) stream — SAM v3 behaviour for SILENT=false.
+    /// </summary>
+    /// <remarks>
+    ///     Batch 3-7 (docs/PRODUCTION-PLAN.md). This is not a protocol reply, it is the head of
+    ///     the data stream: a conforming client reads one line, then treats everything after it
+    ///     as payload. Omitting it does not fail loudly — the client silently consumes the first
+    ///     N bytes of real payload as a destination and every byte after that is shifted, which
+    ///     is exactly how i2pd's version of this line reached us (as a hash mismatch on an
+    ///     otherwise byte-exact 5 MB transfer). i2pd: SAM.cpp, SAMSocket::HandleI2PAccept.
+    /// </remarks>
+    private async Task SendPeerDestinationAsync(I2PDestination peer)
+    {
+        if (peer is null)
+        {
+            Logging.LogWarning("SAMBridge: accepted stream has no remote destination to report");
+            return;
+        }
+
+        var b64 = FreenetBase64.Encode(new I2PByteBlock(peer.ToByteArray()));
+        await SendReplyAsync(b64);
     }
 
     private async Task SendReplyInternalAsync(string reply)

@@ -142,16 +142,53 @@ public class SAMHelper : IDisposable
 
     /// <summary>
     ///     Wait for an incoming stream connection (STREAM ACCEPT).
-    ///     Blocks until a connection arrives.
-    ///     After success, the underlying TCP socket becomes a raw data pipe.
+    ///     Blocks until a connection arrives, and returns the peer's base64 destination.
+    ///     After that, the underlying TCP socket is a raw data pipe.
     /// </summary>
-    public async Task StreamAcceptAsync(string sessionId)
+    /// <remarks>
+    ///     Batch 3-7 (docs/PRODUCTION-PLAN.md). Two lines arrive here, not one. STREAM STATUS
+    ///     answers the command; then, when a peer connects, a SAM v3 bridge with SILENT=false
+    ///     writes the peer's destination and a newline as the first bytes of the *data* stream
+    ///     (i2pd: SAM.cpp, SAMSocket::HandleI2PAccept). This helper used to read only the
+    ///     status, so every subsequent read started ~520 bytes into the destination line and
+    ///     the payload came out shifted. Because the callers read a fixed byte count, that
+    ///     surfaced as a byte-exact transfer with a mismatched SHA-256 — which is what
+    ///     TestSend5MB_I2pd2_To_I2pd3 has been reporting, in a path with no C# router in it.
+    /// </remarks>
+    public async Task<string> StreamAcceptAsync(string sessionId)
     {
         await SendLineAsync($"STREAM ACCEPT ID={sessionId}");
         var reply = await ReadLineAsync(120000);
 
         if (!reply.Contains("RESULT=OK"))
             throw new InvalidOperationException($"SAM STREAM ACCEPT failed: {reply}");
+
+        // Blocks until a peer connects. Same generous timeout the status read carried.
+        var peerDest = await ReadLineAsync(120000);
+
+        if (!LooksLikeDestination(peerDest))
+            throw new InvalidOperationException(
+                "SAM STREAM ACCEPT: expected the peer's destination as the first line of the " +
+                $"stream, got {peerDest.Length} bytes: {peerDest[..Math.Min(64, peerDest.Length)]}");
+
+        return peerDest;
+    }
+
+    /// <summary>
+    ///     A destination is at least 516 base64 characters (387 bytes of identity). Checking the
+    ///     shape rather than just "non-empty" is what makes a bridge that omits the line fail
+    ///     here instead of downstream: without the line, this read returns whatever payload
+    ///     precedes the first 0x0A byte, which is short and not base64.
+    /// </summary>
+    private static bool LooksLikeDestination(string s)
+    {
+        if (s.Length < 516) return false;
+
+        foreach (var c in s)
+            if (!(char.IsAsciiLetterOrDigit(c) || c == '-' || c == '~' || c == '='))
+                return false;
+
+        return true;
     }
 
     /// <summary>

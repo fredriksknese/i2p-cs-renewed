@@ -85,8 +85,11 @@ public class ScaledNetworkDataTransferTests
             "127.0.0.1", receiverSamPort, 30000);
         var acceptTask = Task.Run(async () =>
         {
-            await recvData.StreamAcceptAsync($"recv{sessionSuffix}");
-            Logging.LogInformation($"[{testName}] STREAM ACCEPT completed");
+            // Returns once a peer connects, carrying its destination — see SAMHelper for why
+            // reading that line is what makes the payload start where the test thinks it does.
+            var peer = await recvData.StreamAcceptAsync($"recv{sessionSuffix}");
+            Logging.LogInformation(
+                $"[{testName}] STREAM ACCEPT completed, peer {peer[..16]}...");
         });
 
         // Give ACCEPT time to start waiting
