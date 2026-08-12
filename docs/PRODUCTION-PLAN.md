@@ -129,6 +129,7 @@ Order is driven by one question: what must exist before SSU2/ECIES repair is eve
 | 3-10 | `p3/inactivity-visibility` | ✅ **Done.** The inactivity sweep empties the floodfill index, and a Release build could not say why: five `#if DEBUG` blocks in `RoutersStatistics` held the reason breakdown, so `NodeInactiveReason` was never even populated outside a Debug build. Also `InformationFaulty` short-circuited before any reason was recorded, the NetDb report printed roulette headers with no counts, and two further `#if DEBUG` diagnostics sat in `NetDb.cs` / `NetDb.Reports.cs`. | `NetDbDiagnosticsVisibilityTest` (source scan over `src/I2PCore/NetDb`, verified to bite); reason breakdown visible in the next CI run |
 | 3-11 | `p3/routerinfo-publish-ecies` | ✅ **Done.** **Why the floodfill index empties: we publish our RouterInfo in a form no modern floodfill can decrypt.** `SendUpdate` called `Garlic.EgEncryptGarlic` unconditionally, and so did both retry paths — three of the four garlic sends in `FloodfillUpdater`. Every i2pd since 2.36 has an X25519 identity, which reads an ElGamal block as a 32-byte Noise ephemeral key that is not a curve point: both scaled-fixture floodfills logged `Garlic: Incorrect N ephemeral public key` at the exact second of each of our publishes, 20 sends and 0 delivery statuses. The unanswered publishes are then charged to the floodfill as `FloodfillUpdateTimeout` — 3-10's reason breakdown says that is **100%** of why anything was swept. Encryption is now chosen in one place, from `GetECIESPublicKey()`, which is also the only accessor that takes the X25519 *trailing* 32 bytes of a hybrid key where the LeaseSet path handed Noise N the whole thing. The ECIES wrap is now `Garlic.EciesEncryptGarlic`, beside its ElGamal counterpart, replacing two copies. | `FloodfillPublishEncryptionTest` (unit, 4 tests, confirmed red with the defect reinstated): a published RouterInfo opens with the floodfill's own Noise N responder, an ElGamal identity still gets ElGamal, and the publisher decides its encryption in exactly one place |
 | 3-12 | `p3/publish-timeout-accounting` | **Diagnosed in session 7, from the 3-10 CI logs; do this next whatever 3-11's run says.** `TimeoutRegenerateRiUpdate` dereferences `list.Random()` for a log message (`FloodfillUpdater.cs:406`) and 3-9 made an empty floodfill list legitimate, so with no floodfill known it throws `NullReferenceException` out of `CheckTimeouts` every 5 s — the sibling LeaseSet path already guards with `if (ff is null) continue`. Two consequences, both on the statistic the sweep trusts: the LeaseSet retries after it never run, and the requests it never reached keep `TimedOut == false`, so `CheckTimeouts` charges the same unanswered publish to the same floodfill on every pass until the 80 s window drops it — up to twelve charges against a threshold of five. Mark `TimedOut` where the timeout is *detected*, so the count cannot depend on whether the retry succeeded. | A floodfill that fails to answer one publish is charged exactly one `FloodfillUpdateTimeout`; a sweep with no floodfills known does not throw |
+| 3-13 | `p3/obep-build-reply-framing` | ✅ **Done.** **Why i2pd never completes a tunnel through us: it discards every build reply we send as outbound endpoint.** Two defects in the same ten lines, both settled from i2pd's source. (1) A one-time symmetric garlic has no session to parse blocks against, so `SymmetricKeyTagSet::HandleNextMessage` reads **exactly one** block and requires it to be the clove; we led with a DateTime block, which is why the 3-12 run logged `Garlic: Symmetric key tagset unexpected block 0` **370 times**, once per reply, beside **689** `Pending build request timeout, deleted` and **zero** tunnels built. i2pd's own symmetric wrap passes `datetime=false`; only the Noise N wrap passes true. (2) The reply's I2NP message ID was copied from the arriving request instead of the endpoint record's send-message-ID field — the same value only because *our* creator sets `stbm.MessageId = replymessageid`, where i2pd's `Tunnel::Build` leaves it to `RAND_bytes`. So the reply would have been dropped as an unknown pending tunnel even once it could be read. The AEAD itself was always right: i2pd decrypted our garlic and rejected what was inside it. | `ObepBuildReplyFramingTest` (unit, 3 tests, decoding the reply by hand against i2pd's layout rather than through our own parser — confirmed red with each defect reinstated separately: 3/3 fail for the DateTime block, 1/3 for the message ID) |
 
 3-6 runs last in Phase 3. It is the difference between debugging SSU2 and debugging it blindfolded.
 
@@ -1910,3 +1911,52 @@ The fixture boots a real NetDb into a temp directory on netid 3 with `Bootstrap.
 4. **`2 + rinfos.Sum(inf => inf.Retries) * 2`** is always `2` for RouterInfo requests: the replacement is built with the constructor that has no retry count, so the sample widening never widens. Commented in place rather than changed, because making it live changes floodfill selection and nothing here can measure that.
 
 **Next: the CI run for this batch should show the RI delivery statuses of 3-11 with no charge against a floodfill that answered, and the 16 integration failures are now the whole story — start at `TestSAM_SessionCreate_I2pd`, which answers an empty SESSION STATUS and is the cheapest of them to read.**
+
+#### Addendum — CI on 3-12
+
+PR #47, run `31624921565`, merged. Build green, unit **336 / 0 / 1**, integration **36 passed / 16 failed** — the same set as 3-11, no movement either way. What the batch was for is visible in the artifacts:
+
+- **No `NullReferenceException` in either router log**, where the 3-10 run had one every 5 s.
+- **The reason breakdown is no longer `FloodfillUpdateTimeout`.** It reads `1 of 4 routers inactive. Reasons: InformationFaulty: 1 (100.0%)` and `2 of 13 routers inactive. Reasons: FailedTunnelTest: 2 (100.0%)`. The statistic the sweep trusts now reports something other than our own accounting error.
+- RI and LS delivery statuses continue to arrive (1 RI + 9 LS in the scaled run, 1 RI in the integration run).
+
+### Session 9 — batch 3-13 — **the tunnel build reply, read the way i2pd reads it**
+
+**Unit suite 339 passed / 0 failed / 1 skipped** (340 total, +3), Release build 0 errors.
+
+Starting where 3-12 pointed — `TestSAM_SessionCreate_I2pd`, "Expected SESSION STATUS, got:" — the empty reply turns out not to be a SAM defect at all. i2pd defers `SESSION STATUS` until the session's destination has tunnels, and in that run it had none: **689 `Pending build request timeout, deleted`, 529 `Creating destination outbound tunnel...`, and not one tunnel built.** The two failing SAM tests are exactly the two that ask for default-length tunnels; every SAM test that passes sets `inbound.length=0 outbound.length=0`.
+
+i2pd's tunnels in that fixture must run through us, and it says plainly why they cannot:
+
+```
+17:54:49 TunnelProvider: ECIES OBEP: Sent Garlic-wrapped build reply to IBGW [fm3ol]:3553813756
+17:54:49 i2pd  warn  - Garlic: Symmetric key tagset unexpected block 0
+17:54:49 i2pd  error - Garlic: Can't handle ECIES-X25519-AEAD-Ratchet message
+```
+
+**370 of those, one per reply we sent.**
+
+#### Two defects, and what makes them one batch
+
+**1. The payload must lead with the clove.** A tunnel build reply is wrapped in a garlic keyed by a one-time symmetric key and tag, both derived from the build record's Noise chaining key (`RGarlicKeyAndTag`). The receiver has no session to parse blocks against, so i2pd reads *exactly one* block and requires it to be the clove — `SymmetricKeyTagSet::HandleNextMessage` (`ECIESX25519AEADRatchetSession.cpp`) tests `buf[offset] != eECIESx25519BlkGalicClove` and returns false. Its own sender agrees: the symmetric `WrapECIESX25519Message` calls `CreateGarlicPayload(msg, payload, false, 956)` — datetime **off** — where the Noise N `WrapECIESX25519MessageForRouter` passes true. We led with a DateTime block on both paths.
+
+**2. The reply's message ID comes from the record, not from the request.** The creator matches a reply against its pending tunnels by I2NP message ID, and the ID it waits for is the one it wrote into the endpoint record's send-message-ID field at offset 52. i2pd's endpoint reads exactly that: `FillI2NPMessageHeader (eI2NPShortTunnelBuildReply, bufbe32toh (clearText + SHORT_REQUEST_RECORD_SEND_MSG_ID_OFFSET))`. We copied `stbm.MessageId`, the arriving request's header ID — which is the same value **only because our own creator sets `stbm.MessageId = replymessageid`**, while i2pd's `Tunnel::Build` ends with a bare `FillI2NPMessageHeader (eI2NPShortTunnelBuild)` and `FillI2NPMessageHeader` fills an unset ID with `RAND_bytes`.
+
+So the reply would have been dropped as an unknown pending tunnel even after the framing let it be read. That is why both are in one batch: fixing either alone moves nothing measurable.
+
+**What was never wrong is worth recording.** i2pd *decrypted* our garlic — it reached a block-type check, which is past the AEAD — so the `RGarlicKeyAndTag` derivation, the tag byte order, the AD, and the nonce were all already correct. This is the plan's signature defect for the eighth time: our writer and our reader agreed with each other, and with nobody else.
+
+#### The guard
+
+`ObepBuildReplyFramingTest`, three tests, driving the new `TunnelProvider.CreateObepBuildReply` — the OBEP reply path lifted out of `HandleShortTunnelBuildRecords`, which needs a NetDb and a transport layer to reach. The decode is **hand-written against i2pd's layout** (`GarlicDestination::HandleECIESx25519GarlicClove`: flag | type | msgID | expiration | payload) rather than calling our own parser, because our parser is half of what hid the defect.
+
+Confirmed red separately: reinstating the DateTime block fails all three; reinstating `MessageId = stbm.MessageId` fails one, on the assertion that the arriving message's ID matches nothing.
+
+#### What this does not settle
+
+1. **Whether i2pd then accepts the reply *records*.** Getting the garlic read is a precondition; the per-hop AEAD reply record under the reply key is the next gate, and nothing but a CI run can test it — `NoiseNSelfTest` only proves we agree with ourselves.
+2. **The two SAM tests are still fixture-shaped.** `TestSAM_SessionCreate_I2pd` and `TestSAM_DatagramSession_I2pd` ask i2pd for default-length tunnels; if tunnels through us now build, they should pass, but neither test says what tunnel length it depends on. Worth pinning either way.
+3. **Non-endpoint records carry `NextMessageId = 0`** (`VariableTunnelBuildMessage.cs:347,454`) where i2pd puts a random ID in every non-final record. Harmless as far as this reading goes — a forwarded build message's ID is matched by nobody — but it is a divergence, and it makes our outer STBM ID equal to the reply ID, which i2pd deliberately avoids.
+4. **`TunnelProvider.cs:1814` still has an `#if DEBUG`** around a build-timeout diagnostic. 3-10 removed these from `src/I2PCore/NetDb` and `NetDbDiagnosticsVisibilityTest` guards that directory only; the tunnel layer has never been swept.
+
+**Next: read the CI run for this batch for `Tunnels: Tunnel ... created` in the i2pd logs, and for the count of `Pending build request timeout, deleted` against the 689 above. If tunnels build, `TestSAM_SessionCreate_I2pd` and the fourteen 5 MB transfers are the ones to re-read; if they still time out, the reply *records* are the next suspect and the failure will have moved past the garlic.**
