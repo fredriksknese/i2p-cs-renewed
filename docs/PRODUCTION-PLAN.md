@@ -127,6 +127,8 @@ Order is driven by one question: what must exist before SSU2/ECIES repair is eve
 | 3-8 | `p3/sam-session-destination-keys` | ✅ **Done.** `SESSION STATUS ... DESTINATION=` carries the session's **private keys**, destination-first — i2pd sends 884 base64 characters where a bare destination is 524. Two NetDb tests took `SHA256` over the whole decoded string and asserted the network could find a LeaseSet for the result; every floodfill answered "Requested LeaseSet not found", correctly. `SAMBridge` sent the bare destination instead of the keys, discarding a `privKeyBase64` it had already computed. | `SamSessionDestinationTest` (unit); integration `LeaseSetLookupAndEncryptionVerification` and `SamDataTransferWithLeaseSetLookup` in CI |
 | 3-9 | `p3/floodfill-selection-honesty` | ✅ **Done.** A request for a floodfill could be answered with a router that is not one. `GetRandomRouter`'s `exploratory` branch ignored the roulette it was handed and drew from every known router; both fallbacks did the same when the roulette was empty. `FloodfillUpdater` asks with `exploratory: true`, so a router knowing no floodfills published its LeaseSets to arbitrary peers that discard them — while logging "Publishing LS to ECIES FF". Also: an empty roulette threw `NullReferenceException` out of `GetWeightedRandom`, and `GetRandomRouter` NRE'd before the transport layer started. | `FloodfillSelectionTest` (unit, isolated NetDb — red before, green after); `FloodfillRecognitionTest` against a real i2pd floodfill RouterInfo |
 | 3-10 | `p3/inactivity-visibility` | ✅ **Done.** The inactivity sweep empties the floodfill index, and a Release build could not say why: five `#if DEBUG` blocks in `RoutersStatistics` held the reason breakdown, so `NodeInactiveReason` was never even populated outside a Debug build. Also `InformationFaulty` short-circuited before any reason was recorded, the NetDb report printed roulette headers with no counts, and two further `#if DEBUG` diagnostics sat in `NetDb.cs` / `NetDb.Reports.cs`. | `NetDbDiagnosticsVisibilityTest` (source scan over `src/I2PCore/NetDb`, verified to bite); reason breakdown visible in the next CI run |
+| 3-11 | `p3/routerinfo-publish-ecies` | ✅ **Done.** **Why the floodfill index empties: we publish our RouterInfo in a form no modern floodfill can decrypt.** `SendUpdate` called `Garlic.EgEncryptGarlic` unconditionally, and so did both retry paths — three of the four garlic sends in `FloodfillUpdater`. Every i2pd since 2.36 has an X25519 identity, which reads an ElGamal block as a 32-byte Noise ephemeral key that is not a curve point: both scaled-fixture floodfills logged `Garlic: Incorrect N ephemeral public key` at the exact second of each of our publishes, 20 sends and 0 delivery statuses. The unanswered publishes are then charged to the floodfill as `FloodfillUpdateTimeout` — 3-10's reason breakdown says that is **100%** of why anything was swept. Encryption is now chosen in one place, from `GetECIESPublicKey()`, which is also the only accessor that takes the X25519 *trailing* 32 bytes of a hybrid key where the LeaseSet path handed Noise N the whole thing. The ECIES wrap is now `Garlic.EciesEncryptGarlic`, beside its ElGamal counterpart, replacing two copies. | `FloodfillPublishEncryptionTest` (unit, 4 tests, confirmed red with the defect reinstated): a published RouterInfo opens with the floodfill's own Noise N responder, an ElGamal identity still gets ElGamal, and the publisher decides its encryption in exactly one place |
+| 3-12 | `p3/publish-timeout-accounting` | **Diagnosed in session 7, from the 3-10 CI logs; do this next whatever 3-11's run says.** `TimeoutRegenerateRiUpdate` dereferences `list.Random()` for a log message (`FloodfillUpdater.cs:406`) and 3-9 made an empty floodfill list legitimate, so with no floodfill known it throws `NullReferenceException` out of `CheckTimeouts` every 5 s — the sibling LeaseSet path already guards with `if (ff is null) continue`. Two consequences, both on the statistic the sweep trusts: the LeaseSet retries after it never run, and the requests it never reached keep `TimedOut == false`, so `CheckTimeouts` charges the same unanswered publish to the same floodfill on every pass until the 80 s window drops it — up to twelve charges against a threshold of five. Mark `TimedOut` where the timeout is *detected*, so the count cannot depend on whether the retry succeeded. | A floodfill that fails to answer one publish is charged exactly one `FloodfillUpdateTimeout`; a sweep with no floodfills known does not throw |
 
 3-6 runs last in Phase 3. It is the difference between debugging SSU2 and debugging it blindfolded.
 
@@ -1795,3 +1797,50 @@ RoutersStatistics: 1 of  4 routers inactive. Reasons: FloodfillUpdateTimeout: 1 
 **Not one of the other five tests fired.** Nothing was swept for failed tunnel builds, failed connects, unresolvable idents or age. Every router the sweep removed — including both floodfills, which is what empties the index — was removed for failing to answer a publish.
 
 So the question changed from "why does the sweep fire" to "why does no floodfill ever answer us", which the same artifacts settle.
+
+### Session 7 (continued) — batch 3-11 — **we publish our RouterInfo in a form no modern floodfill can decrypt**
+
+**Unit suite 333 passed / 0 failed / 1 skipped** (334 total, +4), Release build 0 errors.
+
+`SendUpdate` — the RouterInfo publish — wrapped its DatabaseStore with `Garlic.EgEncryptGarlic`, unconditionally. So did `TimeoutRegenerateLsUpdate`, the LeaseSet *retry*. Only `StartNewUpdatesLeaseSetInternal`, one of four garlic sends in the file, asked what key the recipient holds.
+
+Every i2pd since 2.36 has an X25519 identity. Handed an ElGamal block, it reads the first 32 bytes as a Noise N ephemeral key, finds something that is not a curve point, and drops the message.
+
+#### The evidence, from the 3-10 artifacts
+
+Our sends, and the two floodfills' reactions, to the second:
+
+```
+17:45:44 FloodfillUpdater: RI replacement update [lueyf]     17:45:44 i2pd_scaled_0 warn - Garlic: Incorrect N ephemeral public key
+17:46:08 FloodfillUpdater: RI replacement update [lueyf]     17:46:08 i2pd_scaled_0 warn - Garlic: Incorrect N ephemeral public key
+17:46:32 FloodfillUpdater: RI replacement update [lueyf]     17:46:32 i2pd_scaled_0 warn - Garlic: Incorrect N ephemeral public key
+17:46:56 FloodfillUpdater: RI replacement update [lueyf]     17:46:56 i2pd_scaled_0 warn - Garlic: Incorrect N ephemeral public key
+17:47:44 … 17:49:20, four more                               same four seconds, i2pd_scaled_1
+```
+
+Twenty RouterInfo publishes in the run. **Zero delivery statuses for any of them** — the single `FloodfillUpdater: Floodfill delivery status … received` line in the whole log is an `LS`, from the one path that chose correctly. That is the whole chain: unreadable publish → no reply → `FloodfillUpdateTimeout` → the 100% above → both floodfills swept → `Floodfills known: 0` → nothing can be published at all, LeaseSets included, and every client is offline.
+
+#### What changed
+
+- **`Garlic.EciesEncryptGarlic`**, beside `EgEncryptGarlic`, because which one applies is a property of the recipient and the two belong in one place. It replaces two copies of the same twenty lines (`IdentResolver.WrapInEciesGarlic`, `FloodfillUpdater.SendLeaseSetUpdateEciesGarlic`) and takes any `I2NpMessage` rather than one message type each.
+- **`FloodfillUpdater.WrapForFloodfill`** is now the only place the publisher decides. All four sends go through it.
+- **`GetECIESPublicKey()` is the question**, not a `PublicKeyType` switch. For a hybrid identity the X25519 half is the *trailing* 32 bytes; the LeaseSet path passed `PublicKey.ToByteArray()` whole, which is correct only for a locally generated key and wrong for one parsed off the wire.
+- **The two `SendLeaseSetUpdate*` methods collapse into one.** They differed only in the encryption they had already chosen.
+- A retry that could not be sent no longer registers an outstanding request. It would have charged the floodfill a timeout for a message it never received — the same statistic this batch exists to stop corrupting.
+
+#### The guard
+
+`FloodfillPublishEncryptionTest`, four tests, all confirmed red against the pre-fix file:
+
+- a RouterInfo we publish to an X25519 floodfill opens with **that floodfill's own Noise N responder**, and carries our ident and the reply token (without which no delivery status is ever sent, and a perfect publish still counts as a timeout);
+- the same for an ML-KEM hybrid identity, which also pins `GetECIESPublicKey()` at 32 bytes;
+- an identity that really does hold an ElGamal key still gets ElGamal — the fix is a choice, not a replacement;
+- the publisher names an encryption function exactly twice, both inside `WrapForFloodfill`. The pre-fix file has three such calls, so the scan bites.
+
+#### What this does not settle
+
+1. **The reply is still requested direct, not through a tunnel.** `SendUpdate` sets reply gateway = us, reply tunnel = 0, so i2pd answers over transport and needs a session to us. Legal, and worse for anonymity than the LeaseSet path's inbound-tunnel reply. If publishes still time out in the next run, this is the next suspect, and it is a batch of its own.
+2. **`TimeoutRegenerateRiUpdate` still throws `NullReferenceException`** when no floodfill is known — `list.Random()` returns null and line 406 dereferences it for a log message. 3-9 made the empty list legitimate; the sibling LS path already guards with `if (ff is null) continue`. It fired every 5 s in both CI logs, and it aborts `CheckTimeouts` **before** the LeaseSet retries, so those requests are never marked `TimedOut` and are re-counted as fresh timeouts on every pass until the 80 s window drops them — up to twelve charges for one unanswered publish, against a threshold of five. It is the amplifier that turned a slow failure into an emptied index. Left out of this batch so that the encryption fix can be measured on its own; **it is batch 3-12, and it should be the next thing done whatever the next CI run says.**
+3. **The asymmetric removal from 3-9 is still there.** `RemoveRouterInfo` soft-deletes in `RouterInfos` and hard-removes from `FloodfillInfos`.
+
+**Next: read the next CI run for `FloodfillUpdater: Floodfill delivery status RI …`. If it appears, the publish path works end-to-end against a real floodfill for the first time, and the sweep should stop taking floodfills with it.**

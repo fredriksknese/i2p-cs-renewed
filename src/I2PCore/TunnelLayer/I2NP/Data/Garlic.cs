@@ -2,12 +2,18 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
+using I2PCore.Crypto.Noise;
 using I2PCore.Data;
+using I2PCore.SessionLayer.ECIES;
 using I2PCore.TunnelLayer.I2NP.Messages;
 using I2PCore.Utils;
 using Org.BouncyCastle.Crypto.Engines;
 using Org.BouncyCastle.Crypto.Modes;
 using static I2PCore.TunnelLayer.I2NP.Messages.I2NpMessage;
+
+// Spelled out: a bare "Block" in a garlic file reads as the transport-layer one
+// (TransportLayer/BlockTypes.cs), and these are the ECIES payload blocks.
+using EciesBlock = I2PCore.SessionLayer.ECIES.Block;
 
 namespace I2PCore.TunnelLayer.I2NP.Data;
 
@@ -80,6 +86,61 @@ public class Garlic : I2PType
     public override string ToString()
     {
         return $"Garlic: {Cloves?.Count} cloves. {string.Join(", ", Cloves)}";
+    }
+
+    /// <summary>
+    ///     Wrap one I2NP message in an ECIES garlic message (Noise N) addressed to
+    ///     <paramref name="remoteStaticPublicKey" /> — the X25519 static key from the recipient's
+    ///     RouterInfo, as <c>I2PRouterInfo.GetECIESPublicKey()</c> returns it. The clove carries
+    ///     local delivery instructions, so the recipient processes the message itself.
+    /// </summary>
+    /// <remarks>
+    ///     Batch 3-11 (docs/PRODUCTION-PLAN.md). This sits beside <see cref="EgEncryptGarlic" />
+    ///     deliberately: which of the two applies is decided by the recipient's key type, and
+    ///     three of the four garlic sends in <c>FloodfillUpdater</c> took the ElGamal one
+    ///     unconditionally. An ElGamal block sent to an X25519 router is read as a 32-byte Noise
+    ///     ephemeral key that is not a curve point — i2pd logs "Garlic: Incorrect N ephemeral
+    ///     public key" and drops it, which is what it did to every RouterInfo we published.
+    /// </remarks>
+    public static GarlicMessage EciesEncryptGarlic(
+        I2NpMessage msg,
+        byte[] remoteStaticPublicKey,
+        int expirySeconds = 20)
+    {
+        if (remoteStaticPublicKey is null || remoteStaticPublicKey.Length != 32)
+            throw new ArgumentException(
+                $"Noise N needs a 32 byte X25519 static key, got {remoteStaticPublicKey?.Length.ToString() ?? "null"}",
+                nameof(remoteStaticPublicKey));
+
+        // ECIES clove format (Proposal 144 / readBytesRatchet):
+        //   DeliveryInstructions(1 byte: 0x00 = local) + type(1) + msgID(4) + expiration_secs(4) + payload
+        var cloveStream = new ArrayBufferWriter<byte>();
+        cloveStream.WriteByte(0); // Local delivery
+        cloveStream.WriteByte((byte)msg.MessageType);
+        cloveStream.WriteBlock(BufUtils.Flip32Bl(msg.MessageId));
+        cloveStream.WriteBlock(
+            BufUtils.Flip32Bl((uint)(DateTimeOffset.UtcNow.ToUnixTimeSeconds() + expirySeconds)));
+        cloveStream.WriteBlock(msg.Payload);
+
+        var blocks = new List<EciesBlock>
+        {
+            new DateTimeBlock { Timestamp = (uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds() },
+            new GarlicCloveBlock { Data = cloveStream.WrittenSpan.ToArray() },
+            new PaddingBlock { Data = BufUtils.RandomBytes(16 + BufUtils.RandomInt(32)) }
+        };
+
+        // NoiseN has a Dispose but does not implement IDisposable, so no using statement.
+        var noiseN = NoiseN.CreateInitiator(remoteStaticPublicKey);
+        try
+        {
+            // The Noise N output is the garlic payload itself — a new session carries no tag
+            // prefix. GarlicMessage adds the 4-byte length prefix.
+            return new GarlicMessage(noiseN.CreateMessage(ECIESBlockFormat.BuildBlocks(blocks)));
+        }
+        finally
+        {
+            noiseN.Dispose();
+        }
     }
 
     public static GarlicMessage EgEncryptGarlic(

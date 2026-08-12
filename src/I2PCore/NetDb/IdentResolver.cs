@@ -1,10 +1,8 @@
 ﻿using System;
-using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
-using I2PCore.Crypto.Noise;
 using I2PCore.Data;
 using I2PCore.SessionLayer;
 using I2PCore.SessionLayer.ECIES;
@@ -13,7 +11,6 @@ using I2PCore.TunnelLayer;
 using I2PCore.TunnelLayer.I2NP.Data;
 using I2PCore.TunnelLayer.I2NP.Messages;
 using I2PCore.Utils;
-using Block = I2PCore.SessionLayer.ECIES.Block;
 using GarlicClove = I2PCore.TunnelLayer.I2NP.Data.GarlicClove;
 
 namespace I2PCore;
@@ -652,7 +649,8 @@ public class IdentResolver
             // Garlic-wrap the DLM to the floodfill's ECIES public key using Noise N.
             // Java: outMsg = MessageWrapper.wrap(ctx, dlm, ri)
             // This creates a GarlicMessage containing the DLM as a local-delivery clove.
-            var garlicMsg = WrapInEciesGarlic(dlm, ffPubKey);
+            // 20s expiry, like Java's SINGLE_SEARCH_MSG_TIME.
+            var garlicMsg = Garlic.EciesEncryptGarlic(dlm, ffPubKey);
 
             Logging.LogDebug($"IdentResolver: ECIES garlic-wrapped DLM for {ident.Id32Short} to ff {ffHash.Id32Short}");
             return garlicMsg;
@@ -662,45 +660,6 @@ public class IdentResolver
             Logging.LogWarning($"IdentResolver: ECIES garlic wrap failed for ff {ffHash.Id32Short}: {ex.Message}");
             return null;
         }
-    }
-
-    /// <summary>
-    ///     Wrap a DatabaseLookupMessage in an ECIES garlic message (Noise N).
-    ///     Uses the same ECIES block format as TunnelProvider.CreateECIESGarlicMessage().
-    ///     The clove uses local delivery instructions so the floodfill processes the DLM locally.
-    /// </summary>
-    private static GarlicMessage WrapInEciesGarlic(DatabaseLookupMessage dlm, byte[] ffPublicKey)
-    {
-        // Build the garlic clove with local delivery instructions.
-        // ECIES clove format (per Proposal 144 / readBytesRatchet):
-        //   DeliveryInstructions(1 byte: 0x00 = local) + type(1) + msgID(4) + expiration_secs(4) + payload
-        var cloveStream = new ArrayBufferWriter<byte>();
-        cloveStream.WriteByte(0); // Local delivery
-        cloveStream.WriteByte((byte)dlm.MessageType);
-        cloveStream.WriteBlock(BufUtils.Flip32Bl(dlm.MessageId));
-        var expirationSecs =
-            (uint)(DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 20); // 20s like Java SINGLE_SEARCH_MSG_TIME
-        cloveStream.WriteBlock(BufUtils.Flip32Bl(expirationSecs));
-        cloveStream.WriteBlock(dlm.Payload);
-
-        // Build ECIES blocks: DateTime + GarlicClove + Padding
-        var blocks = new List<Block>
-        {
-            new DateTimeBlock { Timestamp = (uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds() },
-            new GarlicCloveBlock { Data = cloveStream.WrittenSpan.ToArray() },
-            new PaddingBlock { Data = BufUtils.RandomBytes(16 + BufUtils.RandomInt(32)) }
-        };
-
-        var plaintext = ECIESBlockFormat.BuildBlocks(blocks);
-
-        // Encrypt using Noise N to the floodfill's X25519 public key
-        var noiseN = NoiseN.CreateInitiator(ffPublicKey);
-        var encrypted = noiseN.CreateMessage(plaintext);
-        noiseN.Dispose();
-
-        // The Noise N output IS the garlic payload (no tag prefix for new sessions).
-        // Wrap in GarlicMessage which adds the 4-byte length prefix.
-        return new GarlicMessage(encrypted);
     }
 
     /// <summary>

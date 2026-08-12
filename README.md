@@ -88,6 +88,14 @@ shown. Until Gate 6, do not run this on the live network (netid 2) — use `--ne
     * Direct: RI store and lookup working
     * Via tunnels: LS2 store and lookup working
     * Via tunnels: RI store and lookup working
+  * **Publishing to a real floodfill did not work until batch 3-11, and the "working" claims
+    above are the original author's, measured only C#-to-C#.** In CI, 20 of 20 RouterInfo
+    publishes were rejected by both i2pd floodfills (`Garlic: Incorrect N ephemeral public
+    key`): three of the four garlic sends encrypted with ElGamal whatever key the recipient
+    held, and every i2pd since 2.36 is X25519. The unanswered publishes were then charged to
+    the floodfills as timeouts, which swept them out of the index — after which a router knows
+    **zero** floodfills and publishes nothing at all, LeaseSets included. 3-11 fixes the
+    encryption; the timeout accounting that amplified it is batch 3-12
   * Working NetDb isolation for different client destinations/named tunnel pools
 * Session layer encryption (the e2ee through tunnels between clients or client <-> server) / "TCP" Streaming
   * ECIES-X25519: 70%? Doesn't work properly *(the default)*
