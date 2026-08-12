@@ -1782,3 +1782,16 @@ Five such blocks in `RoutersStatistics`, and they do not merely suppress the rep
 #### What this does not do
 
 **It fixes nothing about the sweep itself.** The asymmetric removal recorded in the previous entry is untouched: `RemoveRouterInfo` still soft-deletes in `RouterInfos` and hard-removes from `FloodfillInfos`, and only a strictly newer RouterInfo restores it. That is deliberate — the next batch should be driven by the reason breakdown this one makes visible, not by a guess about which of the six inactivity tests is firing. **Next: read `RoutersStatistics: N of M routers inactive. Reasons: …` from the next CI run, then fix the sweep or the statistic it trusts.**
+
+#### Addendum — CI on 3-10, and the diagnostic answering in one line
+
+PR #45, run `31414288923`. Build green, unit **329 / 0 / 1**, integration **34 passed / 18 failed**, the same band three runs have now held (the job itself reports green; it is `continue-on-error`). The reason breakdown fired twice, and said the same thing both times:
+
+```
+RoutersStatistics: 3 of 11 routers inactive. Reasons: FloodfillUpdateTimeout: 3 (100.0%)
+RoutersStatistics: 1 of  4 routers inactive. Reasons: FloodfillUpdateTimeout: 1 (100.0%)
+```
+
+**Not one of the other five tests fired.** Nothing was swept for failed tunnel builds, failed connects, unresolvable idents or age. Every router the sweep removed — including both floodfills, which is what empties the index — was removed for failing to answer a publish.
+
+So the question changed from "why does the sweep fire" to "why does no floodfill ever answer us", which the same artifacts settle.
