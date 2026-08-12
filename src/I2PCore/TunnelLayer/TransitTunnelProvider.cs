@@ -49,9 +49,9 @@ public class TransitTunnelProvider : ITunnelOwner
     ///     "Reject due same next destination" — because a test network has exactly one next hop we
     ///     can ever be asked for. Two tunnels were built out of 529 attempts.
     ///
-    ///     Java counts the previous hop in the same counter as the next hop. We count only the next
-    ///     hop: the amplification argument is about where traffic is aimed, and counting both would
-    ///     halve the budget again in exactly the small networks this batch exists to unblock.
+    ///     Java counts the previous hop in the same counter as the next hop, and counts requests
+    ///     rather than acceptances. We do neither — see <see cref="NextHopBudgetAllows" /> for why
+    ///     the second of those is the one that decides whether a small network works at all.
     /// </summary>
     private readonly ItemFilterWindow<I2PIdentHash> NextHopFilter = new(NextHopWindow, MinNextHopRequests);
 
@@ -475,9 +475,40 @@ public class TransitTunnelProvider : ITunnelOwner
             Math.Min(MaxNextHopRequests, transittunnelcount * NextHopPercentOfTransit / 100));
     }
 
+    /// <summary>
+    ///     The budget counts tunnels we **agreed to relay** toward a hop, not requests we were
+    ///     asked to consider.
+    ///
+    ///     Java increments its counter before checking, so a refused request still spends budget.
+    ///     That is safe for a router with hundreds of possible next hops — a flood aimed at one
+    ///     peer leaves tunnels toward every other peer unaffected, and Java escalates from REJECT
+    ///     to DROP past 9/8 of the limit, treating the flood as abuse rather than as traffic.
+    ///     Neither holds here, and the first cut of batch 3-14 shipped Java's rule unchanged: the
+    ///     CI run answered **9 of 1166 requests, 99.2% refused by this filter**, because a peer
+    ///     retrying a failed build ~35 times a minute spent a budget of four per window on
+    ///     refusals and never recovered. A softer version of the latch the same batch removed.
+    ///
+    ///     Counting acceptances is also the better anti-amplification measure: what a peer can be
+    ///     hurt by is the traffic we relay toward it, and that is bounded by tunnels accepted.
+    ///     Refused requests still cost us a record decryption and a reply, which is request-rate
+    ///     abuse — a different problem, for a throttle keyed on the sender rather than the target.
+    /// </summary>
+    internal static bool NextHopBudgetAllows(int acceptedinwindow, int limit)
+    {
+        return acceptedinwindow < limit;
+    }
+
     internal bool AcceptingTunnels(I2PIdentHash nextIdent)
     {
-        return Decision(EvaluateBuildRequest(nextIdent));
+        return Finalise(nextIdent, EvaluateBuildRequest(nextIdent));
+    }
+
+    /// <summary>Records the decision — and, when we accept, spends one of the hop's budget.</summary>
+    private bool Finalise(I2PIdentHash nextIdent, string decision)
+    {
+        if (decision == DecisionAccept && nextIdent != null) NextHopFilter.Update(nextIdent);
+
+        return Decision(decision);
     }
 
     /// <summary>Decides, without recording — the two callers count exactly one decision each.</summary>
@@ -493,12 +524,13 @@ public class TransitTunnelProvider : ITunnelOwner
         var currenttunnelcount = TransitTunnelCount;
         RouterContext.Inst.CurrentTransitTunnelCount = currenttunnelcount;
 
-        // Reject if we've seen the same next-hop destination too many times recently
+        // Reject if we have already agreed to relay enough toward this next hop recently
         var nexthoplimit = NextHopRequestLimit(currenttunnelcount);
-        if (nextIdent != null && !NextHopFilter.Update(nextIdent, nexthoplimit))
+        var acceptedforhop = nextIdent is null ? 0 : NextHopFilter.Count(nextIdent);
+        if (!NextHopBudgetAllows(acceptedforhop, nexthoplimit))
         {
-            Logging.LogDebug($"TransitProvider AcceptingTunnels: Reject, {NextHopFilter.Count(nextIdent)} requests " +
-                             $"for next hop {nextIdent.Id32Short} in {NextHopWindow}, limit {nexthoplimit}. " +
+            Logging.LogDebug($"TransitProvider AcceptingTunnels: Reject, {acceptedforhop} tunnels already " +
+                             $"accepted toward {nextIdent?.Id32Short} in {NextHopWindow}, limit {nexthoplimit}. " +
                              $"Running tunnels: {currenttunnelcount}.");
             return DecisionNextHop;
         }
@@ -536,7 +568,7 @@ public class TransitTunnelProvider : ITunnelOwner
             decision = DecisionRecent;
         }
 
-        if (!Decision(decision)) return false;
+        if (!Finalise(drec.NextIdent, decision)) return false;
 
         AcceptedTunnelBuildRequest(drec);
         return true;

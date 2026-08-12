@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using I2PCore.TunnelLayer;
@@ -78,16 +79,46 @@ public class NextHopThrottleTest
 
         Assert.AreEqual( JavaFloor, limit,
             "a router carrying nothing uses Java's floor, not a constant of two" );
+        Assert.GreaterOrEqual( limit, 3,
+            "one accepted tunnel per window cannot sustain a peer's pool — that is the 3-13 run" );
+    }
 
+    /// <summary>
+    ///     The correction the first CI run for this batch forced. Java spends budget on requests it
+    ///     refuses; with one possible next hop and a peer retrying a failed build ~35 times a
+    ///     minute, that spent a budget of four on refusals and never recovered — 9 of 1166 answered,
+    ///     99.2% refused by this filter. The budget counts tunnels accepted toward the hop.
+    /// </summary>
+    [Test]
+    public void RefusedRequestsDoNotSpendTheBudget()
+    {
+        var limit = TransitTunnelProvider.NextHopRequestLimit( 0 );
         var filter = new ItemFilterWindow<string>( TickSpan.Seconds( 11 * 60 / 3 ), limit );
-        var accepted = Enumerable
-            .Range( 0, 10 )
-            .Count( _ => filter.Update( "the only next hop there is", limit ) );
+        const string theonlynexthopthereis = "the only next hop there is";
 
-        Assert.AreEqual( limit - 1, accepted,
-            "ten requests for the same next hop, of which the window's worth are answered" );
-        Assert.GreaterOrEqual( accepted, 3,
-            "one accepted request per window cannot sustain a tunnel pool — that is the 3-13 run" );
+        var accepted = 0;
+
+        // A retry storm: far more requests than the budget, arriving before anything expires.
+        foreach ( var _ in Enumerable.Range( 0, 200 ) )
+            if ( TransitTunnelProvider.NextHopBudgetAllows( filter.Count( theonlynexthopthereis ), limit ) )
+            {
+                filter.Update( theonlynexthopthereis );
+                accepted++;
+            }
+
+        Assert.AreEqual( limit, accepted,
+            "the whole budget is spent on tunnels we agreed to carry, and none of it on refusals" );
+    }
+
+    [Test]
+    public void CheckingTheBudgetDoesNotSpendIt()
+    {
+        var filter = new ItemFilterWindow<string>( TickSpan.Minutes( 5 ), 2 );
+
+        Enumerable.Range( 0, 50 ).ToList().ForEach( _ => filter.Count( "peer" ) );
+
+        Assert.AreEqual( 0, filter.Count( "peer" ),
+            "asking how much a peer has used must not itself use any" );
     }
 
     [Test]
@@ -119,6 +150,45 @@ public class NextHopThrottleTest
         StringAssert.Contains( "3 accepted", report );
         StringAssert.Contains( "RejectNextHopThrottle: 528", report );
         StringAssert.Contains( "99.4%", report, "the dominant reason has to carry its share" );
+    }
+
+    /// <summary>
+    ///     The policy tests above cannot see the defect that actually shipped: it was not in the
+    ///     rule but in *where* the budget was spent. So this one reads the source, as batches 3-11
+    ///     and 3-12 did for the same reason — the mistake is a call in the wrong place, and no
+    ///     amount of driving the pure functions will find it.
+    /// </summary>
+    [Test]
+    public void TheBudgetIsSpentOnlyWhereWeAccept()
+    {
+        var source = File.ReadAllLines( ProviderSourcePath() );
+
+        var spends = source
+            .Select( ( line, index ) => ( line, index ) )
+            .Where( l => l.line.Contains( "NextHopFilter.Update(" ) )
+            .ToArray();
+
+        Assert.AreEqual( 1, spends.Length,
+            "the hop's budget must be spent in exactly one place; a second call is how the first "
+            + "cut of this batch spent it on requests it went on to refuse" );
+
+        var context = string.Join( " ",
+            source.Skip( System.Math.Max( 0, spends[0].index - 2 ) ).Take( 5 ) );
+
+        StringAssert.Contains( "DecisionAccept", context,
+            "the one call must be guarded by having decided to accept" );
+    }
+
+    private static string ProviderSourcePath()
+    {
+        var dir = TestContext.CurrentContext.TestDirectory;
+
+        while ( dir != null && !Directory.Exists( Path.Combine( dir, "src", "I2PCore" ) ) )
+            dir = Directory.GetParent( dir )?.FullName;
+
+        Assert.IsNotNull( dir, "could not locate the repository root from the test directory" );
+
+        return Path.Combine( dir!, "src", "I2PCore", "TunnelLayer", "TransitTunnelProvider.cs" );
     }
 
     [Test]
