@@ -272,55 +272,64 @@ public class RoutersStatistics
         return fail - offset > multip * success;
     }
 
-    private bool TestInactive(Func<bool> test, string desc)
+    private bool TestInactive(Func<bool> test, string desc, bool record)
     {
         var result = test();
-#if DEBUG
-        if (UpdateInactiveStatistics && result) AddInactiveReason(desc);
-#endif
+        if (record && result) AddInactiveReason(desc);
         return result;
     }
 
     public bool NodeInactive(RouterStatistics d)
     {
-        if (d.InformationFaulty > 0) return true;
+        // Batch 3-10. Three things this one line settles:
+        //  - A local, not the shared field it replaced. NodeInactive runs on the NetDb worker and
+        //    on whatever thread is asking GetClosestFloodfill; the old flag was only ever set
+        //    inside #if DEBUG, so making the recording unconditional would have promoted a
+        //    debug-only race into a production one.
+        //  - Recorded at any log level. It is one dictionary increment, on the inactive path,
+        //    once per statistic -- and gating it on Debug would leave the report below with
+        //    nothing to say at the default level, which is the trap this batch exists to fix.
+        //  - ContainsKey now, TryAdd once the verdict is in. A router is normally *active* the
+        //    first time it is evaluated, so marking it here would mean its reason is never
+        //    recorded when it later goes inactive -- the only case the report is for.
+        var record = !InactiveReasonAlreadyReported.ContainsKey(d);
+
+        // Checked first, and permanent: one faulty RouterInfo marks a peer inactive for the
+        // lifetime of the statistic, so it deserves to appear in the reason breakdown like the
+        // rest rather than short-circuiting past it.
+        if (TestInactive(() => d.InformationFaulty > 0, "InformationFaulty", record))
+        {
+            if (record) InactiveReasonAlreadyReported.TryAdd(d, 0);
+            return true;
+        }
 
         var result = false;
-#if DEBUG
-        UpdateInactiveStatistics = !InactiveReasonAlreadyReported.Contains(d);
-#endif
 
         result |= TestInactive(
             () => OffsetCompare(d.FloodfillUpdateTimeout, 5, d.FloodfillUpdateSuccess, 2),
-            "FloodfillUpdateTimeout");
+            "FloodfillUpdateTimeout", record);
 
         result |= TestInactive(
             () => OffsetCompare(d.FailedTunnelTest, 20, d.SuccessfulTunnelTest, 3),
-            "FailedTunnelTest");
+            "FailedTunnelTest", record);
 
         result |= TestInactive(
             () => OffsetCompare(d.TunnelBuildTimeout, 200, d.SuccessfulTunnelMember, 5),
-            "TunnelBuildTimeout");
+            "TunnelBuildTimeout", record);
 
         result |= TestInactive(
             () => OffsetCompare(d.IdentResolveRiTimeout, 200, d.IdentResolveSuccess + d.IdentResolveReply * 0.7, 5),
-            "IdentResolveTimeout");
+            "IdentResolveTimeout", record);
 
         result |= TestInactive(
             () => OffsetCompare(d.FailedConnects, 50, d.SuccessfulConnects, 1.5),
-            "FailedConnects");
+            "FailedConnects", record);
 
         result |= TestInactive(
             () => (DateTime.UtcNow - (DateTime)d.LastSeen).TotalDays > 2,
-            "TooOld");
+            "TooOld", record);
 
-#if DEBUG
-        if (result && UpdateInactiveStatistics)
-        {
-            InactiveReasonAlreadyReported.Add(d);
-            UpdateInactiveStatistics = false;
-        }
-#endif
+        if (result && record) InactiveReasonAlreadyReported.TryAdd(d, 0);
 
         return result;
     }
@@ -333,20 +342,27 @@ public class RoutersStatistics
             Routers.Where(d => NodeInactive(d.Value))
                 .Select(d => d.Key));
 
-#if DEBUG
+        // Batch 3-10 (docs/PRODUCTION-PLAN.md): was #if DEBUG, so a Release run could not say why
+        // it had swept a peer. That is the defect batch 0-1 exists to prevent, in a second form:
+        // the level is the filter, never the build configuration. The count goes out at Warning
+        // because a sweep that empties the floodfill set takes every client offline with it.
         ReportInactiveReason.Do(() =>
         {
             var items = NodeInactiveReason
                 .OrderByDescending(p => p.Value)
                 .ToArray();
 
+            if (!items.Any()) return;
+
             var sum = items.Sum(p => p.Value) / 100.0;
 
             var sta = items.Select(p => $" {p.Key}: {p.Value} ({p.Value / sum:F1}%)");
-            var line = $"RoutersStatistics: NodeInactiveReason:{string.Join(',', sta)}";
-            Logging.LogDebug(line);
+            // result and Routers, not a recomputation: calling NodeInactive here would record
+            // reasons for the routers it walked, so the diagnostic would alter what it measures.
+            Logging.LogWarning(
+                $"RoutersStatistics: {result.Count} of {Routers.Count} routers inactive. " +
+                $"Reasons:{string.Join(',', sta)}");
         });
-#endif
 
         return result;
     }
@@ -375,16 +391,17 @@ public class RoutersStatistics
         RouterStatistics = 1
     }
 
-#if DEBUG
     private readonly ConcurrentDictionary<string, int> NodeInactiveReason = new();
     private readonly PeriodicAction ReportInactiveReason = new(TickSpan.Minutes(7));
-    private readonly HashSet<RouterStatistics> InactiveReasonAlreadyReported = new();
-    private bool UpdateInactiveStatistics;
+    // Concurrent: NodeInactive runs on the NetDb worker and on query threads at once, and a
+    // HashSet mutated from two threads can corrupt rather than merely miscount. TryAdd is also
+    // the "first time we have seen this statistic go inactive" test, so the flag it replaced is
+    // gone rather than shared.
+    private readonly ConcurrentDictionary<RouterStatistics, byte> InactiveReasonAlreadyReported = new();
 
     private void AddInactiveReason(string reason)
     {
         var nirc = NodeInactiveReason.GetOrAdd(reason, 0);
         NodeInactiveReason[reason] = nirc + 1;
     }
-#endif
 }

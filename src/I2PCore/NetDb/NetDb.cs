@@ -284,11 +284,20 @@ public partial class NetDb
             RouletteIncludeTop,
             RouletteElitismIncrement);
 
-        Logging.LogInformation("All routers");
+        // Batch 3-10 (docs/PRODUCTION-PLAN.md): the counts, not just the histograms. These three
+        // headers used to be followed by nothing at all when a wheel was empty, which reads as
+        // "the report was truncated" rather than "we know zero floodfills" — and the difference
+        // between those two is the difference between looking at NetDb and looking elsewhere.
+        var deleted = RouterInfos.Values.Count(rp => rp.Meta.Deleted);
+        Logging.LogInformation(
+            $"NetDb: {RouterInfos.Count} routers known ({deleted} deleted), " +
+            $"{FloodfillInfos.Count} floodfills, {LeaseSets.Count} leasesets");
+
+        Logging.LogInformation($"All routers ({Roulette.Count})");
         ShowRouletteStatistics(Roulette);
-        Logging.LogInformation("Floodfill routers");
+        Logging.LogInformation($"Floodfill routers ({RouletteFloodFill.Count})");
         ShowRouletteStatistics(RouletteFloodFill);
-        Logging.LogInformation("Non floodfill routers");
+        Logging.LogInformation($"Non floodfill routers ({RouletteNonFloodFill.Count})");
         ShowRouletteStatistics(RouletteNonFloodFill);
 
         Logging.LogDebug(
@@ -458,11 +467,9 @@ public partial class NetDb
                 return;
             }
 
-#if DEBUG
         var lifetime = leaseset.Expire - DateTime.UtcNow;
         if (lifetime.TotalMinutes < 2)
             Logging.LogDebug($"NetDb: AddLeaseSet: Leases are about to expire in ({lifetime})");
-#endif
 
         LeaseSets[leaseset.Destination.IdentHash] = leaseset;
 

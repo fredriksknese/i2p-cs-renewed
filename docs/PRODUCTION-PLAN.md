@@ -126,6 +126,7 @@ Order is driven by one question: what must exist before SSU2/ECIES repair is eve
 | 3-7 | `p3/sam-accept-destination-line` | ✅ **Done.** SAM v3 STREAM ACCEPT, both sides. `SAMHelper.StreamAcceptAsync` read only `STREAM STATUS` and left the peer-destination line — which a non-silent bridge writes as the first bytes of the *data* stream — to be consumed as payload; since the callers read a fixed byte count, that is a byte-exact transfer with a shifted body. `SAMBridge` never wrote that line at all, and deferred `STREAM STATUS` until a peer connected. | `SamAcceptDestinationLineTest` (unit, fake bridge on loopback — red before, green after); integration `TestSend5MB_I2pd2_To_I2pd3` in CI |
 | 3-8 | `p3/sam-session-destination-keys` | ✅ **Done.** `SESSION STATUS ... DESTINATION=` carries the session's **private keys**, destination-first — i2pd sends 884 base64 characters where a bare destination is 524. Two NetDb tests took `SHA256` over the whole decoded string and asserted the network could find a LeaseSet for the result; every floodfill answered "Requested LeaseSet not found", correctly. `SAMBridge` sent the bare destination instead of the keys, discarding a `privKeyBase64` it had already computed. | `SamSessionDestinationTest` (unit); integration `LeaseSetLookupAndEncryptionVerification` and `SamDataTransferWithLeaseSetLookup` in CI |
 | 3-9 | `p3/floodfill-selection-honesty` | ✅ **Done.** A request for a floodfill could be answered with a router that is not one. `GetRandomRouter`'s `exploratory` branch ignored the roulette it was handed and drew from every known router; both fallbacks did the same when the roulette was empty. `FloodfillUpdater` asks with `exploratory: true`, so a router knowing no floodfills published its LeaseSets to arbitrary peers that discard them — while logging "Publishing LS to ECIES FF". Also: an empty roulette threw `NullReferenceException` out of `GetWeightedRandom`, and `GetRandomRouter` NRE'd before the transport layer started. | `FloodfillSelectionTest` (unit, isolated NetDb — red before, green after); `FloodfillRecognitionTest` against a real i2pd floodfill RouterInfo |
+| 3-10 | `p3/inactivity-visibility` | ✅ **Done.** The inactivity sweep empties the floodfill index, and a Release build could not say why: five `#if DEBUG` blocks in `RoutersStatistics` held the reason breakdown, so `NodeInactiveReason` was never even populated outside a Debug build. Also `InformationFaulty` short-circuited before any reason was recorded, the NetDb report printed roulette headers with no counts, and two further `#if DEBUG` diagnostics sat in `NetDb.cs` / `NetDb.Reports.cs`. | `NetDbDiagnosticsVisibilityTest` (source scan over `src/I2PCore/NetDb`, verified to bite); reason breakdown visible in the next CI run |
 
 3-6 runs last in Phase 3. It is the difference between debugging SSU2 and debugging it blindfolded.
 
@@ -1744,3 +1745,40 @@ Both overloads do this, and the only caller that matters is `RemoveOldRouterInfo
 
 1. **Are the other 8 marked `Deleted` too?** `RouterCount` counts entries including deleted ones, so "8 routers known" may itself be overstating what we can use. Deletion is filtered at read time in the roulette and in `GetRandomRouter`, but **not** in `GetClosestFloodfill` — three readers, two rules.
 2. **Why does `NodeInactive` fire on peers we are actively using?** That is the actual question, and the answer is currently unreadable in CI: `RoutersStatistics.GetInactive` reports its reasons under `#if DEBUG`, so a Release run cannot say why anything was swept. This is the plan's founding complaint — an undiagnosable Release build — surviving in one more place, and it should be fixed first for the same reason batch 0-1 came first.
+
+### Session 7 (continued) — batch 3-10 — **the sweep that empties the floodfill index, made readable**
+
+3-9 ended with a question it could not answer from CI: *why does `NodeInactive` fire on peers we are actively using?* The reason breakdown exists. It was compiled out.
+
+**Unit suite 329 passed / 0 failed / 1 skipped** (330 total), Release build 0 errors.
+
+```csharp
+private bool TestInactive(Func<bool> test, string desc)
+{
+    var result = test();
+#if DEBUG
+    if (UpdateInactiveStatistics && result) AddInactiveReason(desc);
+#endif
+    return result;
+}
+```
+
+Five such blocks in `RoutersStatistics`, and they do not merely suppress the report — `UpdateInactiveStatistics` is only ever *set* inside one of them, so in a Release build `NodeInactiveReason` is never populated at all. The dictionary, the `PeriodicAction` and the reporting code are all `#if DEBUG` too.
+
+**This is the plan's founding defect in its second form.** Batch 0-1 removed `[Conditional("DEBUG")]` from eleven logging methods for exactly this reason, and `LoggingVisibilityTest` guards against its return. The same mistake survived here in preprocessor form, in the subsystem whose behaviour Phase 3 has spent this whole session trying to explain.
+
+#### What changed
+
+- **Reason tracking is unconditional**, and the report runs at `Warning` rather than `Debug`. It is one dictionary increment, on the inactive path only, once per statistic — and gating the recording on `Debug` would have left the report with nothing to say at the default level, which is precisely the trap being fixed.
+- **`InformationFaulty` is now a reason like any other.** It was checked first and returned early, so the one condition that marks a peer inactive *permanently* — a single faulty RouterInfo, never reset — was the one condition that never appeared in the breakdown.
+- **The report says how many of how many**: `N of M routers inactive`, from the set `GetInactive` has already computed. Calling `NodeInactive` again to count would have recorded reasons for every router it walked, so the diagnostic would have altered what it measures.
+- **The NetDb report prints counts**: `N routers known (D deleted), F floodfills, L leasesets`, and each roulette header carries its own size. An empty section used to print a header and nothing, which reads as a truncated report rather than as "we know zero floodfills" — the difference between looking at NetDb and looking somewhere else, and it cost an hour of this session.
+- Two further `#if DEBUG` diagnostics in `NetDb.cs` and `NetDb.Reports.cs` are converted; the latter samples and formats before it logs, so it is guarded by `Logging.IsEnabled` rather than left to the interpolated-string handler, which can only skip formatting it is handed.
+
+#### The guard
+
+`NetDbDiagnosticsVisibilityTest` scans `src/I2PCore/NetDb` and fails on any `#if DEBUG`. Verified to bite by planting one (`NetDb.Store.cs:222`) and watching it go red. It strips comments before matching, which makes the fix's own comment — it names the banned construct — a live check that the stripping works, the same trick 4-0d-fix2 used.
+
+#### What this does not do
+
+**It fixes nothing about the sweep itself.** The asymmetric removal recorded in the previous entry is untouched: `RemoveRouterInfo` still soft-deletes in `RouterInfos` and hard-removes from `FloodfillInfos`, and only a strictly newer RouterInfo restores it. That is deliberate — the next batch should be driven by the reason breakdown this one makes visible, not by a guess about which of the six inactivity tests is firing. **Next: read `RoutersStatistics: N of M routers inactive. Reasons: …` from the next CI run, then fix the sweep or the statistic it trusts.**
