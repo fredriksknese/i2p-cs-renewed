@@ -1864,3 +1864,49 @@ Both are firsts. Against them:
 So the chain the last three batches traced — unreadable publish → no reply → `FloodfillUpdateTimeout` → floodfills swept → nothing publishable — is broken at its first link, and the two downstream symptoms disappeared with it.
 
 **What did not move.** The 16 failures are the same set: `TestSAM_SessionCreate_I2pd` (`Expected SESSION STATUS, got:` — an empty reply), `TestSAM_DatagramSession_I2pd`, and fourteen 5 MB transfers failing as `SAM STREAM CONNECT failed` (`LeaseSet not found`, `CANT_REACH_PEER`) or `OperationCanceledException`. Publishing our RouterInfo is a precondition for those, not a cause of them.
+
+### Session 8 — batch 3-12 — **one unanswered publish, one charge**
+
+**Unit suite 336 passed / 0 failed / 1 skipped** (337 total, +3), Release build 0 errors.
+
+The defect 3-11 deferred, and it is larger than the `NullReferenceException` it was filed as.
+
+#### Three faults, one shape: a failure to *send* was recorded as a failure to *answer*
+
+**1. The mark was in the wrong method.** `TimedOut` is what stops a request being charged again on the next pass, and it was set by the two regeneration methods, after `CheckTimeouts` had charged the statistic. So any request whose *replacement* could not be built stayed unmarked and was charged afresh every 5 s, for the 80 s the request lives.
+
+Measured, not argued: with the null dereference patched but the mark left where it was, the guard test reports **`Expected: 1, But was: 5`** for a single unanswered publish. Five timeouts against two successes is exactly what `RoutersStatistics` requires to call a router inactive — so one publish that went unanswered was, on its own, enough to sweep the floodfill that failed to answer it.
+
+**2. The dereference aborted the whole NetDb tick, not just the retry.** `list.Random()` on an empty floodfill list returns null; 3-9 made that list legitimately empty. The exception is caught by the NetDb worker's own `catch`, so what is lost is everything *after* the throw in that pass: the LeaseSet retries, `ProcessPendingUpdates`, `IdentHashLookup.Run()`, and `ImportNetDbFiles` — **the one thing that can put a floodfill back into an emptied index.** The failure was self-sustaining.
+
+**3. `SendUpdate` could not report failure, and its caller assumed success.** It returned `void`, and both call sites registered an outstanding request regardless — the same defect 3-11 fixed on the LeaseSet retry, in the sibling path it did not touch. Two ways it silently fails:
+
+- `TunnelProvider.Inst.GetEstablishedOutboundTunnel(...)` — `NetDb.Start()` runs before `TunnelProvider.Start()`, and the NetDb worker waits only for the *transport* layer, so the tunnel layer is legitimately null in the first moments of every startup, and `StartNewUpdateRouterInfo` is constructed with autotrigger set.
+- The `TransportProvider.Send` fallback answers with a `bool` but **rethrows** anything it did not expect — and marks the destination `DestinationInformationFaulty` on the way out, which 3-10 showed is the one inactivity reason that is never reset. Our transport layer not being up could permanently condemn a floodfill.
+
+#### What changed
+
+- **The charge and the mark are one decision**, both in `CheckTimeouts`. Regenerating is separate and best-effort, and may legitimately do nothing.
+- **An empty floodfill list returns**, after `GetNewFfList` has already logged why (3-9).
+- **`SendUpdate` returns whether it sent**, tolerates a null tunnel layer, and converts a transport throw into `false`. Both callers register an outstanding request only on a true.
+- The RI retry loop gets the per-request `try`/`catch` the initial publish loop has always had, so one unbuildable replacement costs one replacement.
+- `rinfos.SelectMany(inf => FfUpdateRequestInfo.Exclude?.Select(e => e.Key))` — which repeats the whole exclude set once per request, and null-guards a `readonly static` that cannot be null — becomes `FfUpdateRequestInfo.Exclude.Select(e => e.Key)`, in both regeneration methods.
+
+#### The guard
+
+`FloodfillTimeoutChargingTest`, three tests, all confirmed red against the pre-fix file:
+
+- with the index empty, `CheckTimeouts` does not throw, and five passes charge each of two outstanding publishes exactly once (pre-fix: `NullReferenceException`; with only the dereference fixed: 5 charges);
+- a replacement that could not be sent is not left awaiting a reply, and the original stays marked;
+- `TimedOut = true` appears exactly once in the file and within three lines of the charge — pre-fix it appears twice, in neither case inside `CheckTimeouts`.
+
+The fixture boots a real NetDb into a temp directory on netid 3 with `Bootstrap.Disabled`, as `FloodfillSelectionTest` does, and backdates `FfUpdateRequestInfo.Start` with `TickCounter.Set` — `TimeDeltaMs` is modular, so "a minute ago" reads correctly however long the process has been up. `OutstandingRequests`, `CheckTimeouts` and `FfUpdateRequestInfo` become `internal` for it.
+
+#### What this does not settle
+
+1. **The RouterInfo reply is still requested direct, not through a tunnel** — 3-11's item 1, unchanged.
+2. **`TransportProvider.Send` still rethrows from a method that returns `bool`**, and still records `DestinationInformationFaulty` for what may be our own fault. This batch stops that reaching the NetDb tick from one caller; the contract itself, and the permanence of that reason, are their own batch.
+3. **The asymmetric removal from 3-9 is still there.**
+4. **`2 + rinfos.Sum(inf => inf.Retries) * 2`** is always `2` for RouterInfo requests: the replacement is built with the constructor that has no retry count, so the sample widening never widens. Commented in place rather than changed, because making it live changes floodfill selection and nothing here can measure that.
+
+**Next: the CI run for this batch should show the RI delivery statuses of 3-11 with no charge against a floodfill that answered, and the 16 integration failures are now the whole story — start at `TestSAM_SessionCreate_I2pd`, which answers an empty SESSION STATUS and is the cheapest of them to read.**

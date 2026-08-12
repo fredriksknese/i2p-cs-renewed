@@ -21,7 +21,9 @@ public class FloodfillUpdater
     private readonly TimeWindowDictionary<I2PIdentHash, ILeaseSet> PendingLeaseSetUpdates = new(TickSpan.Minutes(10));
     private readonly PeriodicAction RetryPendingUpdates = new(TickSpan.Seconds(10));
 
-    private readonly TimeWindowDictionary<uint, FfUpdateRequestInfo> OutstandingRequests = new(TickSpan.Seconds(80));
+    // internal for the 3-12 guard test: a request is registered here only when it was actually
+    // sent, and charged as a timeout exactly once.
+    internal readonly TimeWindowDictionary<uint, FfUpdateRequestInfo> OutstandingRequests = new(TickSpan.Seconds(80));
 
     private readonly PeriodicAction StartNewUpdateRouterInfo = new(NetDb.RouterInfoExpiryTime / 5, true);
 
@@ -133,12 +135,14 @@ public class FloodfillUpdater
                     ff.Id32Short, token,
                     ff ^ RouterContext.Inst.MyRouterIdentity.IdentHash.RoutingKey));
 
-                OutstandingRequests[token] = new FfUpdateRequestInfo(
-                    ff,
-                    token,
-                    RouterContext.Inst.MyRouterIdentity.IdentHash);
-
-                SendUpdate(ff, token);
+                // Only a publish we actually sent can time out. Registering one we did not would
+                // charge this floodfill for a message it never received — batch 3-11 fixed the
+                // same thing on the LeaseSet retry.
+                if (SendUpdate(ff, token))
+                    OutstandingRequests[token] = new FfUpdateRequestInfo(
+                        ff,
+                        token,
+                        RouterContext.Inst.MyRouterIdentity.IdentHash);
             }
             catch (Exception ex)
             {
@@ -234,7 +238,8 @@ public class FloodfillUpdater
             null);
     }
 
-    private void SendUpdate(I2PIdentHash ff, uint token)
+    /// <summary>Publishes our RouterInfo to one floodfill. True only if the message was sent.</summary>
+    private bool SendUpdate(I2PIdentHash ff, uint token)
     {
         // If greater than zero, a DeliveryStatusMessage
         // is requested with the Message ID set to the value of the Reply Token.
@@ -248,7 +253,9 @@ public class FloodfillUpdater
             RouterContext.Inst.MyRouterInfo.Identity.IdentHash,
             0);
 
-        var outtunnel = TunnelProvider.Inst.GetEstablishedOutboundTunnel(TunnelPoolSelection.AllowExploratory);
+        // NetDb.Start() runs before TunnelProvider.Start(), and this tick begins as soon as the
+        // *transport* layer exists, so the tunnel layer can legitimately still be null here.
+        var outtunnel = TunnelProvider.Inst?.GetEstablishedOutboundTunnel(TunnelPoolSelection.AllowExploratory);
 
         if (outtunnel != null)
         {
@@ -259,11 +266,23 @@ public class FloodfillUpdater
                     new TunnelMessageRouter(
                         WrapForFloodfill(ds, ffri),
                         ff));
-                return;
+                return true;
             }
         }
 
-        TransportProvider.Send(ff, ds);
+        try
+        {
+            return TransportProvider.Send(ff, ds);
+        }
+        catch (Exception ex)
+        {
+            // TransportProvider.Send answers with a bool but rethrows anything it did not expect
+            // (TransportProvider.cs, the general catch at the end of Send). Letting that escape
+            // aborts the whole NetDb tick — the LeaseSet retries, the NetDb import and the ident
+            // lookups all run after this one. Failing to publish is a false, not a crash.
+            Logging.LogDebug($"FloodfillUpdater: RI publish to {ff.Id32Short} not sent: {ex.Message}");
+            return false;
+        }
     }
 
     private bool SendLeaseSetUpdate(I2PRouterInfo ffri, ILeaseSet ls, uint token)
@@ -295,11 +314,23 @@ public class FloodfillUpdater
         return true;
     }
 
-    private void CheckTimeouts()
+    /// <summary>
+    ///     Charges every outstanding request that has run out of time, once, and then tries to
+    ///     re-send it to a different floodfill.
+    /// </summary>
+    /// <remarks>
+    ///     Batch 3-12 (docs/PRODUCTION-PLAN.md). <c>TimedOut</c> is what stops a request being
+    ///     charged again on the next pass, and it used to be set by the two regeneration methods —
+    ///     so a request whose *replacement* could not be built stayed unmarked and was charged
+    ///     afresh every 5 seconds until the 80-second window dropped it. One unanswered publish
+    ///     could reach a dozen charges against a floodfill, where five (against two successes) is
+    ///     enough for <c>RoutersStatistics</c> to call it inactive and sweep it out of the index.
+    ///     The charge and the mark are one decision and now happen in one place; regenerating is a
+    ///     separate, best-effort thing that may legitimately do nothing.
+    /// </remarks>
+    internal void CheckTimeouts()
     {
-        KeyValuePair<uint, FfUpdateRequestInfo>[] timeout;
-
-        timeout = OutstandingRequests
+        var timeout = OutstandingRequests
             .Where(r =>
                 !r.Value.TimedOut
                 && r.Value.Start.DeltaToNow > r.Value.Timeout)
@@ -309,63 +340,77 @@ public class FloodfillUpdater
         {
             Logging.LogDebug($"FloodfillUpdater: Update {one.Key,10} failed with timeout.");
             NetDb.Inst.Statistics.FloodfillUpdateTimeout(one.Value.CurrentTargetFf);
+            one.Value.TimedOut = true;
         }
 
         TimeoutRegenerateRiUpdate(timeout
             .Where(t => t.Value?.LeaseSet is null)
-            .Select(t => t.Value));
+            .Select(t => t.Value)
+            .ToArray());
 
         TimeoutRegenerateLsUpdate(timeout
             .Where(t =>
                 !(t.Value?.LeaseSet is null))
-            .Select(t => t.Value));
+            .Select(t => t.Value)
+            .ToArray());
     }
 
-    private void TimeoutRegenerateRiUpdate(IEnumerable<FfUpdateRequestInfo> rinfos)
+    private void TimeoutRegenerateRiUpdate(IReadOnlyCollection<FfUpdateRequestInfo> rinfos)
     {
-        if (!rinfos.Any())
+        if (rinfos.Count == 0)
             return;
 
+        // Retries is always 0 for a RouterInfo request — the replacement below builds one with
+        // the constructor that has no retry count — so the sample widening this expresses does
+        // not actually widen. Left as it stands: making it live changes floodfill selection, and
+        // that belongs with a batch that can measure it.
         var list = GetNewFfList(
             RouterContext.Inst.MyRouterIdentity.IdentHash,
-            rinfos.Count(), 2 + rinfos.Sum(inf => inf.Retries) * 2,
-            rinfos.SelectMany(inf => FfUpdateRequestInfo.Exclude?.Select(e => e.Key)).ToHashSet());
+            rinfos.Count, 2 + rinfos.Sum(inf => inf.Retries) * 2,
+            FfUpdateRequestInfo.Exclude.Select(e => e.Key).ToHashSet()).ToArray();
+
+        // Batch 3-9 made "no floodfill to publish to" a legitimate answer, and this method still
+        // dereferenced list.Random(). With the floodfill index empty — which is the state a run
+        // of unanswered publishes produces — that NullReferenceException left the NetDb worker's
+        // whole pass undone: the LeaseSet retries below, ProcessPendingUpdates, ImportNetDbFiles
+        // (the one thing that could put a floodfill back) and the ident lookups.
+        if (list.Length == 0)
+            return;
 
         foreach (var rinfo in rinfos)
-        {
-            if (OutstandingRequests.TryGetValue(rinfo.Token, out var old))
-                old.TimedOut = true;
+            try
+            {
+                var ff = list.Random();
+                var token = BufUtils.RandomUint() | 1;
 
-            var ff = list.Random();
+                Logging.LogDebug(string.Format("FloodfillUpdater: RI replacement update {0}, token {1,10}, dist: {2}.",
+                    ff.Id32Short, token,
+                    ff ^ RouterContext.Inst.MyRouterIdentity.IdentHash.RoutingKey));
 
-            var token = BufUtils.RandomUint() | 1;
+                if (!SendUpdate(ff, token)) continue;
 
-            Logging.LogDebug(string.Format("FloodfillUpdater: RI replacement update {0}, token {1,10}, dist: {2}.",
-                ff.Id32Short, token,
-                ff ^ RouterContext.Inst.MyRouterIdentity.IdentHash.RoutingKey));
+                FfUpdateRequestInfo.Exclude[ff] = 1;
 
-            SendUpdate(ff, token);
-
-            var newreq = new FfUpdateRequestInfo(
-                ff,
-                token,
-                RouterContext.Inst.MyRouterIdentity.IdentHash);
-            FfUpdateRequestInfo.Exclude[ff] = 1;
-
-            OutstandingRequests[token] = newreq;
-        }
+                OutstandingRequests[token] = new FfUpdateRequestInfo(
+                    ff,
+                    token,
+                    RouterContext.Inst.MyRouterIdentity.IdentHash);
+            }
+            catch (Exception ex)
+            {
+                // One replacement that cannot be built is not a reason to skip the others, nor to
+                // abort the tick. The initial publish loop above has always worked this way.
+                Logging.Log(ex);
+            }
     }
 
-    private void TimeoutRegenerateLsUpdate(IEnumerable<FfUpdateRequestInfo> lsets)
+    private void TimeoutRegenerateLsUpdate(IReadOnlyCollection<FfUpdateRequestInfo> lsets)
     {
-        if (!lsets.Any())
+        if (lsets.Count == 0)
             return;
 
         foreach (var lsinfo in lsets)
         {
-            if (OutstandingRequests.TryGetValue(lsinfo.Token, out var old))
-                old.TimedOut = true;
-
             var token = BufUtils.RandomUint() | 1;
 
             var ls = lsinfo.LeaseSet;
@@ -373,7 +418,7 @@ public class FloodfillUpdater
             var list = GetNewFfList(
                 ls.Destination.IdentHash,
                 1, 2 + 5 * lsinfo.Retries,
-                lsets.SelectMany(inf => FfUpdateRequestInfo.Exclude?.Select(e => e.Key)).ToHashSet());
+                FfUpdateRequestInfo.Exclude.Select(e => e.Key).ToHashSet());
 
             var ff = list.FirstOrDefault();
             if (ff is null) continue;
@@ -449,7 +494,7 @@ public class FloodfillUpdater
         return result;
     }
 
-    private class FfUpdateRequestInfo
+    internal class FfUpdateRequestInfo
     {
         public static readonly TimeWindowDictionary<I2PIdentHash, object> Exclude = new(TickSpan.Minutes(5));
         public readonly I2PIdentHash IdentToUpdate;
