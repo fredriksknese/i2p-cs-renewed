@@ -8,12 +8,8 @@ using I2PCore.TunnelLayer;
 using I2PCore.TunnelLayer.I2NP.Data;
 using I2PCore.TunnelLayer.I2NP.Messages;
 using I2PCore.Utils;
-using I2PCore.SessionLayer.ECIES;
-using I2PCore.Crypto.Noise;
-using System.Buffers;
 
 using GarlicClove = I2PCore.TunnelLayer.I2NP.Data.GarlicClove;
-using Block = I2PCore.SessionLayer.ECIES.Block;
 
 namespace I2PCore;
 
@@ -179,7 +175,9 @@ public class FloodfillUpdater
             list = list.Concat(nextList).Distinct().ToList();
         }
 
-        var destinations = list.Select(i => NetDb.Inst[i]);
+        var destinations = list
+            .Select(i => NetDb.Inst[i])
+            .Where(ri => ri != null);
 
         var successes = 0;
         foreach (var ff in destinations)
@@ -193,26 +191,10 @@ public class FloodfillUpdater
                             $"update {ffident.Id32Short}, token {token,10}, " +
                             $"dist: {ffident ^ ls.Destination.IdentHash.RoutingKey}.");
 
-                if (ff.Identity.Certificate.PublicKeyType == I2PKeyType.KeyTypes.X25519
-                    || ff.Identity.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM512_X25519
-                    || ff.Identity.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM768_X25519
-                    || ff.Identity.Certificate.PublicKeyType == I2PKeyType.KeyTypes.MLKEM1024_X25519)
+                if (SendLeaseSetUpdate(ff, ls, token))
                 {
-                    Logging.LogInformation($"FloodfillUpdater: Publishing LS to ECIES FF {ffident.Id32Short}");
-                    if (SendLeaseSetUpdateEciesGarlic(ffident, ff.Identity.PublicKey.ToByteArray(), ls, token))
-                    {
-                        OutstandingRequests[token] = new FfUpdateRequestInfo(ffident, token, ls, 0);
-                        successes++;
-                    }
-                }
-                else
-                {
-                    Logging.LogInformation($"FloodfillUpdater: Publishing LS to ElGamal FF {ffident.Id32Short}");
-                    if (SendLeaseSetUpdateGarlic(ffident, ff.Identity.PublicKey, ls, token))
-                    {
-                        OutstandingRequests[token] = new FfUpdateRequestInfo(ffident, token, ls, 0);
-                        successes++;
-                    }
+                    OutstandingRequests[token] = new FfUpdateRequestInfo(ffident, token, ls, 0);
+                    successes++;
                 }
             }
             catch (Exception ex)
@@ -221,6 +203,35 @@ public class FloodfillUpdater
             }
 
         return successes > 0;
+    }
+
+    /// <summary>
+    ///     Garlic-wrap one message for a floodfill, choosing the encryption from the key type in
+    ///     its RouterInfo: Noise N for an X25519 or ML-KEM hybrid identity, ElGamal only for an
+    ///     identity that actually holds an ElGamal key.
+    /// </summary>
+    /// <remarks>
+    ///     Batch 3-11 (docs/PRODUCTION-PLAN.md). Three of the four garlic sends in this file used
+    ///     ElGamal unconditionally, so every RouterInfo publish and every LeaseSet *retry* went to
+    ///     a modern floodfill in a form it cannot read. Only <c>GetECIESPublicKey</c> answers this
+    ///     question correctly for a hybrid identity — the X25519 half is the *trailing* 32 bytes,
+    ///     where the LeaseSet path used to hand Noise N the whole key.
+    /// </remarks>
+    internal static I2NpMessage WrapForFloodfill(I2NpMessage msg, I2PRouterInfo ffri)
+    {
+        var eciesKey = ffri.GetECIESPublicKey();
+
+        Logging.LogInformation(
+            $"FloodfillUpdater: publishing {msg.MessageType} to " +
+            $"{(eciesKey is null ? "ElGamal" : "ECIES")} FF {ffri.Identity.IdentHash.Id32Short}");
+
+        if (eciesKey != null) return Garlic.EciesEncryptGarlic(msg, eciesKey);
+
+        return Garlic.EgEncryptGarlic(
+            new Garlic(new GarlicClove(new GarlicCloveDeliveryLocal(msg))),
+            ffri.Identity.PublicKey,
+            new I2PSessionKey(),
+            null);
     }
 
     private void SendUpdate(I2PIdentHash ff, uint token)
@@ -244,16 +255,9 @@ public class FloodfillUpdater
             var ffri = NetDb.Inst[ff];
             if (ffri != null)
             {
-                var garlic = new Garlic(
-                    new GarlicClove(
-                        new GarlicCloveDeliveryLocal(ds))
-                );
-
-                var egmsg = Garlic.EgEncryptGarlic(garlic, ffri.Identity.PublicKey, new I2PSessionKey(), null);
-
                 outtunnel.Send(
                     new TunnelMessageRouter(
-                        egmsg,
+                        WrapForFloodfill(ds, ffri),
                         ff));
                 return;
             }
@@ -262,11 +266,7 @@ public class FloodfillUpdater
         TransportProvider.Send(ff, ds);
     }
 
-    private bool SendLeaseSetUpdateGarlic(
-        I2PIdentHash ffdest,
-        I2PPublicKey pubkey,
-        ILeaseSet ls,
-        uint token)
+    private bool SendLeaseSetUpdate(I2PRouterInfo ffri, ILeaseSet ls, uint token)
     {
         var client = Router.GetClientDestination(ls.Destination.IdentHash);
         var outtunnel = client?.GetEstablishedOutboundTunnel()
@@ -276,7 +276,7 @@ public class FloodfillUpdater
 
         if (outtunnel is null || replytunnel is null)
         {
-            Logging.LogDebug($"SendLeaseSetUpdateGarlic: " +
+            Logging.LogDebug($"SendLeaseSetUpdate: " +
                              $"client: {client?.Destination.IdentHash.Id32Short ?? "none"}, " +
                              $"outtunnel: {outtunnel}, replytunnel: {replytunnel}");
             return false;
@@ -284,77 +284,14 @@ public class FloodfillUpdater
 
         var ds = new DatabaseStoreMessage(ls, token, replytunnel.TunnelGw, replytunnel.TunnelId);
 
-        // As explained on the network database page, local LeaseSets are sent to floodfill 
-        // routers in a Database Store Message wrapped in a Garlic Message so it is not 
+        // As explained on the network database page, local LeaseSets are sent to floodfill
+        // routers in a Database Store Message wrapped in a Garlic Message so it is not
         // visible to the tunnel's outbound gateway.
 
-        var garlic = new Garlic(
-            new GarlicClove(
-                new GarlicCloveDeliveryLocal(ds))
-        );
-
-        var egmsg = Garlic.EgEncryptGarlic(garlic, pubkey, new I2PSessionKey(), null);
-
         outtunnel.Send(
             new TunnelMessageRouter(
-                egmsg,
-                ffdest));
-        return true;
-    }
-
-    private bool SendLeaseSetUpdateEciesGarlic(
-        I2PIdentHash ffdest,
-        byte[] ffPubKey,
-        ILeaseSet ls,
-        uint token)
-    {
-        var client = Router.GetClientDestination(ls.Destination.IdentHash);
-        var outtunnel = client?.GetEstablishedOutboundTunnel()
-                        ?? TunnelProvider.Inst.GetEstablishedOutboundTunnel(TunnelPoolSelection.RequireExploratory);
-
-        var replytunnel = ls.Leases.Random();
-
-        if (outtunnel is null || replytunnel is null)
-        {
-            Logging.LogDebug($"SendLeaseSetUpdateEciesGarlic: " +
-                             $"client: {client?.Destination.IdentHash.Id32Short ?? "none"}, " +
-                             $"outtunnel: {outtunnel}, replytunnel: {replytunnel}");
-            return false;
-        }
-
-        var ds = new DatabaseStoreMessage(ls, token, replytunnel.TunnelGw, replytunnel.TunnelId);
-
-        // Build the garlic clove with local delivery instructions.
-        // ECIES clove format: DeliveryInstructions(1 byte: 0x00 = local) + type(1) + msgID(4) + expiration_secs(4) + payload
-        var cloveStream = new ArrayBufferWriter<byte>();
-        cloveStream.WriteByte(0); // Local delivery
-        cloveStream.WriteByte((byte)ds.MessageType);
-        cloveStream.WriteBlock(BufUtils.Flip32Bl(ds.MessageId));
-        var expirationSecs = (uint)(DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 20);
-        cloveStream.WriteBlock(BufUtils.Flip32Bl(expirationSecs));
-        cloveStream.WriteBlock(ds.Payload);
-
-        // Build ECIES blocks: DateTime + GarlicClove + Padding
-        var blocks = new List<Block>
-        {
-            new DateTimeBlock { Timestamp = (uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds() },
-            new GarlicCloveBlock { Data = cloveStream.WrittenSpan.ToArray() },
-            new PaddingBlock { Data = BufUtils.RandomBytes(16 + BufUtils.RandomInt(32)) }
-        };
-
-        var plaintext = ECIESBlockFormat.BuildBlocks(blocks);
-
-        // Encrypt using Noise N to the floodfill's X25519 public key
-        var noiseN = NoiseN.CreateInitiator(ffPubKey);
-        var encrypted = noiseN.CreateMessage(plaintext);
-        noiseN.Dispose();
-
-        var garlicMsg = new GarlicMessage(encrypted.ToArray());
-
-        outtunnel.Send(
-            new TunnelMessageRouter(
-                garlicMsg,
-                ffdest));
+                WrapForFloodfill(ds, ffri),
+                ffri.Identity.IdentHash));
         return true;
     }
 
@@ -441,17 +378,16 @@ public class FloodfillUpdater
             var ff = list.FirstOrDefault();
             if (ff is null) continue;
 
-            var ffident = NetDb.Inst[ff];
+            var ffri = NetDb.Inst[ff];
+            if (ffri is null) continue;
 
             Logging.Log($"FloodfillUpdater: LS {ls.Destination.IdentHash.Id32Short} " +
                         $"replacement update {ff.Id32Short}, token {token,10}, " +
                         $"dist: {ff ^ ls.Destination.IdentHash.RoutingKey}.");
 
-            SendLeaseSetUpdateGarlic(
-                ffident.Identity.IdentHash,
-                ffident.Identity.PublicKey,
-                ls,
-                token);
+            // Only a request we actually sent can time out. Registering one we did not would
+            // charge this floodfill for a message it never received.
+            if (!SendLeaseSetUpdate(ffri, ls, token)) continue;
 
             var newreq = new FfUpdateRequestInfo(
                 ff,
