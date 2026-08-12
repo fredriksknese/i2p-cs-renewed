@@ -311,7 +311,58 @@ public class TunnelProvider
         }
     }
 
-    private static GarlicMessage CreateECIESGarlicMessage(I2NpMessage msg, byte[] garlicKey, ulong garlicTag)
+    /// <summary>
+    ///     Build the outbound-endpoint reply to a short tunnel build: the same records, retyped as
+    ///     a ShortTunnelBuildReply and wrapped in a one-time garlic for the inbound gateway.
+    ///
+    ///     **The reply's message ID comes from the build record, not from the request message.**
+    ///     The creator matches a reply against its pending tunnels by I2NP message ID
+    ///     (`HandleShortTunnelBuildReply` here, `GetPendingOutboundTunnel (msg->GetMsgID ())` in
+    ///     i2pd's Tunnel.cpp), and the ID it waits for is the one it wrote into the endpoint
+    ///     record's send-message-ID field at offset 52 — `NextMessageId`. i2pd's endpoint reads
+    ///     exactly that field: `FillI2NPMessageHeader (eI2NPShortTunnelBuildReply, bufbe32toh
+    ///     (clearText + SHORT_REQUEST_RECORD_SEND_MSG_ID_OFFSET))` (TransitTunnel.cpp).
+    ///
+    ///     Batch 3-13: we copied the arriving request's message ID instead. That is the same value
+    ///     only because our own creator sets `stbm.MessageId = replymessageid`; i2pd's `Tunnel::Build`
+    ///     ends with a bare `FillI2NPMessageHeader (eI2NPShortTunnelBuild)`, which fills an unset
+    ///     message ID with `RAND_bytes`. So every reply we sent i2pd carried an ID it had never
+    ///     issued, and would have been dropped as unknown even once the framing let it be read.
+    /// </summary>
+    internal static GarlicMessage CreateObepBuildReply(
+        ShortTunnelBuildMessage stbm,
+        ShortBuildRequestRecord request,
+        byte[] garlicKey,
+        ulong garlicTag)
+    {
+        // Convert STBM (type 25) to STBRM (type 26): same records, correct reply type
+        var stbrm = new ShortTunnelBuildReplyMessage(stbm.Records)
+        {
+            MessageId = request.NextMessageId
+        };
+
+        return CreateOneTimeGarlicMessage(stbrm, garlicKey, garlicTag);
+    }
+
+    /// <summary>
+    ///     Wrap one I2NP message in a garlic encrypted with a one-time symmetric key and tag —
+    ///     the form used for a tunnel build reply, where both ends derived the key and tag from
+    ///     the build record's Noise chaining key ("RGarlicKeyAndTag") rather than from a session.
+    ///
+    ///     **The payload must lead with the garlic clove.** The receiver of a one-time garlic has
+    ///     no ratchet session to parse blocks against, so i2pd reads exactly one block and rejects
+    ///     anything else outright — `SymmetricKeyTagSet::HandleNextMessage`
+    ///     (ECIESX25519AEADRatchetSession.cpp) tests `buf[offset] != eECIESx25519BlkGalicClove`
+    ///     and logs "Symmetric key tagset unexpected block". Its own sender agrees: the symmetric
+    ///     `WrapECIESX25519Message` calls `CreateGarlicPayload(msg, payload, false, 956)` with
+    ///     datetime **off**, where the Noise N `WrapECIESX25519MessageForRouter` passes true.
+    ///
+    ///     Batch 3-13: we led with a DateTime block, so i2pd discarded every build reply we sent
+    ///     as an outbound endpoint — 370 rejections in one CI run, one per reply, against 689
+    ///     "Pending build request timeout, deleted". Trailing padding is unaffected: i2pd reads
+    ///     the first clove and ignores the rest of the plaintext, which the AEAD still covers.
+    /// </summary>
+    internal static GarlicMessage CreateOneTimeGarlicMessage(I2NpMessage msg, byte[] garlicKey, ulong garlicTag)
     {
         // ECIES block format: type(1) + length(2) + data(length)
         // Block type 11 = GarlicClove (eECIESx25519BlkGalicClove)
@@ -329,9 +380,9 @@ public class TunnelProvider
         cloveStream.WriteUInt32BigEndian(expirationSecs);
         cloveStream.WriteBlock(msg.Payload);
 
+        // Clove first — see the method comment. Nothing may precede it.
         var blocks = new List<Block>
         {
-            new DateTimeBlock { Timestamp = (uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds() },
             new GarlicCloveBlock { Data = cloveStream.WrittenSpan.ToArray() },
             new PaddingBlock { Data = BufUtils.RandomBytes(16 + BufUtils.RandomInt(32)) }
         };
@@ -1555,10 +1606,7 @@ public class TunnelProvider
             if (request.NextRouterHash != null)
                 try
                 {
-                    // Convert STBM (type 25) to STBRM (type 26): same records, correct reply type
-                    var stbrm = new ShortTunnelBuildReplyMessage(stbm.Records);
-                    stbrm.MessageId = stbm.MessageId;
-                    var garlic = CreateECIESGarlicMessage(stbrm, garlicKey, garlicTag);
+                    var garlic = CreateObepBuildReply(stbm, request, garlicKey, garlicTag);
                     if (request.NextTunnelId != 0)
                     {
                         // Send through the IBGW's tunnel
