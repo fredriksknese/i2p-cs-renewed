@@ -1960,3 +1960,45 @@ Confirmed red separately: reinstating the DateTime block fails all three; reinst
 4. **`TunnelProvider.cs:1814` still has an `#if DEBUG`** around a build-timeout diagnostic. 3-10 removed these from `src/I2PCore/NetDb` and `NetDbDiagnosticsVisibilityTest` guards that directory only; the tunnel layer has never been swept.
 
 **Next: read the CI run for this batch for `Tunnels: Tunnel ... created` in the i2pd logs, and for the count of `Pending build request timeout, deleted` against the 689 above. If tunnels build, `TestSAM_SessionCreate_I2pd` and the fourteen 5 MB transfers are the ones to re-read; if they still time out, the reply *records* are the next suspect and the failure will have moved past the garlic.**
+
+#### Addendum — CI on 3-13, and the first tunnel i2pd has ever built through us
+
+PR #48, run `31629297607`, merged. Build green, unit **339 / 0 / 1**, integration **36 passed / 16 failed** — the same set, unmoved. What moved is underneath it, and the whole chain is in one place in i2pd's log:
+
+```
+18:47:03 Tunnel: Gateway of 969 bytes for tunnel 4078269471, msg type 11
+18:47:03 Garlic: Type local
+18:47:03 I2NP: Handling message with type 26
+18:47:03 Tunnel: TunnelBuildReply for tunnel 752812528
+18:47:03 Tunnel: TunnelBuildResponse 4 records.
+18:47:03 Tunnel: Build response ret code=0
+18:47:03 Tunnel: Outbound tunnel 752812528 has been created
+```
+
+Every step is a thing that had never happened before. `Garlic: Type local` is the clove being read (defect 1), `TunnelBuildReply for tunnel 752812528` is the reply reaching the right pending tunnel (defect 2 — the ID is matched, not merely present), and `ret code=0` is our reply record decrypting and parsing correctly under the reply key, which was the open question this batch could not test.
+
+| | 3-12 run | 3-13 run |
+|---|---|---|
+| `Garlic: Symmetric key tagset unexpected block 0` | 370 | **0** |
+| `Tunnel: Build response ret code=…` read at all | 0 | 1182 |
+| `Tunnel: Outbound tunnel … has been created` | 0 | **2** |
+| `Tunnel: Pending build request … timeout, deleted` | 689 | 399 |
+
+Two built tunnels out of 529 attempts is not a working network, and the reason is now equally explicit — and it is ours:
+
+```
+528  TransitProvider AcceptingTunnels: Reject due same next destination
+  3  Accepted
+```
+
+### The next batch — **the next-hop filter cannot tell a small network from an attack**
+
+`TransitTunnelProvider.AcceptingTunnels` (`:398`) rejects a build when `NextHopFilter.Update(nextIdent)` says it has seen that next hop too recently. In a fixture with two routers there is exactly one next hop it can ever see, so the filter fires on nearly every request: **528 of 531 decisions**, answered with `RejectBandwidth`, which i2pd reads as `ret code=30` (726 of them) and logs as `Outbound tunnel … has been declined` (392 outbound, 71 inbound).
+
+The filter is a real anti-enumeration defence and should not simply be deleted. What to settle before touching it:
+
+1. **What does i2pd do here?** It throttles per-peer tunnel *requests* rather than refusing on next-hop repetition alone; a router with few peers must still carry traffic or a small network can never bootstrap.
+2. **The rejection is silent to the operator.** `Reject due same next destination` is `LogDebug`, so a Release router at the default level declines every tunnel it is asked to carry and says nothing — the same complaint batches 0-1 and 3-10 were written for, in a third place.
+3. **1086 requests decrypted against 531 accept/reject decisions.** Roughly half the build requests we decrypt never reach a decision at all. Where they go is unknown and should be counted before anything is tuned.
+
+**Next: batch 3-14, the next-hop filter — and note that until it lands, every integration test that needs a tunnel through the C# router is measuring the filter, not the protocol.**
