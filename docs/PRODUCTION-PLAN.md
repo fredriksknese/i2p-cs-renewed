@@ -1844,3 +1844,23 @@ Twenty RouterInfo publishes in the run. **Zero delivery statuses for any of them
 3. **The asymmetric removal from 3-9 is still there.** `RemoveRouterInfo` soft-deletes in `RouterInfos` and hard-removes from `FloodfillInfos`.
 
 **Next: read the next CI run for `FloodfillUpdater: Floodfill delivery status RI …`. If it appears, the publish path works end-to-end against a real floodfill for the first time, and the sweep should stop taking floodfills with it.**
+
+#### Addendum — CI on 3-11, and the first RouterInfo publish a floodfill has ever answered
+
+PR #46, run `31568274081`, merged. Build green, unit **333 / 0 / 1**, integration **36 passed / 16 failed** — the band had been 34/18 for three runs.
+
+```
+05:59:05 FloodfillUpdater: Floodfill delivery status RI 1108014163 [udgxx] received in 18 mseconds.
+06:11:42 FloodfillUpdater: Floodfill delivery status RI 3225614749 [3k52m] received in  2 mseconds.
+```
+
+Both are firsts. Against them:
+
+- **Zero `Garlic: Incorrect N ephemeral public key`** across all ten i2pd logs, where 3-10 logged one per publish, at the second of each publish.
+- **27 publishes, every one of them `publishing DatabaseStore to ECIES FF`.** Not one chose ElGamal. 12 were answered (2 RI, 10 LS) against 0 RI and 1 LS before.
+- **No `RoutersStatistics: … routers inactive` line anywhere in the run.** That report returns early when no reason was recorded, so its absence is not a missing diagnostic — it means nothing was judged inactive at all. The NetDb reports hold at `11 routers known (0 deleted), 3 floodfills`, where 3-10 ended at `Floodfills known: 0`.
+- **No `NullReferenceException` in either router log**, where 3-11's note recorded one every 5 s. The empty-list path in `TimeoutRegenerateRiUpdate` was simply never taken, because the index never emptied. The defect is latent, not fixed.
+
+So the chain the last three batches traced — unreadable publish → no reply → `FloodfillUpdateTimeout` → floodfills swept → nothing publishable — is broken at its first link, and the two downstream symptoms disappeared with it.
+
+**What did not move.** The 16 failures are the same set: `TestSAM_SessionCreate_I2pd` (`Expected SESSION STATUS, got:` — an empty reply), `TestSAM_DatagramSession_I2pd`, and fourteen 5 MB transfers failing as `SAM STREAM CONNECT failed` (`LeaseSet not found`, `CANT_REACH_PEER`) or `OperationCanceledException`. Publishing our RouterInfo is a precondition for those, not a cause of them.
