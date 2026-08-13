@@ -75,7 +75,7 @@ public class NextHopThrottleTest
     [Test]
     public void AnIdleRouterStillAnswersMoreThanOneRequestPerNextHop()
     {
-        var limit = TransitTunnelProvider.NextHopRequestLimit( 0 );
+        var limit = TransitTunnelProvider.JavaNextHopLimit( 0 );
 
         Assert.AreEqual( JavaFloor, limit,
             "a router carrying nothing uses Java's floor, not a constant of two" );
@@ -92,7 +92,7 @@ public class NextHopThrottleTest
     [Test]
     public void RefusedRequestsDoNotSpendTheBudget()
     {
-        var limit = TransitTunnelProvider.NextHopRequestLimit( 0 );
+        var limit = TransitTunnelProvider.JavaNextHopLimit( 0 );
         var filter = new ItemFilterWindow<string>( TickSpan.Seconds( 11 * 60 / 3 ), limit );
         const string theonlynexthopthereis = "the only next hop there is";
 
@@ -124,11 +124,11 @@ public class NextHopThrottleTest
     [Test]
     public void TheLimitRisesWithLoadAndStopsAtJavasCeiling()
     {
-        Assert.AreEqual( JavaFloor, TransitTunnelProvider.NextHopRequestLimit( 100 ),
+        Assert.AreEqual( JavaFloor, TransitTunnelProvider.JavaNextHopLimit( 100 ),
             "1% of a hundred tunnels is below the floor, so the floor applies" );
-        Assert.AreEqual( 10, TransitTunnelProvider.NextHopRequestLimit( 1000 ),
+        Assert.AreEqual( 10, TransitTunnelProvider.JavaNextHopLimit( 1000 ),
             "1% of the tunnels carried, per Java's PERCENT_LIMIT" );
-        Assert.AreEqual( JavaCeiling, TransitTunnelProvider.NextHopRequestLimit( 100000 ),
+        Assert.AreEqual( JavaCeiling, TransitTunnelProvider.JavaNextHopLimit( 100000 ),
             "no peer gets more than Java's ceiling however busy we are" );
     }
 
