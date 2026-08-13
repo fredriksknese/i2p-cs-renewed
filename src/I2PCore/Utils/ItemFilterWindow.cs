@@ -43,7 +43,16 @@ public class ItemFilterWindow<T> : IEnumerable<T>
     }
 
     /// <summary>
-    ///     Returns True if the number of occurances (including a new one now) in the memory span is below the limit.
+    ///     Returns True if the number of occurances (including a new one now) in the memory span is
+    ///     below the limit.
+    ///
+    ///     Batch 3-14: the count is taken over the memory span, as <see cref="Test" /> and
+    ///     <see cref="Count" /> already did. It used to be <c>list.Count</c>, every entry ever
+    ///     recorded for the key — and entries are only removed by <see cref="Cleanup" />, which
+    ///     runs at most every 240 seconds and only when one of these methods is called. So a key
+    ///     under sustained load never fell back below its limit: each recorded occurrence appended
+    ///     another entry, and the ones a cleanup did remove were replaced faster than they aged
+    ///     out. The window was decorative; the filter was permanent.
     /// </summary>
     public bool Update(T ident)
     {
@@ -58,7 +67,7 @@ public class ItemFilterWindow<T> : IEnumerable<T>
             }
 
             list.AddLast(TickCounter.Now);
-            return list.Count < Limit;
+            return list.Count(t => t.DeltaToNow < MemorySpan) < Limit;
         }
     }
 
