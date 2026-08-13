@@ -2155,3 +2155,48 @@ printed with the build-decision report at `Information`. 3-14's evidence only ex
 1. **Whether the fixture now builds tunnels.** The budget stops being the binding constraint; the 365 unanswered builds become the top suspect, and they are not this batch.
 2. **The load this admits in a fixture.** If i2pd keeps retrying at ~1700 requests per ten minutes and we now accept nearly all of them, we will carry a thousand-odd transit tunnels for a peer that wants ten. It should collapse once its builds succeed — that is why it retries — but the next run should be read for transit tunnel counts as well as accept ratios.
 3. **Request-rate abuse is still unaddressed.** Every refusal costs us a record decryption and a reply; a throttle keyed on the *sender* rather than the target is the missing piece, and 3-14 named it too.
+
+#### 3-15 confirmed in CI, and merged — **i2pd builds tunnels through us in both directions, and the wall moves to the LeaseSet**
+
+Run `31746173643`, PR #50, merged. Build green, unit **356 / 0 / 1**, integration **35 passed / 17 failed / 3 skipped**.
+
+```
+Transit next-hop budget       : 1222 tunnels per 3m 40s toward any one hop, from 3 routers known
+Transit build requests        : 186 answered, 186 accepted (100.0%)
+```
+
+| integration fixture | 3-13 | 3-14 | 3-15 |
+|---|---|---|---|
+| build requests answered | 531 | 1722 | **186** |
+| accepted | 3 (0.6%) | 20 (1.2%) | **186 (100%)** |
+| i2pd outbound tunnels created | 2 | 7 | **22** |
+| i2pd **inbound** tunnels created | 0 | 0 | **25** |
+| `Build response ret code=30` (our refusals) | 726 | 1046 | **0** |
+| `Pending build request timeout, deleted` | 689 | 365 | **46** |
+| build messages i2pd dropped under load | — | 202 | **19** |
+
+**The request count fell by a factor of nine, and that is the finding, not the accept ratio.** 1722 requests were i2pd retrying builds we refused; when the builds succeed it stops asking. The load worry in this batch's own open items — that a budget of 1222 would have us carrying a thousand transit tunnels for a peer that wants ten — did not happen for the same reason, and i2pd's own dropped-build-message warnings fell with it, 202 → 19.
+
+**Not one integration test moved.** 17 failed before and 17 after; the sets differ by one in each direction, `CaptureSessionRequestByAnsweringTheTokenRequest` (an SSU2 capture test) leaving and `TestSend5MB_I2pd0_To_I2pd1` (the i2pd-to-i2pd scaled transfer that also flipped between the last two runs) arriving. Neither is read as signal.
+
+That is the expected shape of this batch: it removed our own policy from between i2pd and the protocol, and what was behind it is now measurable.
+
+### The next batch — **the LeaseSet does not survive the round trip between the two routers**
+
+i2pd now has inbound tunnels, so it can publish, and it still cannot be reached:
+
+```
+241  warn - Destination: Publish confirmation was not received in 3 m   (403 in the 3-14 run)
+ 14  debug - Destination: Own remote LeaseSet dropped
+ 10  warn - NetDbReq: No more floodfills for <destination>
+ 15  RESULT=CANT_REACH_PEER MESSAGE="LeaseSet not found"                (SAM, unchanged)
+ 14  RESULT=CANT_REACH_PEER MESSAGE="Destination not found"             (SAM, unchanged)
+```
+
+i2pd asks for a destination, exhausts the floodfills it knows, and gives up. Our side logs `IdentResolver: LS lookup` 8 times and `FloodfillServer` not at all in this run. What to settle before touching anything:
+
+1. **Is either router a floodfill in this fixture, and does each believe the other is?** A two-router network where neither answers `DatabaseLookup` cannot distribute a LeaseSet at all, and 3-9 already showed this router will answer a request for a floodfill with something that is not one.
+2. **Does our destination's LeaseSet ever reach i2pd's NetDb?** i2pd logs `NetDb: LeaseSet2 updated` 20 times, so *some* store arrives; whose is not established.
+3. **3-11 is the precedent to check first.** It found we published our *RouterInfo* under an encryption no modern floodfill can read. The LeaseSet publish path is the sibling that batch did not touch, and `GetECIESPublicKey()` was noted there as being used differently by the two paths.
+
+**Next: batch 3-16, LeaseSet publication and lookup between two routers — and note that the tunnel layer is no longer the suspect. Builds succeed in both directions and 186 of 186 requests are accepted.**
