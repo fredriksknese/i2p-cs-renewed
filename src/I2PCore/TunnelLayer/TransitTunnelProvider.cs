@@ -52,6 +52,11 @@ public class TransitTunnelProvider : ITunnelOwner
     ///     Java counts the previous hop in the same counter as the next hop, and counts requests
     ///     rather than acceptances. We do neither — see <see cref="NextHopBudgetAllows" /> for why
     ///     the second of those is the one that decides whether a small network works at all.
+    ///
+    ///     Batch 3-15: the limit is no longer Java's curve alone but the larger of that and this
+    ///     hop's share of our capacity, because Java's floor assumes a router with many next hops.
+    ///     See <see cref="NextHopRequestLimit" />. The limit passed here is therefore only the
+    ///     window's own default; every decision computes the limit in force and calls `Count`.
     /// </summary>
     private readonly ItemFilterWindow<I2PIdentHash> NextHopFilter = new(NextHopWindow, MinNextHopRequests);
 
@@ -236,7 +241,21 @@ public class TransitTunnelProvider : ITunnelOwner
     private void LogBuildDecisions()
     {
         var report = FormatBuildDecisions(BuildDecisions);
-        if (report != null) Logging.LogInformation(report);
+        if (report == null) return;
+
+        Logging.LogInformation(report);
+
+        // Batch 3-15: the 3-14 run could not be read without a debug build — the counts said 1702
+        // refusals and only a `LogDebug` line said the budget they were refused against.
+        Logging.LogInformation(FormatNextHopBudget(
+            CurrentNextHopLimit(TransitTunnelCount),
+            NetDb.Inst?.RouterCount ?? 0));
+    }
+
+    internal static string FormatNextHopBudget(int limit, int knownrouters)
+    {
+        return $"Transit next-hop budget       : {limit} tunnels per {NextHopWindow} toward any one "
+               + $"hop, from {knownrouters} routers known";
     }
 
     /// <summary>Null when nothing has been asked of us yet — there is no report to make.</summary>
@@ -464,15 +483,61 @@ public class TransitTunnelProvider : ITunnelOwner
     #region Request filter
 
     /// <summary>
-    ///     How many build requests naming the same next hop we will answer inside
-    ///     <see cref="NextHopWindow" />. Java I2P's rule: a floor, a ceiling, and a percentage of
-    ///     the tunnels we are already carrying — so a busy router tolerates more from one peer
-    ///     than an idle one, and an idle one still tolerates enough to bootstrap.
+    ///     Java I2P's rule on its own: a floor, a ceiling, and a percentage of the tunnels we are
+    ///     already carrying — so a busy router tolerates more from one peer than an idle one.
     /// </summary>
-    internal static int NextHopRequestLimit(int transittunnelcount)
+    internal static int JavaNextHopLimit(int transittunnelcount)
     {
         return Math.Max(MinNextHopRequests,
             Math.Min(MaxNextHopRequests, transittunnelcount * NextHopPercentOfTransit / 100));
+    }
+
+    /// <summary>
+    ///     One next hop's fair share of the capacity this router was configured to relay, expressed
+    ///     the way the budget is counted — tunnels accepted inside one <see cref="NextHopWindow" />
+    ///     rather than tunnels alive, which is the same quantity divided by how many windows fit in
+    ///     a tunnel's life.
+    /// </summary>
+    internal static int CapacityShareOfOneNextHop(int knownrouters, int maxtransittunnels)
+    {
+        var hops = Math.Max(1, knownrouters);
+        var livetunnelshare = maxtransittunnels / hops;
+
+        return (int)((long)livetunnelshare * NextHopWindow.ToMilliseconds
+                     / Tunnel.TunnelLifetime.ToMilliseconds);
+    }
+
+    /// <summary>
+    ///     How many tunnels we will agree to relay toward one next hop inside
+    ///     <see cref="NextHopWindow" /> — the larger of Java's curve and that hop's share of our
+    ///     own capacity.
+    ///
+    ///     Batch 3-15. Java's floor of four assumes what a router on the live network has:
+    ///     hundreds of possible next hops, so one peer's share of our relaying is small by
+    ///     arithmetic and refusing it leaves every other peer reachable. With one next hop, four
+    ///     per window *is* the whole of what this router can do for the network, and the 3-14 CI
+    ///     run measured exactly that — the budget spent 21 seconds after start, 1702 of 1722
+    ///     requests refused, every one of them naming the same peer, and i2pd left with 7 outbound
+    ///     and **0 inbound** tunnels, hence no lease, hence seventeen integration failures reading
+    ///     `LeaseSet not found`.
+    ///
+    ///     The per-hop cap's job is diversity, not an absolute bound: the absolute bound is
+    ///     <see cref="RouterContext.MaxTransitTunnels" />, enforced below this and with its own
+    ///     refusal reason. So a hop may be relayed toward at most its share of that capacity, and
+    ///     never less than Java's curve. The rule then degenerates to each reference implementation
+    ///     at the ends — Java's exactly once some nine hundred routers are known, since the share
+    ///     falls under the floor, and i2pd's capacity-only behaviour when we know one or two.
+    ///
+    ///     What it gives up, said plainly: on a small network a hostile peer can aim a large share
+    ///     of our capacity at the one other router, because "fair share" of a capacity far above
+    ///     what anyone present can use is not a limit. That is also true of i2pd, which caps on
+    ///     congestion alone, and the control is the capacity setting itself.
+    /// </summary>
+    internal static int NextHopRequestLimit(int transittunnelcount, int knownrouters, int maxtransittunnels)
+    {
+        return Math.Max(
+            JavaNextHopLimit(transittunnelcount),
+            CapacityShareOfOneNextHop(knownrouters, maxtransittunnels));
     }
 
     /// <summary>
@@ -496,6 +561,15 @@ public class TransitTunnelProvider : ITunnelOwner
     internal static bool NextHopBudgetAllows(int acceptedinwindow, int limit)
     {
         return acceptedinwindow < limit;
+    }
+
+    /// <summary>The limit in force right now, from what this router knows and is configured for.</summary>
+    private static int CurrentNextHopLimit(int transittunnelcount)
+    {
+        return NextHopRequestLimit(
+            transittunnelcount,
+            NetDb.Inst?.RouterCount ?? 0,
+            RouterContext.Inst.MaxTransitTunnels);
     }
 
     internal bool AcceptingTunnels(I2PIdentHash nextIdent)
@@ -525,7 +599,7 @@ public class TransitTunnelProvider : ITunnelOwner
         RouterContext.Inst.CurrentTransitTunnelCount = currenttunnelcount;
 
         // Reject if we have already agreed to relay enough toward this next hop recently
-        var nexthoplimit = NextHopRequestLimit(currenttunnelcount);
+        var nexthoplimit = CurrentNextHopLimit(currenttunnelcount);
         var acceptedforhop = nextIdent is null ? 0 : NextHopFilter.Count(nextIdent);
         if (!NextHopBudgetAllows(acceptedforhop, nexthoplimit))
         {
