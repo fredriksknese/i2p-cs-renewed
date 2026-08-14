@@ -92,6 +92,9 @@ public class ClientTunnelProvider : ITunnelOwner
 
     private OutboundTunnel CreateOutboundTunnel(IClient client, TunnelInfo prototype)
     {
+        if (prototype is null && client.OutboundTunnelHopCount <= 0)
+            return CreateZeroHopOutboundTunnel(client);
+
         var config = new TunnelConfig(
             TunnelConfig.TunnelDirection.Outbound,
             TunnelConfig.TunnelPool.Client,
@@ -119,8 +122,91 @@ public class ClientTunnelProvider : ITunnelOwner
         return ConsecutiveOutboundBuildFails.GetValueOrDefault(client, 0) >= MaxConsecutiveClientBuildFails;
     }
 
+    /// <summary>
+    ///     A client that asked for zero hops gets a zero-hop tunnel, not an exception.
+    /// </summary>
+    /// <remarks>
+    ///     Batch 3-18 (docs/PRODUCTION-PLAN.md). <b>This threw on every pass, 234 times in the
+    ///     3-17 CI run, and took every other client's tunnels down with it.</b>
+    ///     <para>
+    ///     <c>inbound.length=0</c> is a legitimate I2CP/SAM option — a zero-hop tunnel, no
+    ///     anonymity, minimum latency — and the integration fixture asks for it deliberately:
+    ///     <c>SAMHelper.CreateSessionAsync</c> defaults both lengths to 0 because a private
+    ///     network of two routers cannot build a multi-hop tunnel at all. This router supports
+    ///     zero-hop tunnels everywhere else (<see cref="ZeroHopTunnel" />,
+    ///     <see cref="ZeroHopOutboundTunnel" />, and <c>TunnelPool.CreateFallbackTunnel</c>),
+    ///     but the client path handed the hop count straight to
+    ///     <see cref="Tunnel.CreateInboundTunnelChain" />, which asks NetDb for zero routers and
+    ///     gets <c>ArgumentException: Hops must be &gt; 0</c>.
+    ///     </para>
+    ///     <para>
+    ///     Built the way <c>TunnelPool.CreateFallbackTunnel</c> builds one — an empty hop list —
+    ///     rather than through <c>TunnelMgr.CreateTunnel</c>, which returns null for a config
+    ///     with no hops. There is nothing to build, so it goes straight to established through
+    ///     the same <see cref="TunnelEstablished" /> path a built tunnel takes.
+    ///     </para>
+    ///     <para>
+    ///     <b>Anonymity note.</b> Honouring this is correct — it is the client's explicit choice,
+    ///     and Java I2P and i2pd both honour it — but a zero-hop tunnel puts this router's
+    ///     address directly in the destination's LeaseSet. It is logged at Information for that
+    ///     reason, so it cannot be switched on silently.
+    ///     </para>
+    /// </remarks>
+    private InboundTunnel CreateZeroHopInboundTunnel(IClient client)
+    {
+        Logging.LogInformation(
+            $"{this}: client asked for 0 inbound hops, creating a zero-hop tunnel. " +
+            "This offers no anonymity — our address goes straight into the LeaseSet.");
+
+        var config = new TunnelConfig(
+            TunnelConfig.TunnelDirection.Inbound,
+            TunnelConfig.TunnelPool.Client,
+            new TunnelInfo(new List<HopInfo>()));
+
+        var tunnel = new ZeroHopTunnel(this, config, RouterContext.Inst.MyRouterIdentity.IdentHash)
+        {
+            Established = true
+        };
+
+        TunnelMgr.AddTunnel(tunnel);
+        client.AddInboundPending(tunnel);
+        PendingTunnels[tunnel] = client;
+
+        // Nothing to wait for; take the same route out of Pending a built tunnel takes.
+        TunnelEstablished(tunnel);
+
+        return tunnel;
+    }
+
+    /// <summary>Outbound counterpart of <see cref="CreateZeroHopInboundTunnel" />.</summary>
+    private OutboundTunnel CreateZeroHopOutboundTunnel(IClient client)
+    {
+        Logging.LogInformation(
+            $"{this}: client asked for 0 outbound hops, creating a zero-hop tunnel. " +
+            "This offers no anonymity — our address is the tunnel.");
+
+        var config = new TunnelConfig(
+            TunnelConfig.TunnelDirection.Outbound,
+            TunnelConfig.TunnelPool.Client,
+            new TunnelInfo(new List<HopInfo>()));
+
+        // ZeroHopOutboundTunnel's constructor sets Established itself.
+        var tunnel = new ZeroHopOutboundTunnel(this, config);
+
+        TunnelMgr.AddTunnel(tunnel);
+        client.AddOutboundPending(tunnel);
+        PendingTunnels[tunnel] = client;
+
+        TunnelEstablished(tunnel);
+
+        return tunnel;
+    }
+
     private InboundTunnel CreateInboundTunnel(IClient client, TunnelInfo prototype)
     {
+        if (prototype is null && client.InboundTunnelHopCount <= 0)
+            return CreateZeroHopInboundTunnel(client);
+
         var config = new TunnelConfig(
             TunnelConfig.TunnelDirection.Inbound,
             TunnelConfig.TunnelPool.Client,
@@ -208,30 +294,49 @@ public class ClientTunnelProvider : ITunnelOwner
                 { Client = c, TunnelsNeeded = c.OutboundTunnelsNeeded }).ToArray();
         }
 
+        // Batch 3-18: each client is built for inside its own try. Execute() already catches,
+        // but it catches around the whole pass — so one client whose tunnels cannot be built
+        // aborted the loop and every client after it got nothing, on every pass. That is how a
+        // single destination asking for zero hops denied tunnels to all of them 234 times in
+        // one CI run. A client that cannot be served is one client's problem.
         foreach (var create in tocreateinbound)
         {
             var needed = create.TunnelsNeeded * NewTunnelCreationFactor;
-            for (var i = 0; i < needed; ++i)
+            try
             {
-                Logging.LogInformation($"{this} building new inbound tunnel {i + 1}/{needed}");
-
-                var t = CreateInboundTunnel(create.Client, null);
-                if (t == null)
+                for (var i = 0; i < needed; ++i)
                 {
-                    // No outbound tunnels available
-                    TunnelBuild.TimeToAction = TickSpan.Seconds(10);
-                    break;
+                    Logging.LogInformation($"{this} building new inbound tunnel {i + 1}/{needed}");
+
+                    var t = CreateInboundTunnel(create.Client, null);
+                    if (t == null)
+                    {
+                        // No outbound tunnels available
+                        TunnelBuild.TimeToAction = TickSpan.Seconds(10);
+                        break;
+                    }
                 }
+            }
+            catch (Exception ex)
+            {
+                Logging.LogWarning($"{this}: inbound tunnel build failed for {create.Client}", ex);
             }
         }
 
         foreach (var create in tocreateoutbound)
         {
             var needed = create.TunnelsNeeded * NewTunnelCreationFactor;
-            for (var i = 0; i < create.TunnelsNeeded * NewTunnelCreationFactor; ++i)
+            try
             {
-                Logging.LogInformation($"{this} building new outbound tunnel {i + 1}/{needed}");
-                CreateOutboundTunnel(create.Client, null);
+                for (var i = 0; i < needed; ++i)
+                {
+                    Logging.LogInformation($"{this} building new outbound tunnel {i + 1}/{needed}");
+                    CreateOutboundTunnel(create.Client, null);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logging.LogWarning($"{this}: outbound tunnel build failed for {create.Client}", ex);
             }
         }
 
