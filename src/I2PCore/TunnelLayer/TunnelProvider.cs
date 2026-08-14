@@ -364,6 +364,24 @@ public class TunnelProvider
     /// </summary>
     internal static GarlicMessage CreateOneTimeGarlicMessage(I2NpMessage msg, byte[] garlicKey, ulong garlicTag)
     {
+        return CreateOneTimeGarlicMessage(msg, garlicKey, BitConverter.GetBytes(BufUtils.Flip64(garlicTag)));
+    }
+
+    /// <summary>
+    ///     The same wrap, given the tag as the eight bytes that must appear on the wire.
+    /// </summary>
+    /// <remarks>
+    ///     Batch 3-16: a floodfill answering a DatabaseLookup gets the reply tag as eight raw bytes
+    ///     out of the request and must echo exactly those bytes — i2pd copies its own
+    ///     <c>uint64_t replyTag</c> into the lookup with <c>memcpy</c> and back out with
+    ///     <c>htole64buf</c>, so the wire bytes are the contract and any endianness round trip
+    ///     through a <c>ulong</c> is an opportunity to get it wrong.
+    /// </remarks>
+    internal static GarlicMessage CreateOneTimeGarlicMessage(I2NpMessage msg, byte[] garlicKey, byte[] garlicTagBytes)
+    {
+        if (garlicTagBytes is null || garlicTagBytes.Length != 8)
+            throw new ArgumentException("An ECIES garlic tag is 8 bytes", nameof(garlicTagBytes));
+
         // ECIES block format: type(1) + length(2) + data(length)
         // Block type 11 = GarlicClove (eECIESx25519BlkGalicClove)
         // Clove format per ECIES spec (readBytesRatchet):
@@ -390,8 +408,7 @@ public class TunnelProvider
         var plaintext = ECIESBlockFormat.BuildBlocks(blocks);
 
         // AEAD encrypt: ChaChaPoly(key, nonce=0, AD=tagBytes, plaintext)
-        var tagBytes = BitConverter.GetBytes(BufUtils.Flip64(garlicTag));
-        // Note: cloveStream.WrittenSpan used above via ToArray()
+        var tagBytes = garlicTagBytes;
         var nonce = new byte[12];
         var encrypted = ChaCha20Poly1305.Encrypt(garlicKey, nonce, plaintext, tagBytes);
 
