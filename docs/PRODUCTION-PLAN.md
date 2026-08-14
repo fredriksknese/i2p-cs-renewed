@@ -2484,3 +2484,30 @@ TestSend5MB_I2pdA_To_I2pdB_MultiHop                .    F    F     .     .
 The rebased 3-17 run is the clean case — all four passed at once, leaving precisely the thirteen.
 
 Two corrections follow, both of statements made earlier in this session. 3-16's "four tests came back" counted two flappers; and the "37/15 baseline" recorded after 6-1 was itself an over-read from two runs. **The stable statement is: 13 hard failures, 4 unstable tests, pass count 37–39.** A batch has moved the suite only if the thirteen change. `CaptureSessionRequestByAnsweringTheTokenRequest` was already recorded as flaky by batch 4-2c, which is now confirmed across four more runs.
+
+#### Correction to the entry above — **the publishes are not lost, and the 1523 is a red herring**
+
+The section immediately preceding this one concluded from the 3-17 run that "i2pd's LeaseSet publishes are not arriving" and named the receive path as the new suspect. **That conclusion is wrong.** It was drawn from one true fact (every store we received carried `ReplyToken == 0`) plus an assumption that was never checked (that a store reaching us must be a publish). Reading the rest of the same artifacts settles it the other way.
+
+**1. i2pd's LeaseSets do reach us.** The keys line up one for one:
+
+| destination | i2pd `Publish LeaseSet of` | our `Storing LeaseSet for` |
+|---|---|---|
+| `hlfhr…` | 5 | 6 |
+| `sbp6v…` | 5 | 6 |
+| `crghu…` `d5rjg…` `f2upk…` `lwajr…` `m6o4d…` `pi2af…` | 1 each | 1 each |
+| `3v6a6j…` `4qlg4v…` `4wlmjt…` `uczk2z…` | 1 each | — |
+
+Eight of i2pd's twelve published destinations are in our NetDb, matching its own publish count.
+
+**2. They carry no reply token because they are floods, not publishes.** i2pd is still a floodfill and `LeaseSetDestination::Publish` does not exclude self, so it publishes to itself, then floods to the other floodfill — us. A flood is built by `CreateDatabaseStoreMsg (ident, leaseSet)` with **no** reply token, and an unacknowledged flood is correct behaviour, not a defect. That is why all twenty said "no acknowledgement requested", and it is why 3-17's own instrument reported exactly what it should have.
+
+**3. The publish path works, on i2pd's side of it.** The same log has `Publishing LeaseSet confirmed` **10** times and `Published LeaseSet verified` **9** times, against 13 `Publish LeaseSet of`. Those confirmations are i2pd answering itself.
+
+**4. The 1523 warnings are an aggressive retry timer, not 1523 failures.** Every one of them reads `was not received in **1800 milliseconds**` — not the "3 m" the plan recorded in earlier sessions, which was a different i2pd build and a different message. 1.8 s is i2pd's minimum adaptive publish-confirmation timeout; it fires, clears the token, republishes, and 24 of those republishes are refused by its own rate limiter (`Publishing LeaseSet is too fast. Wait for 20 seconds`). A dozen destinations each spinning on a 1.8 s timer for eight minutes produces four figures of warnings without anything being newly wrong.
+
+**What this retires.** "1490 unconfirmed publishes" has been the largest number in the last two runs and has been read as the top symptom since 3-16. **It should not be tracked as a defect count.** If it is used at all, use `Publishing LeaseSet confirmed` and `Published LeaseSet verified` against `Publish LeaseSet of`, which in this run is 10 and 9 against 13.
+
+**What is actually left.** The thirteen hard-failing tests are all data transfer — `TestSend5MB_*`, `TestBidirectional5MB*`, `SamDataTransferWithLeaseSetLookup`, `ClientTunnelsAndLeaseSetPublication` — and four of i2pd's twelve destinations never reached our NetDb. LeaseSet *distribution* is substantially working; what is not working is carrying a stream. That is the transit data path, it is unmeasured, 6-1 instrumented it, and it is Phase 6's subject. It has now been arrived at from three independent directions.
+
+**Method note.** Two wrong conclusions in one session came from the same move: counting one kind of line and inferring a mechanism without checking the counterpart. 3-16's "four tests came back" ignored per-test history; this one ignored what a store *without* a reply token is. Both were caught by pulling the adjacent data rather than by any test. **When a number is about to become the plan's next target, count the thing that would have to be true of it as well.**
