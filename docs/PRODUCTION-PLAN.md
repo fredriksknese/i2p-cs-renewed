@@ -2511,3 +2511,44 @@ Eight of i2pd's twelve published destinations are in our NetDb, matching its own
 **What is actually left.** The thirteen hard-failing tests are all data transfer — `TestSend5MB_*`, `TestBidirectional5MB*`, `SamDataTransferWithLeaseSetLookup`, `ClientTunnelsAndLeaseSetPublication` — and four of i2pd's twelve destinations never reached our NetDb. LeaseSet *distribution* is substantially working; what is not working is carrying a stream. That is the transit data path, it is unmeasured, 6-1 instrumented it, and it is Phase 6's subject. It has now been arrived at from three independent directions.
 
 **Method note.** Two wrong conclusions in one session came from the same move: counting one kind of line and inferring a mechanism without checking the counterpart. 3-16's "four tests came back" ignored per-test history; this one ignored what a store *without* a reply token is. Both were caught by pulling the adjacent data rather than by any test. **When a number is about to become the plan's next target, count the thing that would have to be true of it as well.**
+
+### Session 12 (continued) — batch 3-18 — **every SAM test asked for zero-hop tunnels, and the client tunnel builder threw on every pass**
+
+**Unit suite 391 passed / 0 failed / 1 skipped** (392 total, +6), Release build 0 errors.
+
+Found by reading the 3-17 artifacts for something else. The single most common line in our own log was one nobody had looked at:
+
+```
+234  Exception (ClientTunnelProvider Execute BuildNewTunnels):
+     System.ArgumentException: Hops must be > 0
+```
+
+15:03:00 to 15:09:30, continuously, for the life of the run.
+
+#### The defect, and the amplifier
+
+**`inbound.length=0` is a legitimate I2CP/SAM option** — a zero-hop tunnel, no anonymity, minimum latency — and the integration fixture asks for it *deliberately*. `SAMHelper.CreateSessionAsync` defaults `inboundLength` and `outboundLength` to **0**, and its own doc comment says why: "Requests zero-hop tunnels (length=0) for private test networks where only 1-2 peers exist and multi-hop tunnel construction is not possible."
+
+This router supports zero-hop tunnels everywhere else — `ZeroHopTunnel`, `ZeroHopOutboundTunnel`, and `TunnelPool.CreateFallbackTunnel`, which builds one from an empty hop list. But `ClientTunnelProvider.CreateInboundTunnel` handed the client's hop count straight to `Tunnel.CreateInboundTunnelChain`, which asks NetDb for zero routers and gets `ArgumentException: Hops must be > 0`.
+
+**The amplifier is the worse half.** The throw escaped the `foreach` over clients into `Execute()`'s catch, which wraps *the whole pass*. So one client that could not be served denied tunnels to **every client after it in the list, on every pass, for the entire run**. Each client is now built for inside its own try.
+
+Zero-hop tunnels are built the way `CreateFallbackTunnel` builds them — empty hop list, `ZeroHop*` types — and not through `TunnelMgr.CreateTunnel`, which returns `null` for a hopless config and would have silently produced no tunnel at all. There is nothing to build, so they go straight to established through the same `TunnelEstablished` path a built tunnel takes.
+
+**Honouring the request is correct** — it is the client's explicit choice and both reference implementations honour it — but a zero-hop tunnel puts this router's address directly into the destination's LeaseSet, so it is logged at Information. A router that quietly substituted 3 for 0 would be lying to the client about its own anonymity, in the safe direction but without saying so.
+
+#### Why this is very likely the thirteen
+
+All thirteen hard-failing tests are SAM data transfers, and all thirteen fail at *connection setup* — `LeaseSet not found` or `Destination not found` — not at data integrity. A destination with no client tunnels cannot publish a LeaseSet and cannot look one up, which is exactly that symptom. It also explains what could not be explained in the same run: three of five client LeaseSet lookups sent queries and then produced no outcome, success or timeout, for eight minutes.
+
+**Predicted, so the next run can refute it:** the thirteen should move. If they do not, the prediction was wrong and the tunnel-layer data path is next regardless.
+
+#### The guard
+
+`ZeroHopClientTunnelTest`, 6 tests, source scans — what is wrong in both halves is *where* code sits, a guard ahead of a call and a `try` inside a loop rather than around it, and standing a `ClientTunnelProvider` up would need a live RouterContext, TransportProvider and NetDb. Batches 3-11, 3-12, 3-14 and 6-1 guard placement the same way. Both halves confirmed red separately against compiling regressions: removing the zero-hop guard fails 1 of 6, moving the `try` back outside the loop fails a different 1 of 6.
+
+The fixture's own default is pinned too, so changing it becomes a deliberate act rather than something that quietly makes this batch look unnecessary.
+
+#### A note on how this was found
+
+Three sessions have now gone into i2pd's log and our floodfill code, chasing a number (1490, then 1523) that turned out to be i2pd's own retry timer. The actual blocker was the most frequent line in **our** log, in a component nobody had suspected, and it was visible in every artifact bundle since the fixture started using SAM. **Count your own errors before reading the peer's.**
