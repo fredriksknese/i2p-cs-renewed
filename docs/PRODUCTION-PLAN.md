@@ -2309,3 +2309,15 @@ The shape is chosen against session 6's finding, a hop that **preserves length a
 
 1. **Nothing about the data path yet.** This batch is the instrument, not the measurement. The next integration run should be read with `--log-trace tunnel-transfer` if the fixture can be made to pass it.
 2. **The 1490 unconfirmed publishes.** That is the question the instrument was built for, and it is the next batch.
+
+#### 6-1 confirmed in CI, and merged — **and it corrects 3-16's headline**
+
+Run `31808376962`, PR #52, merged. Build green, unit **376 / 0 / 1**, integration **37 passed / 15 failed / 3 skipped**.
+
+Two fewer passes than the 3-16 run, and the difference is exactly two tests: `TestSend5MB_I2pd0_To_I2pd1` and `TestSend5MB_I2pdA_To_I2pdB_MultiHop`. Nothing else moved in either direction.
+
+**Read as flake, and the reasoning is worth stating because "integration went down" is the kind of result that gets a good batch reverted.** 6-1 cannot change what a router does: every category defaults to `None`, so each converted call site evaluates one mask and returns, exactly as the `#if` that preceded it compiled to nothing. The two tests are also the pair the plan has already recorded flapping — `TestSend5MB_I2pd0_To_I2pd1` flipped between the 3-14 and 3-15 runs and again between 3-15 and 3-16, and the multi-hop sibling has now flipped twice.
+
+**So 3-16's "four tests came back" was two solid and two flapping.** `TestSAM_DatagramSession_I2pd` and `TestSAM_SessionCreate_I2pd` have passed in both runs since; the two i2pd-to-i2pd transfers should not have been counted. **The working baseline is 37 / 15**, and the two i2pd-to-i2pd transfers are a known-unstable pair that no future batch should read as signal in either direction without a second run.
+
+That instability is itself unexplained and worth a batch eventually: both are transfers between two i2pd routers, in which our only role is to carry the tunnels — so a test that passes and fails alternately with no change on either side is measuring something nondeterministic in the path we provide. That is the same suspect as the 1490 unconfirmed publishes.
