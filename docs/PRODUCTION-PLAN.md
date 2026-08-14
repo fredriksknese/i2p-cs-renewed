@@ -163,7 +163,7 @@ Order is driven by one question: what must exist before SSU2/ECIES repair is eve
 | 4-2c | `p4/ssu2-sessionrequest-capture` | ✅ **Done** (PR #30). ⚠️ **Known flaky in CI** — it passed on #30, failed on #34 and passed again on #35, and the run it failed on had 4-0b in the tree exactly as the run it passed on did. Its failing assertion is `Retry.TryOpen` on **i2pd's first datagram, before we transmit anything**, so no change of ours can reach it; the precondition is that i2pd dials within the window and opens with a TokenRequest. Treat a lone failure of this test as noise, and make it say *why* before treating it as signal. **Unblocked 4-0b.** Extends `SSU2GoldenVectorCapture` to answer i2pd's TokenRequest with a Retry built by production code and capture what it sends next. **The captured file is itself the assertion**: i2pd only proceeds to a Session Request if the Retry authenticated and carried a token it accepted, so a Session Request arriving is end-to-end proof that 4-2a is correct against the real peer rather than against ourselves. The captured packet carries the ephemeral key and is the only thing that can settle 4-0b's 48-byte question — the TokenRequest vector has no ephemeral key at all. **Cannot be run against i2pd 2.45.1**: neither this nor its sibling elicits a dial there, so CI (2.61.0) is the only place it can pass. | The vector file appears; `Retry.TryOpen` reads i2pd's TokenRequest in the live exchange, not just from the checked-in bytes |
 | 4-2b | `p4/ssu2-retry-token-initiator` | ✅ **Done** (PR #31). Dispatches `TYPE_RETRY` (previously "Unknown packet type 9", so a token-enforcing peer — i2pd's normal configuration — could never be dialled), consumes the token, presents it in `SendSessionRequest`, keeps the `NewToken` block that was parsed and dropped, and requires a token as responder. Rejection sends a Retry and **does not** `Terminate()`: a terminated session lingers in `Sessions` until the worker tick reaps it, so the re-sent request would be routed into a dead one. Retry handling capped at one re-send. | ✅ `Ssu2TokenExchangeTest`, 4 tests over the 3-3 loopback channel, asserting on the token exchange rather than establishment (still blocked by 4-0b) |
 | 4-3a | `p4/ssu2-path-response` | ✅ **Done** (PR #53). `SendPathResponse` built the block and dropped it while `caps` published `p`, so we invited a challenge and answered with silence. Now sent via `SendBlock`, bounded by one datagram, and the hand-rolled framing (which `BuildWithBlock` also writes) is gone. | `Ssu2PathResponseTest` |
-| 4-3b | `p4/ssu2-session-migration` | **Split out of 4-3 by 4-3a.** `SSU2Host.Sessions` is keyed by `IPEndPoint`, so a packet from a moved peer matches no session and `DispatchPacket` drops it before any block is read. Key by connection id, challenge the new address, migrate only on a matching PathResponse, then publish `m`. | Source-port migration mid-session survives |
+| 4-3b | `p4/ssu2-session-migration` | **Blocked on the k_header_1 question — see session 12.** Split out of 4-3 by 4-3a. `SSU2Host.Sessions` is keyed by `IPEndPoint`, so a packet from a moved peer matches no session and `DispatchPacket` drops it before any block is read. Key by connection id, challenge the new address, migrate only on a matching PathResponse, then publish `m`. | Source-port migration mid-session survives |
 | 4-4 | `p4/ssu2-frag-termination` | Fragment/reassembly + Termination/ImmediateAck parity vs golden vectors | Fixture + integration |
 | 4-5 | `p4/ssu2-default-on` | `EnableSSU2`→true, `--disable-ssu2` retained, README status updated | Full integration suite |
 
@@ -2358,3 +2358,38 @@ Two smaller things fell out of fixing it:
 #### What this does not settle
 
 **Whether i2pd ever challenges us.** Path validation is for a peer whose address has changed, which does not happen in a fixture where both routers sit still. This is correctness against the capability we publish, not something the integration suite will show moving — and SSU2 is still off by default (4-5).
+
+#### 4-3b started and stopped before writing code — **and it turned up a question about `k_header_1` that has to be settled first**
+
+Batch 4-3b (`p4/ssu2-session-migration`) was opened and abandoned with no code. Recorded here because what stopped it is more useful than the batch would have been.
+
+**What 4-3b needs.** Migration means finding a session for a packet that arrives from an address we have never seen. Our `SSU2Host.Sessions` is a `Dictionary<IPEndPoint, SSU2Session>`, so such a packet matches nothing and `DispatchPacket` drops it. The fix is to find the session by the **connection id** in the short header — which is what the header carries it for.
+
+**What i2pd does** (`SSU2Server::ProcessNextPacket`, `SSU2.cpp`, head of the `openssl` branch): `m_Sessions` is keyed by `uint64_t connID`, not by endpoint, and every incoming packet is unmasked with
+
+```cpp
+connID ^= CreateHeaderMask (i2p::context.GetSSU2IntroKey (), buf + (len - 24));
+```
+
+`i2p::context.GetSSU2IntroKey()` is **i2pd's own** intro key, used for every incoming packet regardless of who opened the session.
+
+**Our rule is different, and the two only agree in one direction.** Both our send and receive paths choose
+
+```csharp
+var kHeader1 = IsOutgoing ? GetRemoteIntroKey() : Host.GetMyIntroKey();
+```
+
+(`SSU2Session.cs:376`, `:403`, `:728`, `:745` sending; `:1503` receiving). That is batch 4-1a's rule — *the intro key of whichever router published the SSU2 address that was dialled* — and it is used for **both directions of a session**. So:
+
+| session | we send, masked with | i2pd unmasks with | agree? |
+|---|---|---|---|
+| we dialled i2pd | i2pd's intro key | i2pd's own | yes |
+| i2pd dialled us | **our** intro key | **i2pd's own** | **no** |
+
+**This is a question, not a finding.** It rests on a fetched summary of `ProcessNextPacket` rather than on the SSU2 spec text or a captured packet, and the repository's own history argues both ways: batch 4-0h established a handshake and 4-1c carried traffic over it, but **both were C#-to-C#** — two halves agreeing with each other, which is this project's most common failure shape and exactly what 4-1a's rule was derived to fix. Session 6 did establish a session with i2pd, but SSU2 is off by default (`EnableSSU2`, batch 4-5), so the data phase in the responder direction has never been measured against i2pd.
+
+**What to do first, before any of 4-3b:**
+
+1. Read the SSU2 specification's header-encryption section for what `k_header_1` is in the **data phase**, in each direction. 4-1a's citations were re-derived from i2pd symbols after the "spec lines" references turned out to point at an absent document, so cite symbols or captured bytes.
+2. If the rules differ, that is a defect ahead of 4-3b in priority and it is why the responder direction should be captured against i2pd before 4-5 turns SSU2 on.
+3. Only then key `Sessions` by connection id — because *which key unmasks an unknown packet* is the whole design of that lookup, and getting it wrong makes every session unfindable rather than one.
