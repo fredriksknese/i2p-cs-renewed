@@ -2432,3 +2432,55 @@ Every exit is now named at `Information` — once per store, and the count *is* 
 #### What this does not settle
 
 **Any of it.** This batch buys one readable run. The candidates it will separate: whether `ReplyToken` is even non-zero on i2pd's stores, whether we pick the tunnel path or the direct path, and whether the acknowledgement is sent and lost in the tunnel rather than never sent. The last of those is the transit data path, which is 6-1's instrument and still the standing suspect — along with the two i2pd-to-i2pd transfers that flap.
+
+#### 3-17 confirmed in CI — **and the answer is that the acknowledgement path was never the problem**
+
+Runs `31812407810` and, after a rebase past a plan-file conflict, `31815154795` (merged). Build green, unit **385 / 0 / 1** on the merged run, integration **39 passed / 13 failed / 3 skipped** — and those thirteen are *exactly* the hard core described below, with all four unstable tests passing. The first run was 37/15 and the log evidence quoted here comes from its artifacts; the code was byte-identical across the two.
+
+The batch bought one readable run, and the run answered its question immediately — in the opposite direction to the assumption everything since 3-16 had been built on.
+
+**Every DatabaseStore that reached us asked for no acknowledgement.**
+
+```
+20  FloodfillServer: <key> stored, no acknowledgement requested
+ 2  FloodfillServer: DeliveryStatus <token> for [v7tci] sent direct to [v7tci], no reply tunnel named
+ 0  asked for acknowledgement token ... but named no reply gateway
+```
+
+22 stores arrived (19 `from unknown`, 3 from a named peer); 18 LeaseSets and 4 RouterInfos were stored. **Twenty of the twenty-two carried `ReplyToken == 0`.** The two that did request an acknowledgement got one, by the direct path — and both name a reply gateway *identical to the stored key* with no reply tunnel, which is the signature of a router storing its own RouterInfo, not of a destination publishing a LeaseSet.
+
+Meanwhile i2pd logged `Destination: Publishing LeaseSet` **40** times and `Publish confirmation was not received` **1523** times.
+
+**So i2pd's LeaseSet publishes are not arriving as acknowledgement-requesting stores at all.** `LeaseSetDestination::Publish` always draws a reply token (`RAND_bytes ((uint8_t *)&m_PublishReplyToken, 4)`) and passes its inbound tunnel, so a publish that reached our floodfill intact would have a non-zero token and a reply tunnel. None did. The confirmations are missing because **the publishes are being lost, not because we fail to answer them** — and no amount of work on `SendDeliveryStatus` would ever have moved that number.
+
+**This retires 3-16's open item 3 as stated and replaces it.** The suspect is no longer "the DeliveryStatus does not get back"; it is "the DatabaseStore does not get here". i2pd sends its publish garlic-wrapped for the floodfill router (`WrapMessageForRouter`) through its **outbound tunnel**, whose endpoint in a two-router fixture is us. Two candidates, in order:
+
+1. **The garlic never opens.** A router-targeted ECIES garlic from i2pd that we cannot decrypt is silently nothing — the store inside never exists. `ECIESRouterProcessor` / `ECIESRouterSKM` is the path, and it has never been measured against i2pd.
+2. **The outbound tunnel drops it at our endpoint.** That is the transit data path, still unmeasured, and now instrumented by 6-1.
+
+The 18 LeaseSets we *did* store are then not i2pd's publishes but floods or lookups' side effects, and establishing which is the first step of the next batch.
+
+**Method note, worth keeping.** Three batches in a row (3-16, 6-1, 3-17) were about being able to see, and this is what the third bought: a number everyone had assumed pointed at our reply path turned out to point at the receive path instead. The assumption was never checked because it could not be — and the check cost four log lines.
+
+#### Integration stability, measured rather than asserted
+
+Four runs of the same suite (3-16, 6-1, 4-3a, 3-17) with batches that mostly cannot affect it:
+
+| | 3-16 | 6-1 | 4-3a | 3-17 | 3-17 rebased |
+|---|---|---|---|---|---|
+| passed | 39 | 37 | 38 | 37 | 39 |
+| failed | 13 | 15 | 14 | 15 | 13 |
+
+**The same thirteen tests fail in all five runs.** That is the real figure, and 3-16 is what brought it down to thirteen. Four more tests vary, and none of them fails in more than two of the five:
+
+```
+                                                  3-16  6-1  4-3a  3-17  3-17r
+CaptureSessionRequestByAnsweringTheTokenRequest    .    .    .     F     .
+TestSAM_SessionCreate_I2pd                         .    .    .     F     .
+TestSend5MB_I2pd0_To_I2pd1                         .    F    .     .     .
+TestSend5MB_I2pdA_To_I2pdB_MultiHop                .    F    F     .     .
+```
+
+The rebased 3-17 run is the clean case — all four passed at once, leaving precisely the thirteen.
+
+Two corrections follow, both of statements made earlier in this session. 3-16's "four tests came back" counted two flappers; and the "37/15 baseline" recorded after 6-1 was itself an over-read from two runs. **The stable statement is: 13 hard failures, 4 unstable tests, pass count 37–39.** A batch has moved the suite only if the thirteen change. `CaptureSessionRequestByAnsweringTheTokenRequest` was already recorded as flaky by batch 4-2c, which is now confirmed across four more runs.
