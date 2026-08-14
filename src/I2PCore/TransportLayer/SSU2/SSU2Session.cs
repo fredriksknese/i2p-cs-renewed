@@ -441,23 +441,41 @@ public class SSU2Session : ITransport
     }
 
     /// <summary>
-    ///     Send a PathResponse block echoing the challenge data.
-    ///     Used for connection migration / path validation.
+    ///     Answer a PathChallenge by echoing its data back as a PathResponse.
     /// </summary>
+    /// <remarks>
+    ///     Batch 4-3a (docs/PRODUCTION-PLAN.md). <b>This built the block and dropped it.</b> It
+    ///     hand-rolled the type and length bytes into a local array, logged, and returned — so a
+    ///     peer that validated our path got silence.
+    ///     <para>
+    ///     That was not a dormant stub. <c>SSU2Host.PathValidationSupported</c> is <c>true</c>, so
+    ///     this router publishes <c>p</c> in its SSU2 <c>caps</c> — an invitation to send us
+    ///     exactly the challenge we did not answer. Batch 0-4 found the same shape in the
+    ///     migration capability and turned <c>m</c> off; <c>p</c> was left on.
+    ///     </para>
+    ///     <para>
+    ///     The framing is <see cref="SendBlock" />'s job, not ours: it takes the block
+    ///     <i>payload</i> and <c>SSU2DataPacket.BuildWithBlock</c> writes type and length. The
+    ///     hand-rolled header here would have been written twice had it ever been sent.
+    ///     </para>
+    /// </remarks>
     private void SendPathResponse(byte[] challengeData)
     {
-        // Build a data packet containing just the PathResponse block
-        var blockData = new byte[3 + challengeData.Length]; // type(1) + length(2) + data
-        blockData[0] = (byte)SSU2BlockType.PathResponse;
-        blockData[1] = (byte)(challengeData.Length >> 8);
-        blockData[2] = (byte)(challengeData.Length & 0xFF);
-        Array.Copy(challengeData, 0, blockData, 3, challengeData.Length);
+        // The response is the challenge, echoed exactly — so its size is the peer's choice, and
+        // one that does not fit a datagram cannot be answered. Refuse it here rather than let
+        // BuildWithBlock produce a packet that cannot go out: an unanswerable challenge is the
+        // peer's protocol error, not an exception of ours. The 1:1 echo is also why this is not
+        // an amplification vector.
+        if (challengeData.Length > MaxPayloadSize)
+        {
+            Logging.LogWarning(
+                $"{DebugId}: PathChallenge of {challengeData.Length} bytes exceeds the {MaxPayloadSize} "
+                + "byte payload limit and cannot be echoed; ignoring");
+            return;
+        }
 
-        // NOT SENT. blockData is built and dropped; wiring it into the Send path is batch 4-3,
-        // and SSU2Host.ConnectionMigrationSupported stays false until it is. The old message
-        // here read "PathResponse sent", which was false and — since batch 0-1 made debug
-        // logging reachable in Release — would have been actively misleading in the field.
-        Logging.LogDebug($"{DebugId}: PathResponse NOT sent ({challengeData.Length} bytes) - stub, see batch 4-3");
+        SendBlock(SSU2BlockType.PathResponse, challengeData);
+        Logging.LogDebug($"{DebugId}: PathResponse sent ({challengeData.Length} bytes)");
     }
 
     private void ExtractRemoteEndpoint()
@@ -1641,8 +1659,14 @@ public class SSU2Session : ITransport
                 }
                 case SSU2BlockType.PathResponse:
                 {
-                    // Path validation response - verify matches our challenge
-                    Logging.LogDebug($"{DebugId}: PathResponse received");
+                    // Batch 4-3a: there is nothing to match this against. We answer challenges
+                    // but never issue one, because issuing one is only useful for migrating a
+                    // session to a new address and SSU2Host.Sessions is keyed by IPEndPoint —
+                    // a packet from a moved peer finds no session and is dropped before it gets
+                    // here. Keying by connection id, challenging the new address and migrating
+                    // only on a matching response is batch 4-3b, which is what turns
+                    // ConnectionMigrationSupported on. Until then this is unsolicited.
+                    Logging.LogDebug($"{DebugId}: unsolicited PathResponse received, ignored");
                     break;
                 }
                 case SSU2BlockType.FirstPacketNumber:

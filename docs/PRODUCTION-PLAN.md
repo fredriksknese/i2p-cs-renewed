@@ -162,7 +162,8 @@ Order is driven by one question: what must exist before SSU2/ECIES repair is eve
 | 4-2a | `p4/ssu2-retry-token-responder` | ✅ **Done** (PR #29), responder half. i2pd's first packet to a peer it holds no token for is a **TokenRequest** (type 10); it fell through `SSU2Host.DispatchPacket`'s final `else`, so an inbound SSU2 session from i2pd could not begin. Adds `SSU2TokenCache` (per host, `TickCounter` expiry, issued/received kept separate, size-capped) and `Messages/Retry.cs`, and answers a TokenRequest with a Retry. Creates no session — a TokenRequest is stateless anti-DoS. Header length guard raised 32 → 64, which the trial decrypt always needed. | ✅ `Ssu2RetryTokenTest`, 9 tests: the real i2pd TokenRequest authenticates through the production path, and an inbound TokenRequest is answered end-to-end over the 3-3 loopback channel |
 | 4-2c | `p4/ssu2-sessionrequest-capture` | ✅ **Done** (PR #30). ⚠️ **Known flaky in CI** — it passed on #30, failed on #34 and passed again on #35, and the run it failed on had 4-0b in the tree exactly as the run it passed on did. Its failing assertion is `Retry.TryOpen` on **i2pd's first datagram, before we transmit anything**, so no change of ours can reach it; the precondition is that i2pd dials within the window and opens with a TokenRequest. Treat a lone failure of this test as noise, and make it say *why* before treating it as signal. **Unblocked 4-0b.** Extends `SSU2GoldenVectorCapture` to answer i2pd's TokenRequest with a Retry built by production code and capture what it sends next. **The captured file is itself the assertion**: i2pd only proceeds to a Session Request if the Retry authenticated and carried a token it accepted, so a Session Request arriving is end-to-end proof that 4-2a is correct against the real peer rather than against ourselves. The captured packet carries the ephemeral key and is the only thing that can settle 4-0b's 48-byte question — the TokenRequest vector has no ephemeral key at all. **Cannot be run against i2pd 2.45.1**: neither this nor its sibling elicits a dial there, so CI (2.61.0) is the only place it can pass. | The vector file appears; `Retry.TryOpen` reads i2pd's TokenRequest in the live exchange, not just from the checked-in bytes |
 | 4-2b | `p4/ssu2-retry-token-initiator` | ✅ **Done** (PR #31). Dispatches `TYPE_RETRY` (previously "Unknown packet type 9", so a token-enforcing peer — i2pd's normal configuration — could never be dialled), consumes the token, presents it in `SendSessionRequest`, keeps the `NewToken` block that was parsed and dropped, and requires a token as responder. Rejection sends a Retry and **does not** `Terminate()`: a terminated session lingers in `Sessions` until the worker tick reaps it, so the re-sent request would be routed into a dead one. Retry handling capped at one re-send. | ✅ `Ssu2TokenExchangeTest`, 4 tests over the 3-3 loopback channel, asserting on the token exchange rather than establishment (still blocked by 4-0b) |
-| 4-3 | `p4/ssu2-path-validation` | Real `SendPathResponse` (`SSU2Session.cs:360-372`); only then restore `ConnectionMigrationSupported` | Source-port migration mid-session survives |
+| 4-3a | `p4/ssu2-path-response` | ✅ **Done** (PR #53). `SendPathResponse` built the block and dropped it while `caps` published `p`, so we invited a challenge and answered with silence. Now sent via `SendBlock`, bounded by one datagram, and the hand-rolled framing (which `BuildWithBlock` also writes) is gone. | `Ssu2PathResponseTest` |
+| 4-3b | `p4/ssu2-session-migration` | **Split out of 4-3 by 4-3a.** `SSU2Host.Sessions` is keyed by `IPEndPoint`, so a packet from a moved peer matches no session and `DispatchPacket` drops it before any block is read. Key by connection id, challenge the new address, migrate only on a matching PathResponse, then publish `m`. | Source-port migration mid-session survives |
 | 4-4 | `p4/ssu2-frag-termination` | Fragment/reassembly + Termination/ImmediateAck parity vs golden vectors | Fixture + integration |
 | 4-5 | `p4/ssu2-default-on` | `EnableSSU2`→true, `--disable-ssu2` retained, README status updated | Full integration suite |
 
@@ -2321,3 +2322,39 @@ Two fewer passes than the 3-16 run, and the difference is exactly two tests: `Te
 **So 3-16's "four tests came back" was two solid and two flapping.** `TestSAM_DatagramSession_I2pd` and `TestSAM_SessionCreate_I2pd` have passed in both runs since; the two i2pd-to-i2pd transfers should not have been counted. **The working baseline is 37 / 15**, and the two i2pd-to-i2pd transfers are a known-unstable pair that no future batch should read as signal in either direction without a second run.
 
 That instability is itself unexplained and worth a batch eventually: both are transfers between two i2pd routers, in which our only role is to carry the tunnels — so a test that passes and fails alternately with no change on either side is measuring something nondeterministic in the path we provide. That is the same suspect as the 1490 unconfirmed publishes.
+
+### Session 12 (continued) — batch 4-3a — **we advertise path validation and answer it with silence**
+
+**Unit suite 369 passed / 0 failed / 1 skipped** (370 total, +5), Release build 0 errors. Run in parallel with 6-1's CI; the two batches share no files.
+
+#### The split, and why
+
+The plan's 4-3 row reads "real `SendPathResponse`; only then restore `ConnectionMigrationSupported`", which reads like a one-liner and is not. Reading the dispatch path first:
+
+**`SSU2Host.Sessions` is keyed by `IPEndPoint`.** `DispatchPacket` looks a packet up by the address it arrived from, and anything from an unknown address that is not a SessionRequest, PeerTest or TokenRequest is dropped with a warning. So a peer that has moved never reaches a session at all, and no amount of block handling changes that: **migration needs the session table keyed by connection id**, which is what the short header carries it for.
+
+That is a change to the transport hot path and deserves its own batch. Split:
+
+- **4-3a (this one)** — answer a challenge, because we already invite them.
+- **4-3b** — key sessions by connection id, challenge the new address, migrate only on a matching response, and only then publish `m`.
+
+#### The defect
+
+`SendPathResponse` hand-rolled a type byte and a big-endian length in front of the challenge data, into a local array, logged, and returned. Batch 0-4 had already found that its log line claimed "PathResponse sent" and corrected the message to say it was a stub — the send was left for here.
+
+**A dormant stub would be harmless. This one is not:** `SSU2Host.PathValidationSupported` is `true`, so this router publishes `p` in its SSU2 `caps`, which is precisely an invitation to send us the challenge we answered with silence. Batch 0-4 turned `m` off for exactly this reason and left `p` on.
+
+Two smaller things fell out of fixing it:
+
+1. **The hand-rolled framing was wrong as well as unsent.** `SendBlock` takes the block *payload* and `SSU2DataPacket.BuildWithBlock` writes the type and length. Wiring the stub up as it stood would have sent every response with its header twice. A test pins that the framing is not written here.
+2. **The echo is bounded.** Its size is the peer's choice, so a challenge larger than one datagram's payload is refused with a warning rather than handed to a builder that cannot produce a sendable packet. The 1:1 echo is also why this is not an amplification vector, and the comment says so.
+
+`ConnectionMigrationSupported` stays **false**, and the reason in its comment is now the endpoint keying rather than the missing send.
+
+#### The guard
+
+`Ssu2PathResponseTest`, 5 tests. The round trip goes through the real `BuildWithBlock` and `Parse` for a range of challenge lengths, rather than asserting on bytes we write — "builds the right block" is what the stub already did, so a byte-level assertion would have passed against it. `SendPathResponseReachesTheSendPath` reads the source and requires the call to `SendBlock`; confirmed red by replacing that call with the old local-array build, which fails 1 of 5 and leaves the other four green. The last test ties the two published capabilities to what is implemented, and pins the endpoint keying that is `m`'s stated reason.
+
+#### What this does not settle
+
+**Whether i2pd ever challenges us.** Path validation is for a peer whose address has changed, which does not happen in a fixture where both routers sit still. This is correctness against the capability we publish, not something the integration suite will show moving — and SSU2 is still off by default (4-5).

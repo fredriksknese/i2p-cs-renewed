@@ -28,10 +28,17 @@ public class SSU2Host : ITransportProtocol
     // SSU2 capabilities
     public static readonly bool RelaySupported = true;
     public static readonly bool PeerTestSupported = true;
+    // Batch 4-3a: this advertises 'p', which invites peers to send us a PathChallenge. Until
+    // that batch SendPathResponse built the answer and dropped it, so the invitation was to a
+    // silence — the same false advertisement batch 0-4 found in 'm' below, left switched on.
     public static readonly bool PathValidationSupported = true;
-    // Batch 0-4: false until SendPathResponse actually sends. It currently builds the
-    // PathResponse block and then only logs "PathResponse sent" without transmitting it, so
-    // advertising 'm' promises a migration we silently fail to complete. Batch 4-3 owns this.
+
+    // Batch 0-4 turned this off because SendPathResponse did not send; batch 4-3a fixed that and
+    // it stays off anyway, for a second reason that batch found. Answering a challenge is not
+    // migrating: Sessions is keyed by IPEndPoint, so a packet from a peer that has moved matches
+    // no session and is dropped by DispatchPacket before any block is read. Advertising 'm'
+    // would still promise a migration we cannot complete. Batch 4-3b keys sessions by
+    // connection id, challenges the new address, and migrates only on a matching response.
     public static readonly bool ConnectionMigrationSupported = false;
     private readonly List<IntroducerInfo> _activeIntroducers = new();
     private readonly object _introducerLock = new();
