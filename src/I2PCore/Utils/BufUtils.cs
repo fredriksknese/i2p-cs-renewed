@@ -752,6 +752,20 @@ public static class BufUtils
 
     public static int ComputeHash(this byte[] data)
     {
+        return ComputeHash((ReadOnlySpan<byte>)data);
+    }
+
+    /// <summary>
+    ///     FNV-1a over a span, with the same avalanche step the byte[] overload has always used.
+    /// </summary>
+    /// <remarks>
+    ///     Batch 6-1 (docs/PRODUCTION-PLAN.md) added this so the tunnel traces can digest an
+    ///     <c>I2PByteBlock</c> without copying it out first. It is a correlation handle for
+    ///     following one message across two routers' logs, not a checksum — do not use it where
+    ///     collisions matter.
+    /// </remarks>
+    public static int ComputeHash(this ReadOnlySpan<byte> data)
+    {
         unchecked
         {
             const int p = 16777619;

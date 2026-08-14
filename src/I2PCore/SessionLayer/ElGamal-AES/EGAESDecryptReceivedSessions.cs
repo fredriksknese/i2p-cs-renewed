@@ -42,15 +42,11 @@ public class EgaesDecryptReceivedSessions
             return null;
         }
 
-#if LOG_ALL_LEASE_MGMT
-            Logging.LogDebug( $"{Owner} ReceivedSessions: Working Aes block received. {SessionTags.Count()} tags available." );
-#endif
+        Logging.LogTrace( TraceCategories.LeaseMgmt, $"{Owner} ReceivedSessions: Working Aes block received. {SessionTags.Count()} tags available." );
 
         if (aesblock?.Tags?.Count > 0)
         {
-#if LOG_ALL_LEASE_MGMT
-                Logging.LogDebug( $"{Owner} ReceivedSessions: {aesblock.Tags.Count} new tags received." );
-#endif
+            Logging.LogTrace( TraceCategories.LeaseMgmt, $"{Owner} ReceivedSessions: {aesblock.Tags.Count} new tags received." );
             var currenttagcount = SessionTags.Count();
 
             foreach (var onetag in aesblock.Tags)

@@ -129,6 +129,25 @@ public abstract class Tunnel
 
     public bool Terminated { get; private set; }
 
+    /// <summary>
+    ///     Rate limiter for the per-message traces in the tunnel roles below.
+    /// </summary>
+    /// <remarks>
+    ///     Batch 6-1 (docs/PRODUCTION-PLAN.md). This replaces four identical per-instance
+    ///     <c>ItemFilterWindow</c> fields in <see cref="TransitTunnel" />,
+    ///     <see cref="EndpointTunnel" />, <see cref="GatewayTunnel" /> and
+    ///     <see cref="OutboundTunnel" />. One shared window is equivalent because every key
+    ///     already names the destination or message type it is limiting, and a router carrying a
+    ///     thousand transit tunnels no longer allocates a thousand windows to hold traces that
+    ///     are switched off. <c>ItemFilterWindow.Update</c> locks, so sharing it across the
+    ///     layer threads is safe. OutboundTunnel's window allowed 5 per 30 s rather than 2;
+    ///     it now gets 2 like the others.
+    /// </remarks>
+    // internal rather than protected: HashedItemGroup is internal, and every tunnel role that
+    // uses this lives in this assembly.
+    internal static readonly ItemFilterWindow<HashedItemGroup> TraceMessageFilter =
+        new( TickSpan.Seconds( 30 ), 2 );
+
     public event Action<Tunnel> TunnelShutdown;
 
     public virtual void Shutdown()
@@ -139,9 +158,7 @@ public abstract class Tunnel
 
     public virtual void MessageReceived(I2NpMessage msg, int recvdatasize)
     {
-#if LOG_ALL_TUNNEL_TRANSFER
-            Logging.LogDebug( $"{this}: MessageReceived {msg}" );
-#endif
+        Logging.LogTrace( TraceCategories.TunnelTransfer, $"{this}: MessageReceived {msg}" );
         Bandwidth.DataReceived(recvdatasize);
         Interlocked.Increment(ref _messageCount);
 

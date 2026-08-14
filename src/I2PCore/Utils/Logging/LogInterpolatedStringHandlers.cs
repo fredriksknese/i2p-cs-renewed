@@ -196,3 +196,72 @@ public ref struct DebugDataLogInterpolatedStringHandler
         return _inner.ToStringAndClear();
     }
 }
+
+/// <summary>
+///     Trace counterpart of <see cref="DebugLogInterpolatedStringHandler" />, selected by
+///     category rather than by level.
+/// </summary>
+/// <remarks>
+///     Batch 6-1. The category arrives as a constructor argument via
+///     <c>[InterpolatedStringHandlerArgument("category")]</c> on <see cref="Logging.LogTrace" />,
+///     so the bit test happens before any interpolation — a trace whose category is off costs
+///     one mask and one comparison, which is what makes it safe to leave these calls in the
+///     per-message tunnel paths where they live.
+/// </remarks>
+[InterpolatedStringHandler]
+public ref struct TraceLogInterpolatedStringHandler
+{
+    private DefaultInterpolatedStringHandler _inner;
+
+    public TraceLogInterpolatedStringHandler(
+        int literalLength, int formattedCount, TraceCategories category, out bool shouldAppend )
+    {
+        shouldAppend = Logging.IsTraceEnabled( category );
+        Enabled = shouldAppend;
+        _inner = shouldAppend
+            ? new DefaultInterpolatedStringHandler( literalLength, formattedCount )
+            : default;
+    }
+
+    internal bool Enabled { get; }
+
+    public void AppendLiteral( string value )
+    {
+        _inner.AppendLiteral( value );
+    }
+
+    public void AppendFormatted<T>( T value )
+    {
+        _inner.AppendFormatted( value );
+    }
+
+    public void AppendFormatted<T>( T value, string format )
+    {
+        _inner.AppendFormatted( value, format );
+    }
+
+    public void AppendFormatted<T>( T value, int alignment )
+    {
+        _inner.AppendFormatted( value, alignment );
+    }
+
+    public void AppendFormatted<T>( T value, int alignment, string format )
+    {
+        _inner.AppendFormatted( value, alignment, format );
+    }
+
+    public void AppendFormatted( ReadOnlySpan<char> value )
+    {
+        _inner.AppendFormatted( value );
+    }
+
+    public void AppendFormatted( string value )
+    {
+        _inner.AppendFormatted( value );
+    }
+
+    internal string GetTextAndClear()
+    {
+        return _inner.ToStringAndClear();
+    }
+}

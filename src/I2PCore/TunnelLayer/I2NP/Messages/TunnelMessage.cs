@@ -42,9 +42,7 @@ public class TunnelMessageLocal : TunnelMessage
     public override void Distribute(Tunnel tunnel)
     {
         tunnel.MessageReceived(Message, Message.CreateHeader16.HeaderAndPayload.Length);
-#if LOG_ALL_TUNNEL_TRANSFER
-            Logging.LogDebug( $"{this}: Local dist to {tunnel}: {Message}" );
-#endif
+        Logging.LogTrace( TraceCategories.TunnelTransfer, $"{this}: Local dist to {tunnel}: {Message}" );
     }
 }
 

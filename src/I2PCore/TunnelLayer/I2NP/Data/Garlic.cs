@@ -256,9 +256,7 @@ public class Garlic : I2PType
 
         var tag = new I2PSessionTag(new I2PBufferCursor(garlic.EgData.BaseArray, garlic.EgData.BaseArrayOffset, 32));
         var sessionkey = findsessionkey?.Invoke(tag);
-#if LOG_ALL_LEASE_MGMT
-            Logging.LogDebug( $"RetrieveAESBlock: Garlic: Session key {sessionkey?.Key.ToString() ?? "[null]"}" );
-#endif
+        Logging.LogTrace( TraceCategories.LeaseMgmt, $"RetrieveAESBlock: Garlic: Session key {sessionkey?.Key.ToString() ?? "[null]"}" );
         if (sessionkey != null)
         {
             var aesbuf = garlic.EgData.Slice(32);
@@ -290,16 +288,12 @@ public class Garlic : I2PType
             }
         }
 
-#if LOG_ALL_LEASE_MGMT
-            Logging.LogDebug( "RetrieveAESBlock: Garlic: No session key. Using ElGamal to decrypt." );
-#endif
+        Logging.LogTrace( TraceCategories.LeaseMgmt, "RetrieveAESBlock: Garlic: No session key. Using ElGamal to decrypt." );
 
         try
         {
             (result, sessionkey) = EgDecryptGarlic(garlic, privatekey);
-#if LOG_ALL_LEASE_MGMT
-                Logging.LogDebug( $"RetrieveAESBlock: Garlic: EG session key {sessionkey?.Key.ToString() ?? "[null]"}" );
-#endif
+            Logging.LogTrace( TraceCategories.LeaseMgmt, $"RetrieveAESBlock: Garlic: EG session key {sessionkey?.Key.ToString() ?? "[null]"}" );
         }
         catch (ChecksumFailureException ex)
         {

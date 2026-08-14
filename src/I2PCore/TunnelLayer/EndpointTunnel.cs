@@ -51,11 +51,6 @@ public class EndpointTunnel : InboundTunnel
 
     public override IEnumerable<I2PRouterIdentity> TunnelMembers => Enumerable.Empty<I2PRouterIdentity>();
 
-#if LOG_ALL_TUNNEL_TRANSFER
-        ItemFilterWindow<HashedItemGroup> FilterMessageTypes =
- new ItemFilterWindow<HashedItemGroup>( TickSpan.Seconds( 30 ), 2 );
-#endif
-
     private readonly PeriodicAction FragBufferReport = new(TickSpan.Seconds(60));
 
     public override bool Exectue()
@@ -105,12 +100,9 @@ public class EndpointTunnel : InboundTunnel
             }
         }
 
-#if LOG_ALL_TUNNEL_TRANSFER
-            if ( dropped > 0 )
-            {
-                Logging.LogDebug( () => string.Format( "{0} bandwidth limit. {1} dropped messages. {2}", this, dropped, Bandwidth ) );
-            }
-#endif
+        if ( dropped > 0 )
+            Logging.LogTrace( TraceCategories.TunnelTransfer,
+                $"{this} bandwidth limit. {dropped} dropped messages. {Bandwidth}" );
 
         return;
     }

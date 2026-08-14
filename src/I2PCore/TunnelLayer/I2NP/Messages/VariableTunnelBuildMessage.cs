@@ -141,9 +141,7 @@ public class VariableTunnelBuildMessage : I2NpMessage
 
             requests.Add(rec);
 
-#if LOG_ALL_TUNNEL_TRANSFER
-                Logging.Log( rec.ToString() );
-#endif
+            Logging.LogTrace( TraceCategories.TunnelTransfer, rec.ToString() );
         }
 
         // Physical record sort order
@@ -258,9 +256,7 @@ public class VariableTunnelBuildMessage : I2NpMessage
 
             requests.Add(rec);
 
-#if LOG_ALL_TUNNEL_TRANSFER
-                Logging.Log( rec.ToString() );
-#endif
+            Logging.LogTrace( TraceCategories.TunnelTransfer, rec.ToString() );
         }
 
         // Physical record sort order

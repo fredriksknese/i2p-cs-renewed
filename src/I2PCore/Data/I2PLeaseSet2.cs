@@ -171,12 +171,9 @@ public class I2PLeaseSet2 : I2PType, ILeaseSet
         if (remove.Length != 0)
             foreach (var one in remove)
                 LeasesField.Remove(one);
-#if LOG_ALL_TUNNEL_TRANSFER
-            else
-            {
-                Logging.LogDebug( "I2PLeaseSet RemoveLease: No lease found to remove" );
-            }
-#endif
+        else
+            Logging.LogTrace( TraceCategories.TunnelTransfer,
+                "I2PLeaseSet RemoveLease: No lease found to remove" );
     }
 
     public override string ToString()

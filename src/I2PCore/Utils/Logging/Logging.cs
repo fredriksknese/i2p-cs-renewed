@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using CM = System.Configuration.ConfigurationManager;
 
@@ -60,6 +61,7 @@ public static class Logging
         CloseLogFile();
 
         LogLevel = LogLevels.Information;
+        EnabledTraces = TraceCategories.None;
         LogToConsole = false;
         LogToDebug = false;
         TimestampFiles = false;
@@ -88,6 +90,31 @@ public static class Logging
     public static bool IsEnabled( LogLevels level )
     {
         return level >= LogLevel;
+    }
+
+    /// <summary>
+    ///     The verbose tracing categories currently switched on. Off by default; the CLI exposes
+    ///     <c>--log-trace</c>.
+    /// </summary>
+    /// <remarks>
+    ///     Batch 6-1 (docs/PRODUCTION-PLAN.md) replaced the <c>#if LOG_ALL_TUNNEL_TRANSFER</c>
+    ///     scheme these categories used to live behind. See <see cref="TraceCategories" /> for why.
+    /// </remarks>
+    public static TraceCategories EnabledTraces = TraceCategories.None;
+
+    /// <summary>
+    ///     True when a trace in <paramref name="category" /> would currently be emitted.
+    /// </summary>
+    /// <remarks>
+    ///     Two filters, deliberately, and both must pass. The category says <i>which</i> firehose
+    ///     you asked for; <see cref="LogLevel" /> still says how much output the router is
+    ///     producing at all, and a trace is Debug-level output. Turning on a category without
+    ///     lowering the level therefore produces nothing — which would be a trap, so the CLI
+    ///     says so at startup rather than leaving it to be discovered from an empty log.
+    /// </remarks>
+    public static bool IsTraceEnabled( TraceCategories category )
+    {
+        return ( EnabledTraces & category ) != 0 && IsEnabled( LogLevels.Debug );
     }
 
     /// <summary>
@@ -214,6 +241,35 @@ public static class Logging
     public static void LogDebug(Func<string> txtgen)
     {
         if (!IsEnabled(LogLevels.Debug)) return;
+        Log(LogLevels.Debug, txtgen());
+    }
+
+    /// <summary>
+    ///     Emit a trace in <paramref name="category" />, at Debug level, if that category is on.
+    /// </summary>
+    /// <remarks>
+    ///     Batch 6-1. Write these as a single interpolated literal —
+    ///     <c>LogTrace(TraceCategories.TunnelTransfer, $"...")</c> — so the handler can suppress
+    ///     the interpolation. Concatenating (<c>$"a" + $"b"</c>) or pre-formatting binds the
+    ///     string overload below instead and the message is built whether or not anyone wanted it.
+    /// </remarks>
+    public static void LogTrace(
+        TraceCategories category,
+        [InterpolatedStringHandlerArgument( "category" )] ref TraceLogInterpolatedStringHandler handler)
+    {
+        if (handler.Enabled) Log(LogLevels.Debug, handler.GetTextAndClear());
+    }
+
+    public static void LogTrace(TraceCategories category, string txt)
+    {
+        if (!IsTraceEnabled(category)) return;
+        Log(LogLevels.Debug, txt);
+    }
+
+    /// <summary>For a trace whose message needs statements rather than one expression.</summary>
+    public static void LogTrace(TraceCategories category, Func<string> txtgen)
+    {
+        if (!IsTraceEnabled(category)) return;
         Log(LogLevels.Debug, txtgen());
     }
 

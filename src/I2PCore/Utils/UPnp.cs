@@ -186,9 +186,7 @@ public class UPnp
             var txt = Encoding.UTF8.GetString(buf, 0, len);
             var resp = ParseResponse(txt);
 
-#if LOG_ALL_UPNP
-            Logging.Log("UPnp multicast data received: " + MlEp + ":" + txt);
-#endif
+            Logging.LogTrace( TraceCategories.Upnp, "UPnp multicast data received: " + MlEp + ":" + txt);
 
             if (resp != null) CaptureWanipConnection(resp);
         }
@@ -239,9 +237,7 @@ public class UPnp
     {
         var location = resp.Headers["LOCATION"];
 
-#if LOG_ALL_UPNP
-        Logging.Log("Upnp: NewWANIPConnectionFound: LOCATION: " + location);
-#endif
+        Logging.LogTrace( TraceCategories.Upnp, "Upnp: NewWANIPConnectionFound: LOCATION: " + location);
         var xmlreq = HttpWebRequest.Create(location);
         xmlreq.Timeout = 30 * 1000;
         var response = xmlreq.GetResponse();
@@ -250,11 +246,13 @@ public class UPnp
         var sr = new StreamReader(response.GetResponseStream());
         var st = sr.ReadToEnd();
 
-#if LOG_ALL_UPNP
-        Logging.Log("Upnp: XML: " + st);
-#else
-            Logging.Log( "Upnp: Got device description XML." );
-#endif
+        // Batch 6-1: the device description is several kilobytes, so the category picks between
+        // the whole document and an acknowledgement that one arrived — as the #if/#else did.
+        if (Logging.IsTraceEnabled(TraceCategories.Upnp))
+            Logging.LogTrace(TraceCategories.Upnp, "Upnp: XML: " + st);
+        else
+            Logging.Log("Upnp: Got device description XML.");
+
         st = StripNamespaces(st);
 
         xml.LoadXml(st);
@@ -416,9 +414,7 @@ public class UPnp
                 tc.Connect(ctlinfo.Host, ctlinfo.Port);
 
             st = st + soap;
-#if LOG_ALL_UPNP
-            Logging.Log("Upnp: Sending : " + st);
-#endif
+            Logging.LogTrace( TraceCategories.Upnp, "Upnp: Sending : " + st);
 
             var buf = Encoding.ASCII.GetBytes(st);
 
@@ -458,9 +454,7 @@ public class UPnp
             ;
 
 
-#if LOG_ALL_UPNP
-            Logging.Log("Upnp: Response: " + respst);
-#endif
+            Logging.LogTrace( TraceCategories.Upnp, "Upnp: Response: " + respst);
             return respst;
         }
     }

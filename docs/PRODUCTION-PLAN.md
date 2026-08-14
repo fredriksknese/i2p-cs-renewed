@@ -180,7 +180,7 @@ Order is driven by one question: what must exist before SSU2/ECIES repair is eve
 
 | ID | Branch | Scope |
 |---|---|---|
-| 6-1 | `p6/tunnel-tracing` | Per-hop structured tracing behind `LOG_ALL_TUNNEL_TRANSFER`; convert the `NOLOG_` prefix scheme in `I2PCore.csproj` to a proper per-configuration property |
+| 6-1 | `p6/tunnel-tracing` | ✅ **Done** (PR #52). The `NOLOG_` `#if` scheme is gone: categories are runtime flags (`TraceCategories`, `--log-trace`) behind an interpolated-string handler, so an off category costs a mask. `TransitTunnel` traces both sides of its layer crypto with a digest, so a message is followable between two routers logs. Found two guarded lines that could never have compiled, one category with no call sites, and one that no build ever defined. |
 | 6-2 | `p6/tunnel-endpoint-fix` | Driven by 6-1 output. **Static reading found no defect** — role selection (`TransitTunnelProvider.cs:189-215`), AES-CBC layer direction, and `TunnelDataFragmentReassembly.cs:31-140` are all self-consistent, and a live self-test validates the crypto direction. Treat README's "Broken" as unverified; strong prior that the real fault was in Phase 5. |
 | 6-3 | `p6/readme-status-truth` | Rewrite the README status board from measured results |
 
@@ -2239,3 +2239,73 @@ Said plainly: **this was not fatal on its own.** i2pd's destination accepts a cl
 1. **Whether the LeaseSet now survives the round trip.** The fixture change makes the question askable for the first time; it does not answer it. The next run should be read for whether `FloodfillServer` appears in our log at all, whether i2pd stores a LeaseSet whose key is *our* destination, and whether the SAM `LeaseSet not found` count moves off 15.
 2. **Whether turning on floodfill perturbs the rest of the integration suite.** It changes what the shared in-process router advertises and adds a message handler; 35/17/3 is the baseline to compare against.
 3. **The transit data path is still unmeasured.** i2pd publishing to itself means its LeaseSet stores and delivery statuses have been traversing our OBEP and IBGW all along, and 241 missing publish confirmations per run is consistent with that path dropping traffic. Builds succeeding (3-15) is not the same as data flowing. If 3-16 does not move the numbers, that is the next suspect, and it is Phase 6's subject.
+
+#### 3-16 confirmed in CI, and merged — **the floodfill code runs, and four tests come back**
+
+Run `31804699506`, PR #51, merged. Build green, unit **364 / 0 / 1**, integration **39 passed / 13 failed / 3 skipped** against a 35/17/3 baseline.
+
+**A correction to session 11's premise first: CI was available all along.** That session concluded the run could not be launched because `gh api repos/samueldaaaarling/...` returned `total_count: 0`. That is `origin`, the upstream this repository was forked from; every run and every PR from #1 onward has been on the `fork` remote, `fredriksknese/i2p-cs-renewed`, whose `github-master` was exactly one commit behind. Check `git remote -v` before concluding the pipeline is unreachable.
+
+| | 3-15 | 3-16 |
+|---|---|---|
+| integration passed / failed | 35 / 17 | **39 / 13** |
+| `FloodfillServer` lines in our log | 0 | **194** |
+| — lookups answered | — | **63** |
+| — LeaseSets stored | — | **24** |
+| — floods sent | — | **10** |
+| i2pd `NetDbReq: No more floodfills` | 10 | **5** |
+| i2pd `LeaseSet2 updated` | 20 | **30** |
+| SAM `LeaseSet not found` | 15 | **4** |
+
+Four tests moved from failing to passing and **none regressed**: `TestSAM_DatagramSession_I2pd`, `TestSAM_SessionCreate_I2pd`, `TestSend5MB_I2pd0_To_I2pd1`, `TestSend5MB_I2pdA_To_I2pdB_MultiHop`. The third of those is the known flapper the last two runs disagreed about; the other three are new.
+
+The batch's four questions, answered:
+
+1. **Does `FloodfillServer` execute at all?** Yes, for the first time in this project's history — 63 `DatabaseLookup` answered, 24 LeaseSets stored, 10 floods. Every previous run's silence was the configuration, not a symptom.
+2. **Does a LeaseSet reach the other router's NetDb?** i2pd's `LeaseSet2 updated` went 20 to 30 and we are now storing 24 LeaseSets that arrive from it, so stores cross in both directions.
+3. **Does SAM's `LeaseSet not found` move?** 15 to 4.
+4. **Does turning on floodfill perturb the suite?** No regression; the two i2pd-to-i2pd transfers that pass are the ones whose lookups had nowhere to go before.
+
+**One number moved the wrong way and is recorded rather than explained: `Destination: Publish confirmation was not received in 3 m` went 241 to 1490.** i2pd publishes far more often now (it has somewhere to publish to) and is not getting the store acknowledged, which points at the DeliveryStatus that should come back through its inbound tunnel — our OBEP and IBGW, the transit data path that 3-16's own open items already named as the next suspect and that batch 6-1 instruments.
+
+### Session 12 — batch 6-1 — **the trace categories were compile-time, so nobody could turn one on**
+
+**Unit suite 376 passed / 0 failed / 1 skipped** (377 total, +12), Release build 0 errors.
+
+Filed by the plan, and made urgent by the run above: the transit data path is the last unmeasured stretch between us and i2pd, and the tracing that would show it was unreachable.
+
+#### What was actually there
+
+`I2PCore.csproj` defined `NOLOG_ALL_TUNNEL_TRANSFER` and five siblings as inert placeholders; the source was guarded by `#if LOG_ALL_TUNNEL_TRANSFER`, so selecting a category meant editing the project file and rebuilding. **That is the compile-time gating batch 0-1 removed from the rest of the logging, for the reason 0-1 gave: the output you need to diagnose a router is unreachable in the build you have.** In a fixture that costs half an hour a run it is worse than that — you cannot go back and ask a finished run a new question.
+
+Three things fell out of turning it on, none of which a running router could have shown:
+
+1. **Two lines could never have compiled.** `Router.cs` interpolated `{this}` in two `#if LOG_ALL_TUNNEL_TRANSFER` blocks, inside the **static** `Router` class. Switching that category on would have failed the build, which is a fair summary of how much the guarded code had been exercised since the fork.
+2. **`LOG_ROUTER_SELECTION_HISTORY` had no call sites at all** — a `ConcurrentDictionary` and a `PeriodicAction` in `NetDb.Query.cs` that nothing in the repository reads. Whatever logged them was deleted and left the fields behind. Both are gone, and there is deliberately no router-selection category: it would be a switch that turns nothing on.
+3. **`LOG_ALL_UPNP` was never in the project file**, so five call sites were unreachable in every build this repository has ever produced.
+
+#### The mechanism
+
+`TraceCategories` is a `[Flags]` enum on `Logging.EnabledTraces`, selected by `--log-trace tunnel-transfer,lease-mgmt,...`. `Logging.LogTrace(category, $"...")` binds an `[InterpolatedStringHandler]` that takes the category as a constructor argument via `[InterpolatedStringHandlerArgument]`, so the bit is tested **before** the interpolation runs — exactly what batch 0-6 did for `LogDebug`, and what makes it safe to leave these calls in per-message tunnel paths.
+
+**Both filters apply, deliberately.** The category says which firehose you asked for; `LogLevel` still says how much the router emits at all, and a trace is Debug-level output. A category alone therefore produces nothing, which would be a trap — so the CLI says so at startup and a test pins the warning true.
+
+Two smaller decisions, both recorded in-code:
+
+- The four identical per-instance `ItemFilterWindow` fields in `TransitTunnel`, `EndpointTunnel`, `GatewayTunnel` and `OutboundTunnel` became one `Tunnel.TraceMessageFilter`. Every key already names the destination or message type it limits, so one shared window is equivalent — and a router carrying a thousand transit tunnels no longer allocates a thousand of them to rate-limit traces that are switched off. `OutboundTunnel`'s allowed 5 per 30 s rather than 2; it now gets 2.
+- `TraceCategoryNames.TryParse` clears its `out` on a rejected list rather than leaving what it parsed so far, and the CLI exits 2 naming the bad element. A misspelt category that silently enables nothing is this batch's own failure mode.
+
+#### The tracing itself
+
+`TransitTunnel` now traces **both sides of its layer crypto** — tunnel id, length, and an FNV-1a digest of the IV and the encrypted window, before `EncryptTunnelMessages` and after.
+
+The shape is chosen against session 6's finding, a hop that **preserves length and destroys content**. Digesting our own input against our own output proves nothing: they are supposed to differ. What is diagnostic is that the digest we log on the way *out* is the digest the next hop logs on the way *in*, which makes one message followable across two routers' logs and localises a corruption to a hop instead of to a 5 MB transfer.
+
+#### The guard
+
+`TunnelTracingTest`, 12 tests. Both halves confirmed red: reinstating a single `#if LOG_ALL_TUNNEL_TRANSFER` in `Tunnel.cs` fails `NoCompileTimeTraceGatesRemainUnderI2PCore`, and deleting the post-crypto trace fails `TheTransitHopTracesBothSidesOfItsLayerCrypto` — that one reads the source, because a trace on one side only reads as working and answers nothing. The rest pin that an off category neither formats its message nor runs its generator, that a category with the level too high emits nothing and `IsTraceEnabled` agrees, that a two-category message is an "or", and that the project file defines no logging symbols.
+
+#### What this does not settle
+
+1. **Nothing about the data path yet.** This batch is the instrument, not the measurement. The next integration run should be read with `--log-trace tunnel-transfer` if the fixture can be made to pass it.
+2. **The 1490 unconfirmed publishes.** That is the question the instrument was built for, and it is the next batch.
