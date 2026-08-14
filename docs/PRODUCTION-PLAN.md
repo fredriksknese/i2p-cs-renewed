@@ -2393,3 +2393,42 @@ var kHeader1 = IsOutgoing ? GetRemoteIntroKey() : Host.GetMyIntroKey();
 1. Read the SSU2 specification's header-encryption section for what `k_header_1` is in the **data phase**, in each direction. 4-1a's citations were re-derived from i2pd symbols after the "spec lines" references turned out to point at an absent document, so cite symbols or captured bytes.
 2. If the rules differ, that is a defect ahead of 4-3b in priority and it is why the responder direction should be captured against i2pd before 4-5 turns SSU2 on.
 3. Only then key `Sessions` by connection id — because *which key unmasks an unknown packet* is the whole design of that lookup, and getting it wrong makes every session unfindable rather than one.
+
+### Session 12 (continued) — batch 3-17 — **the acknowledgement path could not be observed at all**
+
+**Unit suite 380 passed / 0 failed / 1 skipped** (381 total, +4), Release build 0 errors.
+
+Filed straight off the 3-16 run's largest number: i2pd logged `Destination: Publish confirmation was not received` **1490 times**, up from 241, and since 3-16 made us the floodfill it publishes to, **that acknowledgement is ours to send**.
+
+#### Why it could not be investigated
+
+`FloodfillServer.SendDeliveryStatus` has four outcomes and three of them were silent:
+
+| outcome | before |
+|---|---|
+| sent through our outbound tunnel | no log |
+| sent direct because there was no outbound tunnel | `LogDebug` |
+| sent direct because the store named no reply tunnel | no log |
+| **not sent at all** — the store named no reply gateway | no log, no branch: it fell off the end of an `if/else if` |
+
+So "we acknowledged all 24 stores" and "we acknowledged none of them" produced byte-identical output, and the run that raised the question could not answer it. This is the same diagnosability gap the plan has now hit three times (0-1, 4-0c, and 6-1's own premise), and it is worth stating that **the gap is what made the 1490 unreadable, not the defect behind it — which is still unidentified.**
+
+Every exit is now named at `Information` — once per store, and the count *is* the measurement — and the store that cannot be answered is a `LogWarning` in a branch that exists. The caller states the "no acknowledgement requested" case too, because a publisher that never sees its confirmation is in one of those two states and the log has to say which.
+
+#### One fact worth publishing in the log
+
+**In a two-router fixture the reply gateway is this router.** i2pd's inbound tunnel runs through us, so `GetNextIdentHash()` on it — which is what `CreateDatabaseStoreMsg` writes as the reply gateway (I2NPProtocol.cpp) — is our own hash. `TransportProvider.Send` handles that as a loopback and it is correct, but no reader of the log could guess it, and it changes what the next question is: the acknowledgement does not go *to* i2pd, it goes into a tunnel we are the gateway of and comes back out at i2pd's endpoint. The line says so.
+
+#### What was checked and found correct, so the next session does not re-check it
+
+- **The DatabaseStore reply fields parse correctly.** `UpdateCachedFields` reads key, type, replyToken, then tunnelId and gateway when the token is non-zero — byte for byte i2pd's `CreateDatabaseStoreMsg` layout, confirmed against I2NPProtocol.cpp at head of the `openssl` branch.
+- **A bare DeliveryStatus is what i2pd expects.** `TunnelPool::ProcessDeliveryStatus` hands it to `m_LocalDestination->ProcessDeliveryStatusMessage`, and `LeaseSetDestination::HandleDeliveryStatusMessage` matches `msgID` against `m_PublishReplyToken`. It does not need to be garlic-wrapped, so this is *not* a repeat of 3-16's defect.
+- **Self-delivery works.** `TransportProvider.Send` short-circuits our own hash into `DistributeIncomingMessage`.
+
+#### The guard
+
+`FloodfillAckVisibilityTest`, 4 tests, source scans — deliberately, because what is guarded is that no *path* is silent, and a test driving one path would pass while the other three stayed mute, which is precisely the state this batch found. Confirmed red by collapsing the no-reply-gateway branch back to a bare `return` (a version that still compiles): 2 of 4 fail.
+
+#### What this does not settle
+
+**Any of it.** This batch buys one readable run. The candidates it will separate: whether `ReplyToken` is even non-zero on i2pd's stores, whether we pick the tunnel path or the direct path, and whether the acknowledgement is sent and lost in the tunnel rather than never sent. The last of those is the transit data path, which is 6-1's instrument and still the standing suspect — along with the two i2pd-to-i2pd transfers that flap.
