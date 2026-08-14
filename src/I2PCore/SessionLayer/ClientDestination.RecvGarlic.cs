@@ -51,9 +51,7 @@ public partial class ClientDestination : IClient
     {
         try
         {
-#if LOG_ALL_LEASE_MGMT
-                Logging.LogDebug( $"{this}: HandleDecryptedGarlic: {decr}: {string.Join( ',', decr.Cloves.Select( c => c.Message ) ) }" );
-#endif
+            Logging.LogTrace( TraceCategories.LeaseMgmt, $"{this}: HandleDecryptedGarlic: {decr}: {string.Join( ',', decr.Cloves.Select( c => c.Message ) ) }" );
             List<Tuple<DataMessage, I2PDestination>> destinationMessages = null;
             I2PDestination lastSender = null;
 
@@ -63,10 +61,8 @@ public partial class ClientDestination : IClient
                     switch (clove.Delivery.Delivery)
                     {
                         case GarlicCloveDelivery.DeliveryMethod.Local:
-#if LOG_ALL_LEASE_MGMT
-                                Logging.LogDebug(
-                                    $"{this}: HandleDecryptedGarlic: Delivered Local: {clove.Message}" );
-#endif
+                            Logging.LogTrace( TraceCategories.LeaseMgmt, 
+                                $"{this}: HandleDecryptedGarlic: Delivered Local: {clove.Message}" );
                             if (clove.Message is DatabaseStoreMessage dbsmsgLocal && dbsmsgLocal.LeaseSet != null)
                             {
                                 MySessions.ConfirmRemoteHash(decr.RemoteHash, dbsmsgLocal.LeaseSet.Destination.IdentHash);
@@ -85,21 +81,17 @@ public partial class ClientDestination : IClient
 
                         case GarlicCloveDelivery.DeliveryMethod.Router:
                             var dest = ((GarlicCloveDeliveryRouter)clove.Delivery).Destination;
-#if LOG_ALL_LEASE_MGMT
-                                Logging.LogDebug(
-                                    $"{this}: HandleDecryptedGarlic: Delivered Router: {dest.Id32Short} {clove.Message}" );
-#endif
+                            Logging.LogTrace( TraceCategories.LeaseMgmt, 
+                                $"{this}: HandleDecryptedGarlic: Delivered Router: {dest.Id32Short} {clove.Message}" );
                             ThreadPool.QueueUserWorkItem(a => TransportProvider.Send(dest, clove.Message));
                             break;
 
                         case GarlicCloveDelivery.DeliveryMethod.Tunnel:
                             var tone = (GarlicCloveDeliveryTunnel)clove.Delivery;
-#if LOG_ALL_LEASE_MGMT
-                                Logging.LogDebug(
-                                    $"{this}: HandleDecryptedGarlic: " +
-                                    $"Delivered Tunnel: {tone.Destination.Id32Short} " +
-                                    $"TunnelId: {tone.Tunnel} {clove.Message}" );
-#endif
+                            Logging.LogTrace( TraceCategories.LeaseMgmt, 
+                                $"{this}: HandleDecryptedGarlic: " +
+                                $"Delivered Tunnel: {tone.Destination.Id32Short} " +
+                                $"TunnelId: {tone.Tunnel} {clove.Message}" );
                             ThreadPool.QueueUserWorkItem(a => TransportProvider.Send(
                                 tone.Destination,
                                 new TunnelGatewayMessage(
@@ -108,11 +100,9 @@ public partial class ClientDestination : IClient
                             break;
 
                         case GarlicCloveDelivery.DeliveryMethod.Destination:
-#if LOG_ALL_LEASE_MGMT
-                                Logging.LogDebug(
-                                    $"{this}: HandleDecryptedGarlic: " +
-                                    $"Delivered Destination: {clove.Message}" );
-#endif
+                            Logging.LogTrace( TraceCategories.LeaseMgmt, 
+                                $"{this}: HandleDecryptedGarlic: " +
+                                $"Delivered Destination: {clove.Message}" );
                             switch (clove?.Message)
                             {
                                 case DatabaseStoreMessage dbsmsg when dbsmsg?.LeaseSet != null:
@@ -161,9 +151,7 @@ public partial class ClientDestination : IClient
                 {
                     foreach (var dmsg in destinationMessages)
                     {
-#if LOG_ALL_LEASE_MGMT
-                            Logging.LogDebug( $"{this}: DestinationMessageReceived: {dmsg.Item1}" );
-#endif
+                        Logging.LogTrace( TraceCategories.LeaseMgmt, $"{this}: DestinationMessageReceived: {dmsg.Item1}" );
                         DataReceived?.Invoke(this, dmsg.Item1.DataMessagePayload, dmsg.Item2);
                     }
                 });

@@ -185,12 +185,11 @@ public partial class NetDb
         return GetRandomRouterInfo(Roulette, exploratory);
     }
 
-#if LOG_ROUTER_SELECTION_HISTORY && DEBUG
-        ConcurrentDictionary<I2PIdentHash, int> RouterSelectionHistory =
-            new ConcurrentDictionary<I2PIdentHash, int>();
-
-        PeriodicAction LogRouterSelectionHistory = new PeriodicAction( TickSpan.Minutes( 5 ) );
-#endif
+    // Batch 6-1 (docs/PRODUCTION-PLAN.md) deleted a RouterSelectionHistory dictionary and its
+    // PeriodicAction from here. They sat behind #if LOG_ROUTER_SELECTION_HISTORY && DEBUG, and
+    // nothing in the repository read either one — whatever logged them was removed at some
+    // point and left the fields behind. That is why there is no router-selection category in
+    // TraceCategories: it would have been a switch that turns nothing on.
 
     public I2PIdentHash GetRandomRouterForTunnelBuild(bool exploratory, IEnumerable<I2PIdentHash> exclude = null)
     {

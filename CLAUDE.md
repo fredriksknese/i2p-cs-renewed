@@ -49,7 +49,11 @@ The unit suite is **green on `github-master`** as of batch 0-3: 176 pass, 0 fail
 dotnet run -c Release --project src/I2PRouterCli -- --netid 3 --log-level debug
 ```
 
-Separately, `src/I2PCore/I2PCore.csproj` defines `NOLOG_*` constants (`NOLOG_ALL_TUNNEL_TRANSFER`, `NOLOG_ALL_LEASE_MGMT`, `NOLOG_ALL_IDENT_LOOKUPS`, `NOLOG_MUCH_TRANSPORT`, `NOLOG_TUNNEL_SELECTION`, `NOLOG_ROUTER_SELECTION_HISTORY`). The code is guarded by `#if LOG_X`, so drop the `NO` prefix to switch a category on. This is a compile-time scheme for very high-volume tunnel/transport tracing and is independent of `LogLevel`; batch 6-1 replaces it.
+**Trace categories** are the second, orthogonal filter, for the very high-volume tunnel/transport tracing (batch 6-1). They were `NOLOG_*` `#if` symbols in `I2PCore.csproj`; they are now runtime flags in `TraceCategories` (`Utils/Logging/TraceCategories.cs`), selected by `--log-trace <list>`: `tunnel-transfer`, `lease-mgmt`, `ident-lookups`, `transport`, `tunnel-selection`, `upnp`, `all`, `none` (default `none`).
+
+- Write them as `Logging.LogTrace(TraceCategories.TunnelTransfer, $"...")` — same interpolated-handler rule as above, so an off category costs a mask and a comparison.
+- **Both filters apply.** A trace is Debug-level output, so a category alone emits nothing: `--log-trace tunnel-transfer --log-level debug`. The CLI warns when you ask for one without the other.
+- Do not reintroduce a `#if LOG_` guard anywhere under `I2PCore` — `TunnelTracingTest` fails if you do, for the same reason `LoggingVisibilityTest` exists.
 
 ## Architecture
 

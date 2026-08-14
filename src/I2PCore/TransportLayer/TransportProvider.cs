@@ -482,13 +482,21 @@ public class TransportProvider
         }
         catch (Exception ex)
         {
-#if LOG_MUCH_TRANSPORT
-                Logging.LogTransport( ex.Message );
-                Logging.LogTransport( $"TransportProvider: CreateTransport stack trace: {System.Environment.StackTrace}" );
-#else
-            Logging.LogTransport($"TransportProvider: Exception [{ex.GetType()}] " +
-                                 $"'{ex.Message}' to {ri.Identity.IdentHash.Id32Short}.");
-#endif
+            // Batch 6-1: the trace and the summary are alternatives, as the #if/#else they
+            // replace were — the point of the category is the stack trace, and printing the
+            // one-liner as well would just repeat it.
+            if (Logging.IsTraceEnabled(TraceCategories.Transport))
+            {
+                Logging.LogTrace(TraceCategories.Transport, ex.Message);
+                Logging.LogTrace(TraceCategories.Transport,
+                    $"TransportProvider: CreateTransport stack trace: {System.Environment.StackTrace}");
+            }
+            else
+            {
+                Logging.LogTransport($"TransportProvider: Exception [{ex.GetType()}] " +
+                                     $"'{ex.Message}' to {ri.Identity.IdentHash.Id32Short}.");
+            }
+
             if (transport != null) Remove(transport);
             throw;
         }

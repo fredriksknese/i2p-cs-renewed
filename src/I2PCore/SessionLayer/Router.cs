@@ -500,48 +500,41 @@ public static class Router
         {
             case I2NpMessage.MessageTypes.DatabaseStore:
                 var ds = (DatabaseStoreMessage)msg.Message;
-#if LOG_ALL_TUNNEL_TRANSFER
-                    Logging.Log( $"Router: DatabaseStore : {ds.Key.Id32Short}" );
-#endif
+                Logging.LogTrace( TraceCategories.TunnelTransfer, $"Router: DatabaseStore : {ds.Key.Id32Short}" );
                 HandleDatabaseStore(ds, from);
                 break;
 
             case I2NpMessage.MessageTypes.DatabaseSearchReply:
                 var dsr = (DatabaseSearchReplyMessage)msg.Message;
-#if LOG_ALL_TUNNEL_TRANSFER
-                    Logging.Log( $"Router: DatabaseSearchReply: {dsr}" );
-#endif
+                Logging.LogTrace( TraceCategories.TunnelTransfer, $"Router: DatabaseSearchReply: {dsr}" );
                 NetDb.Inst.AddDatabaseSearchReply(dsr);
                 break;
 
             case I2NpMessage.MessageTypes.DeliveryStatus:
-#if LOG_ALL_TUNNEL_TRANSFER || LOG_ALL_LEASE_MGMT
-                    Logging.LogDebug( $"Router: DeliveryStatus: {msg.Message}" );
-#endif
+                Logging.LogTrace( TraceCategories.TunnelTransfer | TraceCategories.LeaseMgmt,
+                    $"Router: DeliveryStatus: {msg.Message}" );
 
                 var dsmsg = (DeliveryStatusMessage)msg.Message;
                 DeliveryStatusReceived?.Invoke(dsmsg, from);
                 break;
 
             case I2NpMessage.MessageTypes.Garlic:
-#if LOG_ALL_TUNNEL_TRANSFER
-                    Logging.LogDebug( $"Router: Garlic: {msg.Message}" );
-#endif
+                Logging.LogTrace( TraceCategories.TunnelTransfer, $"Router: Garlic: {msg.Message}" );
                 HandleGarlic((GarlicMessage)msg.Message, from);
                 break;
 
             case I2NpMessage.MessageTypes.VariableTunnelBuildReply:
-#if LOG_ALL_TUNNEL_TRANSFER
-                    Logging.LogDebug( $"{this}: VariableTunnelBuildReply: {msg}" );
-#endif
+                // Batch 6-1: was $"{this}", in a static class — this line could not compile, so
+                // no build could ever have switched its category on.
+                Logging.LogTrace( TraceCategories.TunnelTransfer, $"Router: VariableTunnelBuildReply: {msg}" );
                 ThreadPool.QueueUserWorkItem(cb =>
                     TunnelProvider.Inst.HandleVariableTunnelBuildReply((VariableTunnelBuildReplyMessage)msg.Message));
                 break;
 
             case I2NpMessage.MessageTypes.ShortTunnelBuildReply:
-#if LOG_ALL_TUNNEL_TRANSFER
-                    Logging.LogDebug( $"{this}: ShortTunnelBuildReply: {msg}" );
-#endif
+                // Batch 6-1: was $"{this}", in a static class — this line could not compile, so
+                // no build could ever have switched its category on.
+                Logging.LogTrace( TraceCategories.TunnelTransfer, $"Router: ShortTunnelBuildReply: {msg}" );
                 ThreadPool.QueueUserWorkItem(cb =>
                     TunnelProvider.Inst.HandleShortTunnelBuildReply((ShortTunnelBuildReplyMessage)msg.Message));
                 break;
@@ -576,9 +569,7 @@ public static class Router
 
         if (ds.RouterInfo != null)
         {
-#if LOG_ALL_TUNNEL_TRANSFER
-                Logging.Log( $"HandleDatabaseStore: DatabaseStore RouterInfo {ds}" );
-#endif
+            Logging.LogTrace( TraceCategories.TunnelTransfer, $"HandleDatabaseStore: DatabaseStore RouterInfo {ds}" );
             // var stat = NetDb.Inst.Statistics[ds.RouterInfo.Identity.IdentHash];
             // if ( stat == null || !NetDb.Inst.Statistics.NodeInactive( stat ) )
             {
@@ -587,9 +578,7 @@ public static class Router
         }
         else
         {
-#if LOG_ALL_TUNNEL_TRANSFER
-                Logging.Log( $"HandleDatabaseStore: DatabaseStore LeaseSet {ds}" );
-#endif
+            Logging.LogTrace( TraceCategories.TunnelTransfer, $"HandleDatabaseStore: DatabaseStore LeaseSet {ds}" );
             NetDb.Inst.AddLeaseSet(ds.LeaseSet);
         }
 
@@ -726,9 +715,7 @@ public static class Router
 
     private static void ProcessGarlicCloves(Garlic garlic, InboundTunnel from)
     {
-#if LOG_ALL_LEASE_MGMT
-            Logging.LogDebug( $"Router: ProcessGarlicCloves: {garlic}" );
-#endif
+        Logging.LogTrace( TraceCategories.LeaseMgmt, $"Router: ProcessGarlicCloves: {garlic}" );
         foreach (var clove in garlic.Cloves)
             try
             {

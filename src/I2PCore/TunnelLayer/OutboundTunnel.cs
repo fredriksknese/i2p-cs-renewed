@@ -85,11 +85,6 @@ public class OutboundTunnel : Tunnel
         }
     }
 
-#if LOG_ALL_TUNNEL_TRANSFER
-        ItemFilterWindow<HashedItemGroup> FilterMessageTypes =
- new ItemFilterWindow<HashedItemGroup>( TickSpan.Seconds( 30 ), 5 );
-#endif
-
     private bool HandleSendQueue()
     {
         if (SendQueue.IsEmpty) return true;
@@ -114,12 +109,11 @@ public class OutboundTunnel : Tunnel
         var encr = OutboundGatewayDecrypt(dataList);
         foreach (var msg in encr)
         {
-#if LOG_ALL_TUNNEL_TRANSFER
-                if ( FilterMessageTypes.Update( new HashedItemGroup( (int)msg.MessageType, 0x4272 ) ) )
-                {
-                    Logging.LogDebug( $"OutboundTunnel: Send {NextHop.Id32Short} : {msg}" );
-                }
-#endif
+            if ( Logging.IsTraceEnabled( TraceCategories.TunnelTransfer )
+                 && TraceMessageFilter.Update( new HashedItemGroup( (int)msg.MessageType, 0x4272 ) ) )
+                Logging.LogTrace( TraceCategories.TunnelTransfer,
+                    $"OutboundTunnel: Send {NextHop.Id32Short} : {msg}" );
+
             Bandwidth.DataSent(msg.Payload.Length);
             TransportProvider.Send(NextHop, msg);
         }

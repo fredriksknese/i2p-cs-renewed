@@ -241,6 +241,40 @@ internal class Program
 
                     break;
 
+                // Batch 6-1 (docs/PRODUCTION-PLAN.md). These categories used to be #if symbols
+                // in I2PCore.csproj; selecting one meant a rebuild. An unknown name exits 2
+                // rather than enabling nothing, and asking for a category the level will
+                // swallow says so — both are silent-no-output traps otherwise.
+                case "--log-trace":
+                    if (args.Length > i + 1)
+                    {
+                        var traceNames = args[++i];
+
+                        if (!TraceCategoryNames.TryParse(traceNames, out var categories, out var unknown))
+                        {
+                            Console.Error.WriteLine(
+                                $"Invalid --log-trace category '{unknown}'. Valid values: " +
+                                string.Join(", ", TraceCategoryNames.All));
+                            Environment.Exit(2);
+                        }
+
+                        Logging.EnabledTraces = categories;
+                        Console.WriteLine($"Trace categories set to {TraceCategoryNames.Format(categories)}");
+
+                        if (categories != TraceCategories.None
+                            && !Logging.IsEnabled(Logging.LogLevels.Debug))
+                            Console.WriteLine(
+                                $"WARNING: traces are Debug level and the log level is {Logging.LogLevel}, " +
+                                "so nothing will be emitted. Add --log-level debug.");
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine("--log-trace requires a value");
+                        Environment.Exit(2);
+                    }
+
+                    break;
+
                 case "--sam-port":
                     if (args.Length > i + 1)
                     {
@@ -563,6 +597,11 @@ internal class Program
         Console.WriteLine("  --log-level <LEVEL>     Set log verbosity: Everything, DebugData,");
         Console.WriteLine("                          Transport, Debug, Information (default),");
         Console.WriteLine("                          Warning, Error, Critical, Nothing");
+        Console.WriteLine("  --log-trace <LIST>      Comma separated verbose trace categories:");
+        Console.WriteLine("                          tunnel-transfer, lease-mgmt, ident-lookups,");
+        Console.WriteLine("                          transport, tunnel-selection, upnp, all, none");
+        Console.WriteLine("                          (default none). These are Debug level, so");
+        Console.WriteLine("                          pair with --log-level debug.");
         Console.WriteLine("  --sam-port <PORT>       Enable SAM bridge on specified port");
         Console.WriteLine("  --help, -h              Show this help message");
         Console.WriteLine("");

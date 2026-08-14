@@ -63,11 +63,6 @@ public class GatewayTunnel : InboundTunnel
         return false;
     }
 
-#if LOG_ALL_TUNNEL_TRANSFER
-        ItemFilterWindow<HashedItemGroup> FilterMessageTypes =
- new ItemFilterWindow<HashedItemGroup>( TickSpan.Seconds( 30 ), 2 );
-#endif
-
     private bool HandleReceiveQueue()
     {
         I2NpMessage[] messages = null;
@@ -89,15 +84,11 @@ public class GatewayTunnel : InboundTunnel
 
         messages = msgs.ToArray();
 
-#if LOG_ALL_TUNNEL_TRANSFER
-            if ( dropped > 0 )
-            {
-                if ( FilterMessageTypes.Update( new HashedItemGroup( Destination, 0x63e9 ) ) )
-                {
-                    Logging.LogDebug( $"{this} bandwidth limit. {dropped} dropped messages. {Bandwidth}" );
-                }
-            }
-#endif
+        if ( dropped > 0
+             && Logging.IsTraceEnabled( TraceCategories.TunnelTransfer )
+             && TraceMessageFilter.Update( new HashedItemGroup( Destination, 0x63e9 ) ) )
+            Logging.LogTrace( TraceCategories.TunnelTransfer,
+                $"{this} bandwidth limit. {dropped} dropped messages. {Bandwidth}" );
 
         if (messages == null || messages.Length == 0) return true;
 
@@ -107,12 +98,11 @@ public class GatewayTunnel : InboundTunnel
 
         EncryptTunnelMessages(tdata);
 
-#if LOG_ALL_TUNNEL_TRANSFER
-            if ( FilterMessageTypes.Update( new HashedItemGroup( Destination, 0x17f3 ) ) )
-            {
-                Logging.Log( $"GatewayTunnel {Destination.Id32Short}: TunnelData sent." );
-            }
-#endif
+        if ( Logging.IsTraceEnabled( TraceCategories.TunnelTransfer )
+             && TraceMessageFilter.Update( new HashedItemGroup( Destination, 0x17f3 ) ) )
+            Logging.LogTrace( TraceCategories.TunnelTransfer,
+                $"GatewayTunnel {Destination.Id32Short}: TunnelData sent." );
+
         foreach (var tdmsg in tdata)
         {
             TransportProvider.Send(Destination, tdmsg);

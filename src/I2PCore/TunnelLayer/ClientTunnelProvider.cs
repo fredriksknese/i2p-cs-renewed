@@ -184,10 +184,11 @@ public class ClientTunnelProvider : ITunnelOwner
         var post = "";
         var pist = "";
 
-#if LOG_ALL_TUNNEL_TRANSFER
-            pist = string.Join( ", ", pti.Select( t => t.Key.TunnelDebugTrace ) );
-            post = string.Join( ", ", pto.Select( t => t.Key.TunnelDebugTrace ) );
-#endif
+        if (Logging.IsTraceEnabled(TraceCategories.TunnelTransfer))
+        {
+            pist = string.Join(", ", pti.Select(t => t.Key.TunnelDebugTrace));
+            post = string.Join(", ", pto.Select(t => t.Key.TunnelDebugTrace));
+        }
 
         Logging.LogInformation(
             $"Established client tunnels in : {ei,2} ( {pi,2} {pist}), out: {eo,2} ( {po,2} {post}) {ClientTunnelBuildSuccessRatio}");

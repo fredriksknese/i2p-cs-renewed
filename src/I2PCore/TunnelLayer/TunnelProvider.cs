@@ -786,11 +786,12 @@ public class TunnelProvider
                 }
                 catch (Exception ex)
                 {
-#if !LOG_ALL_TUNNEL_TRANSFER
-                    if (ex is IOException || ex is SocketException || ex is EndOfStreamEncounteredException)
+                    // Batch 6-1: a dropped connection is ordinary, so it is one line unless the
+                    // tunnel-transfer trace is on, which is the case where the stack matters.
+                    if ((ex is IOException || ex is SocketException || ex is EndOfStreamEncounteredException)
+                        && !Logging.IsTraceEnabled(TraceCategories.TunnelTransfer))
                         Logging.Log($"TransportProvider: Communication exception {ex.GetType()}");
                     else
-#endif
                         Logging.Log(ex);
                 }
         }
@@ -900,9 +901,7 @@ public class TunnelProvider
             {
                 Logging.LogDebug(
                     $"TunnelProvider: Exception in tunnel {tunnel} [{ex.GetType()}] '{ex.Message}'.");
-#if LOG_ALL_TUNNEL_TRANSFER
-                    Logging.Log( ex );
-#endif
+                    Logging.LogTrace( TraceCategories.TunnelTransfer, () => Logging.Unwrap( ex ) );
                 FailedTunnels.Enqueue((tunnel, true));
             }
     }
@@ -1357,10 +1356,8 @@ public class TunnelProvider
                 if (tunnels?.Any() ?? false)
                     foreach (var tunnel in tunnels)
                     {
-#if LOG_ALL_TUNNEL_TRANSFER
-                            Logging.LogDebug( string.Format( "RunIncomingMessagePump: TunnelData ({0}): {1}.",
-                                td, tunnel ) );
-#endif
+                        Logging.LogTrace( TraceCategories.TunnelTransfer, string.Format( "RunIncomingMessagePump: TunnelData ({0}): {1}.",
+                            td, tunnel ) );
                         tunnel.MessageReceived(td, msg.HeaderAndPayload.Length);
                     }
                 else
@@ -1433,18 +1430,14 @@ public class TunnelProvider
     private void HandleTunnelBuild(Ii2NpHeader msg, I2PIdentHash from)
     {
         var trmsg = (TunnelBuildMessage)msg.Message;
-#if LOG_ALL_TUNNEL_TRANSFER
-            Logging.Log( $"HandleTunnelBuild: {trmsg}" );
-#endif
+        Logging.LogTrace( TraceCategories.TunnelTransfer, $"HandleTunnelBuild: {trmsg}" );
         HandleTunnelBuildRecords(msg, trmsg.Records, from);
     }
 
     private void HandleVariableTunnelBuild(Ii2NpHeader msg, I2PIdentHash from)
     {
         var trmsg = (VariableTunnelBuildMessage)msg.Message;
-#if LOG_ALL_TUNNEL_TRANSFER
-            Logging.Log( $"HandleVariableTunnelBuild: {trmsg}" );
-#endif
+        Logging.LogTrace( TraceCategories.TunnelTransfer, $"HandleVariableTunnelBuild: {trmsg}" );
         HandleTunnelBuildRecords(msg, trmsg.Records, from);
     }
 
@@ -1453,9 +1446,7 @@ public class TunnelProvider
         Logging.LogInformation(
             $"[DEBUG_LOG] HandleShortTunnelBuild: Received request MessageId={msg.Message.MessageId:X8}");
         var stbm = (ShortTunnelBuildMessage)msg.Message;
-#if LOG_ALL_TUNNEL_TRANSFER
-            Logging.Log( $"HandleShortTunnelBuild: {stbm}" );
-#endif
+        Logging.LogTrace( TraceCategories.TunnelTransfer, $"HandleShortTunnelBuild: {stbm}" );
         // Java I2P BuildHandler: FIRST check if this message matches a pending
         // inbound tunnel build (by replyMessageId). The STBM arrives back at the
         // builder after all transit hops forwarded it through the tunnel chain.
@@ -1782,10 +1773,8 @@ public class TunnelProvider
                 RouterProfileManager.Instance.RecordTunnelBuild(hop.Peer.IdentHash, accepted);
             }
 
-#if LOG_ALL_TUNNEL_TRANSFER
-                Logging.LogDebug( $"HandleIncomingTunnelBuildRecords: {tunnel.Destination.Id32Short} " +
-                    $"My inbound tunnel {tunnel.TunnelDebugTrace} request for tunnel id {tunnel.ReceiveTunnelId}" );
-#endif
+            Logging.LogTrace( TraceCategories.TunnelTransfer, $"HandleIncomingTunnelBuildRecords: {tunnel.Destination.Id32Short} " +
+                $"My inbound tunnel {tunnel.TunnelDebugTrace} request for tunnel id {tunnel.ReceiveTunnelId}" );
 
             if (decrypted.All(r => r.Reply == BuildResponseRecord.RequestResponse.Accept))
             {
@@ -1812,9 +1801,7 @@ public class TunnelProvider
         {
             HandleReceivedTunnelBuildReply(obtunnel, msg);
 
-#if LOG_ALL_TUNNEL_TRANSFER
-                Logging.LogDebug( () => $"HandleVariableTunnelBuildReply: Outbound MsgId match {msg.MessageId:X8} for {obtunnel.TunnelDebugTrace}." );
-#endif
+            Logging.LogTrace( TraceCategories.TunnelTransfer, () => $"HandleVariableTunnelBuildReply: Outbound MsgId match {msg.MessageId:X8} for {obtunnel.TunnelDebugTrace}." );
         }
 
         var matchingIn = PendingInbound
@@ -1826,9 +1813,7 @@ public class TunnelProvider
         {
             HandleReceivedInboundTunnelBuildReply(intunnel, msg);
 
-#if LOG_ALL_TUNNEL_TRANSFER
-                Logging.LogDebug( () => $"HandleVariableTunnelBuildReply: Inbound MsgId match {msg.MessageId:X8} for {intunnel.TunnelDebugTrace}." );
-#endif
+            Logging.LogTrace( TraceCategories.TunnelTransfer, () => $"HandleVariableTunnelBuildReply: Inbound MsgId match {msg.MessageId:X8} for {intunnel.TunnelDebugTrace}." );
         }
 
 #if DEBUG
@@ -2386,11 +2371,10 @@ public class TunnelProvider
             var result = available.RandomWeighted(
                 GenerateTunnelWeight, elitism);
 
-#if LOG_TUNNEL_SELECTION
-                var logAvailable =
- string.Join( ", ", available.Select( t => $"{t.TunnelDebugTrace} {t.CreationTime.DeltaToNow:MS}" ) );
-                Logging.LogDebug( $"TunnelProvider: SelectTunnel {result}, ( {logAvailable} )" );
-#endif
+            Logging.LogTrace( TraceCategories.TunnelSelection, () =>
+                $"TunnelProvider: SelectTunnel {result}, ( " +
+                string.Join( ", ", available.Select( t => $"{t.TunnelDebugTrace} {t.CreationTime.DeltaToNow:MS}" ) ) +
+                " )" );
             return result;
         }
 
@@ -2416,9 +2400,7 @@ public class TunnelProvider
 
             var result = sorted[BufUtils.RandomInt(sorted.Length)];
 
-#if LOG_TUNNEL_SELECTION
-                Logging.LogDebug( $"TunnelProvider: SelectTunnel (XOR) {result} closest to {closestTo}" );
-#endif
+            Logging.LogTrace( TraceCategories.TunnelSelection, $"TunnelProvider: SelectTunnel (XOR) {result} closest to {closestTo}" );
             return result;
         }
 

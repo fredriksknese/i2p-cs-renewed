@@ -34,9 +34,7 @@ public class InboundTunnel : Tunnel
 
         ReceiveTunnelId = config.Info.Hops.Last().TunnelId;
 
-#if LOG_ALL_TUNNEL_TRANSFER
-            Logging.LogDebug( $"InboundTunnel: Tunnel {Destination?.Id32Short} created." );
-#endif
+        Logging.LogTrace( TraceCategories.TunnelTransfer, $"InboundTunnel: Tunnel {Destination?.Id32Short} created." );
     }
 
     // Fake 0-hop
@@ -113,9 +111,7 @@ public class InboundTunnel : Tunnel
 
     protected virtual bool HandleTunnelMessage(I2NpMessage msg)
     {
-#if LOG_ALL_TUNNEL_TRANSFER
-            Logging.LogDebug( $"{this} HandleReceiveQueue: {msg.MessageType}" );
-#endif
+        Logging.LogTrace( TraceCategories.TunnelTransfer, $"{this} HandleReceiveQueue: {msg.MessageType}" );
 
         switch (msg.MessageType)
         {
@@ -140,9 +136,7 @@ public class InboundTunnel : Tunnel
                 break;
 
             default:
-#if LOG_ALL_TUNNEL_TRANSFER
-                    Logging.LogDebug( $"{this}: HandleReceiveQueue: not handled {msg?.MessageType}" );
-#endif
+                Logging.LogTrace( TraceCategories.TunnelTransfer, $"{this}: HandleReceiveQueue: not handled {msg?.MessageType}" );
 
                 Router.HandleI2NpMessageReceived(msg.CreateHeader16, this);
                 break;

@@ -84,9 +84,7 @@ public class EgaesSessionKeyOrigin
     {
         var newsessionandtags = CheckAvailableTags(cloves, replytunnel);
 
-#if LOG_ALL_LEASE_MGMT
-            Logging.LogDebug( $"{this}: Encrypting with ElGamal to {RemoteDestination.Id32Short} {newsessionandtags.SessionKey}, {newsessionandtags.MessageId}" );
-#endif
+        Logging.LogTrace( TraceCategories.LeaseMgmt, $"{this}: Encrypting with ElGamal to {RemoteDestination.Id32Short} {newsessionandtags.SessionKey}, {newsessionandtags.MessageId}" );
 
         var garlic = new Garlic(cloves);
 
@@ -115,9 +113,7 @@ public class EgaesSessionKeyOrigin
     {
         var newsessionandtags = CheckAvailableTags(cloves, replytunnel);
 
-#if LOG_ALL_LEASE_MGMT
-            Logging.LogInformation( $"{this}: Encrypting with session key {sessionkey}" );
-#endif
+        Logging.LogTrace( TraceCategories.LeaseMgmt, $"{this}: Encrypting with session key {sessionkey}" );
 
         var garlic = new Garlic(cloves);
         return Garlic.AesEncryptGarlic(
@@ -143,9 +139,7 @@ public class EgaesSessionKeyOrigin
         var availabletags = AckedTags.Count;
         if (availabletags <= LowWatermarkForNewTags)
         {
-#if LOG_ALL_LEASE_MGMT
-                Logging.LogDebug( $"{this}: Tag level low {availabletags}. Sending more." );
-#endif
+            Logging.LogTrace( TraceCategories.LeaseMgmt, $"{this}: Tag level low {availabletags}. Sending more." );
             return GenerateNewTags(cloves, replytunnel);
         }
 

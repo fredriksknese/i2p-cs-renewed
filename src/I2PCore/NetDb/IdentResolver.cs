@@ -101,15 +101,11 @@ public class IdentResolver
 
         if (inprogress)
         {
-#if LOG_ALL_IDENT_LOOKUPS
-                Logging.LogDebug( $"IdentResolver: Lookup of RouterInfo {ident.Id32Short} already in progress." );
-#endif
+            Logging.LogTrace( TraceCategories.IdentLookups, $"IdentResolver: Lookup of RouterInfo {ident.Id32Short} already in progress." );
             return false;
         }
 
-#if LOG_ALL_IDENT_LOOKUPS
-            Logging.Log( $"IdentResolver: Starting lookup of RouterInfo for {ident.Id32Short}." );
-#endif
+        Logging.LogTrace( TraceCategories.IdentLookups, $"IdentResolver: Starting lookup of RouterInfo for {ident.Id32Short}." );
 
         SendRiDatabaseLookup(ident, updateinfo);
 

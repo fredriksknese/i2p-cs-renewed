@@ -55,23 +55,46 @@ public class TransitTunnel : InboundTunnel
         return HandleReceiveQueue();
     }
 
-#if LOG_ALL_TUNNEL_TRANSFER
-        ItemFilterWindow<HashedItemGroup> FilterMessageTypes =
- new ItemFilterWindow<HashedItemGroup>( TickSpan.Seconds( 30 ), 2 );
-#endif
+    /// <summary>
+    ///     One line per tunnel message as it crosses this hop, before and after our layer crypto.
+    /// </summary>
+    /// <remarks>
+    ///     Batch 6-1 (docs/PRODUCTION-PLAN.md). This is the tracing the batch exists for, and the
+    ///     shape is chosen to answer one question the session-6 log could not:
+    ///     <b>a hop that preserves length and destroys content</b> — every byte of a 5 MB
+    ///     transfer arriving, none of it matching what was sent.
+    ///     <para>
+    ///     A transit hop cannot see plaintext, so digesting our input against our output proves
+    ///     nothing on its own: they are <i>supposed</i> to differ, that is what the layer crypto
+    ///     does. What is diagnostic is that the digest we log on the way out is the digest the
+    ///     <i>next</i> hop logs on the way in. That makes one message followable across two
+    ///     routers' logs, and it localises a corruption to a hop rather than to a transfer. The
+    ///     IV is digested too because it is transformed either side of the window
+    ///     (<see cref="EncryptTunnelMessages" />) and a wrong IV is indistinguishable from a
+    ///     wrong key by content alone.
+    ///     </para>
+    ///     <para>
+    ///     <see cref="BufUtils.ComputeHash(System.ReadOnlySpan{byte})" /> is FNV-1a, not a
+    ///     cryptographic digest. It is a correlation handle, and cheap enough to sit in this
+    ///     path — which it only ever does with the category switched on.
+    ///     </para>
+    /// </remarks>
+    private void TraceTunnelData(string stage, I2PTunnelId tunnelid, List<TunnelDataMessage> msgs)
+    {
+        if (!Logging.IsTraceEnabled(TraceCategories.TunnelTransfer)) return;
 
-
-#if LOG_ALL_TUNNEL_TRANSFER
-        PeriodicLogger LogDataSent = new PeriodicLogger( 15 );
-#endif
+        foreach (var one in msgs)
+            Logging.LogTrace(TraceCategories.TunnelTransfer,
+                $"TransitTunnel {TunnelDebugTrace} {stage}: tunnel {tunnelid} {one.Payload.Length}B iv {one.Iv.Span.ComputeHash():X8} window {one.EncryptedWindow.Span.ComputeHash():X8}");
+    }
 
     protected override void HandleTunnelData(List<TunnelDataMessage> msgs)
     {
+        // Both sides of the layer crypto, so the pair identifies this hop's transformation.
+        TraceTunnelData($"recv from {ReceiveFrom?.Id32Short ?? "[unknown]"}", ReceiveTunnelId, msgs);
         EncryptTunnelMessages(msgs);
+        TraceTunnelData($"send to {Destination.Id32Short}", SendTunnelId, msgs);
 
-#if LOG_ALL_TUNNEL_TRANSFER
-            LogDataSent.Log( () => "TransitTunnel " + Destination.Id32Short + " TunnelData sent." );
-#endif
         var dropped = 0;
         foreach (var one in msgs)
         {
@@ -94,12 +117,9 @@ public class TransitTunnel : InboundTunnel
             TransportProvider.Send(Destination, one);
         }
 
-#if LOG_ALL_TUNNEL_TRANSFER
-            if ( dropped > 0 )
-            {
-                Logging.LogDebug( () => string.Format( "{0} bandwidth limit. {1} dropped messages. {2}", this, dropped, Bandwidth ) );
-            }
-#endif
+        if (dropped > 0)
+            Logging.LogTrace(TraceCategories.TunnelTransfer,
+                $"{this} bandwidth limit. {dropped} dropped messages. {Bandwidth}");
 
         return;
     }
