@@ -2552,3 +2552,39 @@ The fixture's own default is pinned too, so changing it becomes a deliberate act
 #### A note on how this was found
 
 Three sessions have now gone into i2pd's log and our floodfill code, chasing a number (1490, then 1523) that turned out to be i2pd's own retry timer. The actual blocker was the most frequent line in **our** log, in a component nobody had suspected, and it was visible in every artifact bundle since the fixture started using SAM. **Count your own errors before reading the peer's.**
+
+#### 3-18 confirmed in CI, and merged — **the prediction was wrong, and the wall moved anyway**
+
+Run `31838379757`, PR #55, merged. Build green, unit **391 / 0 / 1**, integration **38 passed / 14 failed / 3 skipped**.
+
+**The prediction this batch made was refuted.** It said the thirteen should move. All thirteen still fail, and the run sits inside the same 37–39 band every run since 3-16 has sat in. Recorded plainly because the batch staked itself on it.
+
+**What the batch claimed, it did.** That part is not in doubt:
+
+| | 3-17 run | 3-18 run |
+|---|---|---|
+| `ArgumentException: Hops must be > 0` | **234** | **0** |
+| zero-hop client tunnels created | 0 | **36** |
+| per-client build failures reported | — | 0 |
+
+Client tunnel building went from throwing on every pass for the whole run to working. That was a real defect and it is gone; it was simply not the last one.
+
+**The failure moved, which is the finding.** With client tunnels finally existing, traffic reaches a stage it never reached before, and the errors in our log are now somewhere else entirely:
+
+```
+20  ClientDestination SAM-recv_i2pd2cs: DecryptMessage: ECIES failed: ExistingSession:InvalidOperationException
+20  ClientDestination SAM-bidir_a:      DecryptMessage: ECIES failed: ExistingSession:InvalidCipherTextException
+ 5  ECIESRouterProcessor: ProcessMessage could not decrypt 1422/1427 bytes: CryptographicException
+ 4  StreamingDestination: Error processing packet (506 bytes): ArgumentException
+```
+
+`DecryptMessage: ECIES failed` went **6 → 47** between the two runs, and the shape changed: the 3-17 run's few were `All variants failed` at handshake, these are `ExistingSession` — a ratchet session that exists on both sides and then fails to decrypt, split evenly between an invalid cipher text and an invalid operation.
+
+**That is Phase 5's subject, and it is what the README has said all along** ("session/streaming encryption is unreliable"). Three sessions of Phase 3 interop work have now delivered the router to the point where the ECIES ratchet is the thing being measured, which is where 5-4 (`p5/ecies-nextkey`, the DH ratchet, never implemented) and 5-5 have been waiting.
+
+**Two lessons, both about how the last three sessions were spent.**
+
+1. **The prediction was worth making even though it was wrong.** It was cheap, it was refutable in one run, and being refuted is what identified the next layer rather than leaving 3-18 looking like a fix that "should" have worked.
+2. **Necessary is not sufficient, and a batch that fixes a real defect without moving the suite is still a good batch** — provided it says so. 3-18 removed a defect that made every SAM destination tunnel-less; the suite did not move because a second defect sat behind it. Reporting 38/14 as "no change" would have hidden both.
+
+**Next: Phase 5.** The `ExistingSession` decryption failures are the first ECIES evidence this project has had from a run where the tunnels underneath actually worked. Read them before touching 5-4 — `ECIESSessionKeyManager` and `RatchetTagSet` are the code, and 5-3's sliding window is recent enough to be a suspect in its own right.
