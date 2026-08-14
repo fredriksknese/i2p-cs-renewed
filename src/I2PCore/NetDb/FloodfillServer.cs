@@ -300,8 +300,14 @@ public class FloodfillServer : IDisposable
             return;
         }
 
-        // Send delivery status acknowledgement if requested
-        if (store.ReplyToken != 0) SendDeliveryStatus(store);
+        // Send delivery status acknowledgement if requested. Batch 3-17: the "not requested"
+        // case is stated too, because the two are indistinguishable in a log otherwise and the
+        // open question is which of them a publisher that never sees its confirmation is in.
+        if (store.ReplyToken != 0)
+            SendDeliveryStatus(store);
+        else
+            Logging.LogInformation(
+                $"FloodfillServer: {store.Key?.Id32Short} stored, no acknowledgement requested");
 
         // Flood propagation: forward to closest floodfill routers
         FloodToClosestPeers(store, from);
@@ -483,11 +489,52 @@ public class FloodfillServer : IDisposable
         SendToRequester(lookup, WrapReplyForRequester(lookup, reply));
     }
 
+    /// <summary>
+    ///     Acknowledge a DatabaseStore that asked to be acknowledged.
+    /// </summary>
+    /// <remarks>
+    ///     Batch 3-17 (docs/PRODUCTION-PLAN.md). <b>Three of this method's four outcomes said
+    ///     nothing, including the one that sends nothing at all.</b>
+    ///     <para>
+    ///     The 3-16 CI run left i2pd logging <c>Destination: Publish confirmation was not
+    ///     received</c> 1490 times — the largest number in the run, and the one this method is
+    ///     the other half of, now that we are the floodfill it publishes to. It was not
+    ///     answerable from our log: the tunnel path and the bare-send path logged nothing on
+    ///     success, and a store carrying a reply token but no usable route to reply to was
+    ///     dropped in an <c>else</c> that does not exist. "We sent 24 acknowledgements" and "we
+    ///     sent none" produced identical output.
+    ///     </para>
+    ///     <para>
+    ///     Every exit is now named, at Information, because this happens once per store and the
+    ///     count is the measurement. The drop is a warning. <b>Whether the acknowledgement
+    ///     arrives is still not settled by this batch</b> — it makes the question askable, which
+    ///     is the same position batch 3-16 was in.
+    ///     </para>
+    ///     <para>
+    ///     One outcome is worth naming for a reason that is not obvious from the code. In a
+    ///     two-router fixture the reply gateway is <i>this router</i>: i2pd's inbound tunnel runs
+    ///     through us, so <c>GetNextIdentHash()</c> on it is our own hash.
+    ///     <c>TransportProvider.Send</c> handles that as a loopback, but a reader of the log has
+    ///     no way to guess it, and it changes what the next question should be.
+    ///     </para>
+    /// </remarks>
     private void SendDeliveryStatus(DatabaseStoreMessage store)
     {
         var deliveryStatus = new DeliveryStatusMessage(store.ReplyToken);
+        var toSelf = store.ReplyGateway != null
+                     && store.ReplyGateway == RouterContext.Inst.MyRouterIdentity.IdentHash
+            ? " (which is us — loopback)"
+            : "";
 
-        if (store.ReplyTunnelId != 0 && store.ReplyGateway != null)
+        if (store.ReplyGateway is null)
+        {
+            Logging.LogWarning(
+                $"FloodfillServer: {store.Key?.Id32Short} asked for acknowledgement token "
+                + $"{store.ReplyToken} but named no reply gateway. Dropped, nothing to answer.");
+            return;
+        }
+
+        if (store.ReplyTunnelId != 0)
         {
             // Prefer sending via our own outbound tunnel
             var outtunnel = TunnelProvider.Inst.GetEstablishedOutboundTunnel(
@@ -500,22 +547,34 @@ public class FloodfillServer : IDisposable
                         deliveryStatus,
                         new I2PTunnelId(store.ReplyTunnelId)),
                     store.ReplyGateway));
+
+                Logging.LogInformation(
+                    $"FloodfillServer: DeliveryStatus {store.ReplyToken} for {store.Key?.Id32Short} "
+                    + $"sent via outbound tunnel to {store.ReplyGateway.Id32Short}{toSelf} "
+                    + $"tunnel {store.ReplyTunnelId}");
             }
             else
             {
                 // No outbound tunnel — send TunnelGateway directly to the reply gateway.
                 // The gateway router will inject the DeliveryStatus into the specified tunnel.
-                Logging.LogDebug(
-                    $"FloodfillServer: No outbound tunnel, sending DeliveryStatus directly to {store.ReplyGateway?.Id32Short}");
                 TransportProvider.Send(store.ReplyGateway,
                     new TunnelGatewayMessage(
                         deliveryStatus,
                         new I2PTunnelId(store.ReplyTunnelId)));
+
+                Logging.LogInformation(
+                    $"FloodfillServer: DeliveryStatus {store.ReplyToken} for {store.Key?.Id32Short} "
+                    + $"sent direct (no outbound tunnel) to {store.ReplyGateway.Id32Short}{toSelf} "
+                    + $"tunnel {store.ReplyTunnelId}");
             }
+
+            return;
         }
-        else if (store.ReplyGateway != null)
-        {
-            TransportProvider.Send(store.ReplyGateway, deliveryStatus);
-        }
+
+        TransportProvider.Send(store.ReplyGateway, deliveryStatus);
+
+        Logging.LogInformation(
+            $"FloodfillServer: DeliveryStatus {store.ReplyToken} for {store.Key?.Id32Short} "
+            + $"sent direct to {store.ReplyGateway.Id32Short}{toSelf}, no reply tunnel named");
     }
 }
