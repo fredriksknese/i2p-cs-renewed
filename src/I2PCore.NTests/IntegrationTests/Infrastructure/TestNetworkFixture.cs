@@ -72,7 +72,19 @@ public class TestNetworkFixture
         Directory.CreateDirectory(I2pdDataDir);
 
         // 2. Start C# router first (so we can get its RouterInfo)
-        CSharpRouter = new CSharpRouterHarness();
+        //
+        // Batch 3-16 (docs/PRODUCTION-PLAN.md): floodfill, and the reason is topological.
+        // I2pdConfigGenerator makes i2pd a floodfill because a private network has no external
+        // one, and i2pd inserts its own RouterInfo into m_Floodfills (NetDb.cpp, NetDb::Start).
+        // With this router not a floodfill, i2pd was therefore the *only* one and published its
+        // LeaseSets to itself, while every RouterInfo lookup it made came back empty —
+        // RequestedDestination's constructor excludes self when floodfill (NetDbRequests.cpp),
+        // which is the "NetDbReq: No more floodfills" warning seen in every run so far.
+        // A two-router network needs two floodfills for a LeaseSet to travel between them.
+        //
+        // The second effect matters as much: FloodfillServer had never executed in *any*
+        // integration run, so nothing this project has measured says whether it works.
+        CSharpRouter = new CSharpRouterHarness(floodfill: true);
         CSharpRouter.Start();
 
         // 3. Place C# router's RouterInfo in i2pd's netDb

@@ -370,7 +370,63 @@ public class FloodfillServer : IDisposable
             Logging.LogDebug($"FloodfillServer: Flooded {store.Key.Id32Short} to {sent} peers");
     }
 
+    /// <summary>
+    ///     Encrypt a lookup reply if the requester asked for one, and say plainly when it asked for
+    ///     something we cannot give it. Returns the message to put on the wire.
+    /// </summary>
+    /// <remarks>
+    ///     Batch 3-16 (docs/PRODUCTION-PLAN.md). <b>This router answered every DatabaseLookup in the
+    ///     clear, including the ones that carried a reply key.</b> A destination looking up a
+    ///     LeaseSet always asks for an encrypted reply — i2pd's <c>SendLeaseSetRequest</c>
+    ///     (Destination.cpp) draws a random 32-byte key and 8-byte tag, calls
+    ///     <c>AddECIESx25519Key</c> so it can decrypt the answer, and puts both in the lookup. Its
+    ///     own floodfill honours that with <c>WrapECIESX25519Message (replyMsg, sessionKey, tag)</c>
+    ///     (NetDb.cpp), which is byte-for-byte the one-time garlic batch 3-13 already proved
+    ///     correct against i2pd for tunnel build replies — hence the shared
+    ///     <see cref="TunnelProvider.CreateOneTimeGarlicMessage(I2NpMessage,byte[],byte[])" />.
+    ///     <para>
+    ///     i2pd will accept a cleartext DatabaseStore at a destination too
+    ///     (<c>HandleCloveI2NPMessage</c> takes a null session), so this was not fatal on its own —
+    ///     but it leaks to every hop of the reply tunnel which destination was asked for, which is
+    ///     the entire reason the field exists. The legacy ElGamal/AES reply form is <i>not</i>
+    ///     implemented; that path now says so instead of silently answering in a different
+    ///     encryption than the one requested.
+    ///     </para>
+    /// </remarks>
+    internal static I2NpMessage WrapReplyForRequester(DatabaseLookupMessage lookup, I2NpMessage reply)
+    {
+        var replyKey = lookup.ReplyKey;
+        if (replyKey is null) return reply;
+
+        var tag = lookup.Tags.FirstOrDefault();
+        if (tag is null)
+        {
+            // i2pd logs exactly this case and sends the reply unencrypted.
+            Logging.LogWarning(
+                $"FloodfillServer: encrypted reply requested for {lookup.Key.Id32Short} but no tags provided");
+            return reply;
+        }
+
+        if ((lookup.LookupType & DatabaseLookupMessage.LookupTypes.Ecies) == 0)
+        {
+            Logging.LogWarning(
+                $"FloodfillServer: ElGamal/AES reply encryption requested for {lookup.Key.Id32Short} " +
+                "and is not implemented. Replying in the clear.");
+            return reply;
+        }
+
+        return TunnelProvider.CreateOneTimeGarlicMessage(
+            reply,
+            replyKey.Key.ToByteArray(),
+            tag.Value.ToByteArray());
+    }
+
     private void SendReply(DatabaseLookupMessage lookup, DatabaseStoreMessage response)
+    {
+        SendToRequester(lookup, WrapReplyForRequester(lookup, response));
+    }
+
+    private void SendToRequester(DatabaseLookupMessage lookup, I2NpMessage response)
     {
         var isTunnel = (lookup.LookupType & DatabaseLookupMessage.LookupTypes.Tunnel) != 0;
 
@@ -422,32 +478,9 @@ public class FloodfillServer : IDisposable
         // Constructing from raw BufRef breaks CreateHeader16 when wrapping in TunnelGatewayMessage.
         var reply = new DatabaseSearchReplyMessage(lookup.Key, peers, from);
 
-        var isTunnel = (lookup.LookupType & DatabaseLookupMessage.LookupTypes.Tunnel) != 0;
-
-        if (isTunnel && lookup.TunnelId != null)
-        {
-            var outtunnel = TunnelProvider.Inst.GetEstablishedOutboundTunnel(
-                TunnelPoolSelection.RequireExploratory);
-
-            if (outtunnel != null)
-            {
-                outtunnel.Send(new TunnelMessageRouter(
-                    new TunnelGatewayMessage(reply, lookup.TunnelId),
-                    lookup.From));
-            }
-            else
-            {
-                // No outbound tunnel — send TunnelGateway directly via transport
-                Logging.LogDebug(
-                    $"FloodfillServer: No outbound tunnel, sending search reply directly to {lookup.From?.Id32Short}");
-                TransportProvider.Send(lookup.From,
-                    new TunnelGatewayMessage(reply, lookup.TunnelId));
-            }
-        }
-        else
-        {
-            TransportProvider.Send(lookup.From, reply);
-        }
+        // A "not found" is as much of an answer as a hit, and i2pd encrypts both — NetDb.cpp wraps
+        // whatever ended up in replyMsg, DatabaseStore or DatabaseSearchReply alike.
+        SendToRequester(lookup, WrapReplyForRequester(lookup, reply));
     }
 
     private void SendDeliveryStatus(DatabaseStoreMessage store)
