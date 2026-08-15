@@ -272,6 +272,16 @@ public class ECIESSessionKeyManager
             if (_tagToDestination.TryGetValue(tag, out var remoteHash))
                 // Existing session message
                 return ProcessExistingSessionMessage(remoteHash, message);
+
+            // Batch 5-6: name a repeat as a repeat. A session tag is single-use, so a second
+            // message under one is a duplicate arriving — the opposite fault from a tag we never
+            // held, and previously reported identically.
+            if (WasRecentlyConsumed(tag, out var ago))
+                return new ProcessedDestinationMessage
+                {
+                    Success = false,
+                    Error = $"ExistingSession:RepeatedTag:{tag} was consumed {ago.TotalMilliseconds:F0}ms ago"
+                };
         }
 
         // 2. Try Handshake Reply (using 8-byte tag)
@@ -573,6 +583,15 @@ public class ECIESSessionKeyManager
                 session.InboundTagAdded += tag =>
                     _tagToDestination[tag] = CurrentHashFor(session, remoteHash);
                 session.InboundTagExpired += tag => _tagToDestination.TryRemove(tag, out _);
+
+                // Batch 5-6: a tag that has been used up leaves the index too. Without this the
+                // index kept one entry per message ever received, for the life of the process —
+                // the sweep that raises InboundTagExpired only walks tags still unused.
+                session.InboundTagConsumed += tag =>
+                {
+                    _tagToDestination.TryRemove(tag, out _);
+                    RememberConsumedTag(tag);
+                };
             }
         }
 
@@ -581,6 +600,61 @@ public class ECIESSessionKeyManager
 
     /// <summary>Sessions whose tag events are already wired, by reference.</summary>
     private readonly HashSet<ECIESSession> _trackedSessions = new();
+
+    /// <summary>
+    ///     How many recently consumed tags to remember, purely so a message arriving under one
+    ///     can be named as a repeat rather than as an unknown tag.
+    /// </summary>
+    private const int ConsumedTagMemory = 512;
+
+    /// <summary>
+    ///     How many tags the routing index currently holds. Batch 5-6's guard reads this: the
+    ///     count must track the live tag window, not the number of messages ever received.
+    /// </summary>
+    internal int TrackedTagCount => _tagToDestination.Count;
+
+    private readonly ConcurrentDictionary<SessionTag, DateTime> _consumedTags = new();
+    private readonly ConcurrentQueue<SessionTag> _consumedTagOrder = new();
+
+    /// <summary>
+    ///     Remember a used tag briefly, bounded, so a second message under it is diagnosable.
+    /// </summary>
+    /// <remarks>
+    ///     Batch 5-6. Rejecting a tag that has already been used is correct — a session tag is
+    ///     single-use and decrypting under it twice would be a replay — but reporting it as
+    ///     "unknown or expired" made it indistinguishable from a tag we never held, which are
+    ///     opposite faults: one is a duplicate arriving, the other is the two sides disagreeing
+    ///     about the tag set. The 3-18 CI run produced twenty of these with no way to tell which.
+    ///     <para>
+    ///     Deliberately bounded and deliberately not a security control. It makes the log
+    ///     readable; it is not a replay filter, because the real defence is that the tag is gone
+    ///     from the session and cannot decrypt anything.
+    ///     </para>
+    /// </remarks>
+    private void RememberConsumedTag(SessionTag tag)
+    {
+        if (!_consumedTags.TryAdd(tag, DateTime.UtcNow)) return;
+
+        _consumedTagOrder.Enqueue(tag);
+
+        while (_consumedTagOrder.Count > ConsumedTagMemory && _consumedTagOrder.TryDequeue(out var old))
+            _consumedTags.TryRemove(old, out _);
+    }
+
+    /// <summary>
+    ///     True when <paramref name="tag" /> was used by an earlier message, with how long ago.
+    /// </summary>
+    internal bool WasRecentlyConsumed(SessionTag tag, out TimeSpan ago)
+    {
+        if (_consumedTags.TryGetValue(tag, out var when))
+        {
+            ago = DateTime.UtcNow - when;
+            return true;
+        }
+
+        ago = default;
+        return false;
+    }
 
     /// <summary>
     ///     The key <paramref name="session" /> is currently filed under in <c>_sessions</c>, which
