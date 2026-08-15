@@ -171,6 +171,18 @@ public class ECIESSession
     /// </summary>
     public event Action<SessionTag> InboundTagAdded;
 
+    /// <summary>
+    ///     Raised when an inbound tag is used up by a message that arrived under it.
+    /// </summary>
+    /// <remarks>
+    ///     Batch 5-6 (docs/PRODUCTION-PLAN.md). <b>A consumed tag fired no event at all, so the
+    ///     manager's tag index kept every tag this session ever received, for the life of the
+    ///     process.</b> <see cref="InboundTagExpired" /> is raised only by the sliding-window
+    ///     sweep, and the sweep walks <c>_inboundTags</c> — which a consumed tag has already
+    ///     left. One entry per message received, never removed.
+    /// </remarks>
+    public event Action<SessionTag> InboundTagConsumed;
+
     public event Action<SessionTag> InboundTagExpired;
 
     public bool IsEstablished => _sendKey != null;
@@ -495,6 +507,7 @@ public class ECIESSession
                 throw new InvalidOperationException($"Unknown or expired tag: {message.Tag}");
 
             _inboundTags.Remove(message.Tag);
+            InboundTagConsumed?.Invoke(message.Tag);
 
             // Batch 5-3: slide the window forward by exactly what was consumed, so the peer never
             // catches up with the end of what we have derived.

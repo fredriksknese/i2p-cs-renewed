@@ -2588,3 +2588,43 @@ Client tunnel building went from throwing on every pass for the whole run to wor
 2. **Necessary is not sufficient, and a batch that fixes a real defect without moving the suite is still a good batch** — provided it says so. 3-18 removed a defect that made every SAM destination tunnel-less; the suite did not move because a second defect sat behind it. Reporting 38/14 as "no change" would have hidden both.
 
 **Next: Phase 5.** The `ExistingSession` decryption failures are the first ECIES evidence this project has had from a run where the tunnels underneath actually worked. Read them before touching 5-4 — `ECIESSessionKeyManager` and `RatchetTagSet` are the code, and 5-3's sliding window is recent enough to be a suspect in its own right.
+
+### Session 12 (continued) — batch 5-6 — **a used-up session tag never left the routing index**
+
+**Unit suite 395 passed / 0 failed / 1 skipped** (396 total, +4), Release build 0 errors.
+
+The first Phase 5 batch driven by evidence from a run where the tunnels underneath worked. 3-18 exposed 47 `DecryptMessage: ECIES failed` where the previous run had 6, in two shapes:
+
+```
+20  ExistingSession:InvalidCipherTextException:mac check in ChaCha20Poly1305 failed
+20  ExistingSession:InvalidOperationException:Unknown or expired tag: <8 bytes>
+```
+
+#### What was ruled out first, so it is not re-derived
+
+Checked against i2pd at head of the `openssl` branch and against our own code, all **matching**:
+
+- **The nonce.** `ECIESExistingSessionMessage.CreateNonce` writes four zero bytes then the index little-endian in bytes 4–11. i2pd's `CreateNonce` does exactly that, and takes the same tag index.
+- **The associated data.** i2pd passes `nullptr, 0`; we pass none. A mismatch here would fail every MAC.
+- **Key and index pairing.** `ConsumeNext` advances the session-tag chain and the symmetric-key chain together and stores both against the tag, so a found tag carries its own key; i2pd derives the key on demand by index with intermediate caching, which is the same mapping reached differently.
+- **The DH ratchet.** The destination path has no `NextKey` handling at all (only the router path does), which looked like the answer — until the logs settled it: **neither i2pd's log nor ours mentions NextKey once in the whole run.** Short sessions never rotate. Batch 5-4 is still unimplemented and still needed; it is not what these failures are.
+
+#### The defect
+
+`_tagToDestination` — the manager's map from session tag to which session owns it — is maintained by two events: `InboundTagAdded` and `InboundTagExpired`. Expiry is raised **only by the sliding-window sweep**, and the sweep walks `_inboundTags`. A tag that has been *consumed* has already been removed from `_inboundTags` by `ProcessExistingSessionMessage`, so the sweep never sees it and the event never fires.
+
+**Every tag ever received stayed in the routing index for the life of the process** — one entry per message, unbounded, in a long-running router.
+
+The diagnostic consequence is the one that mattered here. A second message arriving under an already-used tag still found that tag in the index, routed into the session, and got `Unknown or expired tag` — reporting a **duplicate arriving** identically to **the two sides disagreeing about the tag set**, which are opposite faults. Twenty of those in the 3-18 run could not be told apart.
+
+Consuming a tag now raises `InboundTagConsumed`, which drops it from the index and records it in a bounded (512) memory used only to name a repeat as a repeat. That memory is explicitly **not** a replay control — the real defence is that the tag is gone from the session and decrypts nothing.
+
+#### What this does not settle
+
+**The twenty MAC failures.** They are still unexplained: the tag was found, so the key was right, and the nonce derivation matches i2pd. The next run separates the two populations for the first time — a `RepeatedTag` is a duplicate, an `Unknown or expired tag` is a genuine tagset disagreement — and that is the split needed before touching the ratchet itself.
+
+#### The guard
+
+`ConsumedTagLeakTest`, 4 tests, driven through batch 3-4's ECIES pump rather than asserted against source, because both halves are observable: the index size and the error a second delivery produces. **Confirmed red**: removing the consume event fails 3 of 4, including the leak test directly.
+
+One test of mine was wrong before it was right, and it is worth recording why: it first asserted the index stay under an absolute figure, and failed against correct code because the live tag window is legitimately 5000 wide. **The leak is growth, so growth is what has to be measured** — it now sends 200, measures, sends 500 more, and requires the index not to have moved with them.
