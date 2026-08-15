@@ -2628,3 +2628,33 @@ Consuming a tag now raises `InboundTagConsumed`, which drops it from the index a
 `ConsumedTagLeakTest`, 4 tests, driven through batch 3-4's ECIES pump rather than asserted against source, because both halves are observable: the index size and the error a second delivery produces. **Confirmed red**: removing the consume event fails 3 of 4, including the leak test directly.
 
 One test of mine was wrong before it was right, and it is worth recording why: it first asserted the index stay under an absolute figure, and failed against correct code because the live tag window is legitimately 5000 wide. **The leak is growth, so growth is what has to be measured** — it now sends 200, measures, sends 500 more, and requires the index not to have moved with them.
+
+#### 5-6 confirmed in CI, and merged — **half the ECIES failures were duplicate deliveries, and the duplicates are suspiciously regular**
+
+Run `31857346827`, PR #56, merged. Build green, unit **395 / 0 / 1**, integration **39 passed / 13 failed / 3 skipped** — the hard thirteen exactly, with all four unstable tests passing.
+
+The split the batch was built to produce:
+
+| | 3-18 run | 5-6 run |
+|---|---|---|
+| `ExistingSession:InvalidCipherTextException` (mac check) | 20 | 20 |
+| `ExistingSession:InvalidOperationException:Unknown or expired tag` | 20 | **0** |
+| `ExistingSession:RepeatedTag` | — | **20** |
+
+**Every one of the twenty "unknown or expired tag" failures was a duplicate.** Not one was a genuine tagset disagreement. The population that looked like a ratchet fault was a delivery fault, and the ratchet was never involved.
+
+That matters beyond the bookkeeping: a duplicate costs nothing — the first copy decrypted, the payload arrived, the second was correctly refused — so **half of what looked like ECIES breakage was never breakage at all.** The remaining twenty MAC failures are the real ones, and they are now the only ones.
+
+#### The duplicates are far too regular to be retransmission
+
+Twenty distinct tags, each repeated **exactly once**, every repeat between **153 ms and 182 ms** after the original.
+
+A streaming-layer retransmit is measured in seconds and would cluster loosely. A window that tight, that uniform, and exactly one repeat per message is the signature of a message travelling **two paths to the same destination** — not of a peer resending. In a two-router fixture this router is simultaneously the floodfill, the inbound gateway and the outbound endpoint for its peer, so there is more than one way for the same garlic to arrive.
+
+`TunnelProvider` dedupes incoming I2NP messages through a decaying bloom filter, which is either not covering this path or not seeing both copies.
+
+**Next batch: find the second path.** The question is narrow and the evidence is already in the artifacts — take one repeated tag, follow both arrivals back through the log, and establish whether the two copies enter through the same tunnel or through different ones. Do that before touching the bloom filter, because "the dedup is not working" and "the message is legitimately delivered twice by two different roles we hold" want opposite fixes.
+
+#### And what is left after that
+
+The twenty `mac check in ChaCha20Poly1305 failed`. The tag was found, so the key was right; the nonce derivation matches i2pd; there is no associated data on either side. That is still unexplained, and with the duplicates now separated out it is the only unexplained ECIES population left.
